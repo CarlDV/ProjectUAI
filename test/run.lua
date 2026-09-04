@@ -583,6 +583,51 @@ scenario("transient failures are retried and real refusals are not", function()
 		live.errors()[1] and live.errors()[1].traceback or nil)
 end)
 
+scenario("a request that dies on a deadline is not paid for twice", function()
+	-- The gateway accepts the request and bills the whole prompt; the transport gives
+	-- up a minute later with no status and no headers of its own. Read as a bodyless
+	-- refusal worth another go, one turn became three identical billed requests.
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 403, Body = "", headerless = true, delay = 20 }
+		end,
+	})
+
+	local session = handle.sessions.current()
+	session.send("hello")
+	harness.settle(180)
+
+	check("the dead request was sent once", #chatRequests(harness), 1)
+
+	local retried, errorEvent
+	for _, event in ipairs(session.log) do
+		if event.kind == "request:retry" then retried = event end
+		if event.kind == "error" then errorEvent = event end
+	end
+	truthy("and never repeated", retried == nil)
+	truthy("an error was reported", errorEvent ~= nil)
+	contains("naming the wait, not a status the server never sent",
+		errorEvent and errorEvent.message or "", "nothing returned after")
+	check("the session recovered", session.busy, false)
+
+	-- Headers present means a real server answered, and the rule that retries an
+	-- unexplained 403 still applies to it.
+	local http = handle.env.require("net/http")
+	check("a prompt bodyless 403 is still retried",
+		http.shouldRetry({ status = 403, body = "" }, nil, { elapsed = 400 }) and true or false, true)
+	check("the same 403 after a minute is not",
+		http.shouldRetry({ status = 403, body = "" }, nil, { elapsed = 60000 }) and true or false, false)
+	check("nor a transport error that took a minute to produce nothing",
+		http.shouldRetry(nil, "gave up", { elapsed = 60000 }) and true or false, false)
+	check("while a quick one still is",
+		http.shouldRetry(nil, "connection reset", { elapsed = 120 }) and true or false, true)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 -- 9. Permissions -----------------------------------------------------------
 
 scenario("a write tool waits for permission", function()
@@ -1081,6 +1126,126 @@ scenario("a subagent reports back without filling the parent context", function(
 	contains("carrying the subagent's answer", report.content, "one player")
 	contains("labelled as a subagent report", report.content, "Subagent report")
 	check("the parent answered", session.ctx.messages[4].content, "The subagent found one player.")
+
+	-- The live view. The child's work is forwarded onto the parent's stream, because
+	-- that stream is the only thing the transcript renders -- and it is addressed, so
+	-- three concurrent subagents cannot paint over each other's rows.
+	local kinds = {}
+	local start
+	for _, event in ipairs(session.log) do
+		kinds[event.kind] = (kinds[event.kind] or 0) + 1
+		if event.kind == "subagent:start" then start = event end
+	end
+	check("the dispatch was announced", kinds["subagent:start"], 1)
+	check("the tool the child ran was forwarded", kinds["subagent:tool"], 1)
+	check("with its outcome", kinds["subagent:tool:done"], 1)
+	check("what it said between calls", kinds["subagent:text"], 1)
+	check("and the finish", kinds["subagent:done"], 1)
+	contains("the card is labelled with the task", start and start.label or "", "count the players")
+	check("and addressed to the call that started it", start and start.call, "s1")
+
+	truthy("a card was rendered for it", harness.byName("Subagent") ~= nil)
+	truthy("nested inside the dispatch row rather than floating beside it",
+		harness.byName("Subagent", harness.byName("Tool")) ~= nil)
+	local shown = harness.textOf()
+	contains("showing which tool the child ran", shown, "players_list")
+	contains("and the task it was given", shown, "count the players")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+	check("no property type errors", #harness.instanceState.typeErrors, 0,
+		table.concat(harness.instanceState.typeErrors, "\n"))
+end)
+
+-- A subagent runs for minutes by design. The generic tool timeout is twenty-five
+-- seconds, and until this was fixed it was what bounded the dispatching call: every
+-- subagent was reported to the model as abandoned, kept running -- Luau cannot kill a
+-- thread -- and finished into a caller that had stopped listening. The log said
+-- "subagent finished in 26.1s over 9 messages" and the user was told nothing came back.
+scenario("a slow subagent is not cut off by the generic tool timeout", function()
+	local step = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			step = step + 1
+			if step == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("d1", "dispatch_agent", { task = "take your time", preset = "read" }) },
+				}) }
+			end
+			if step == 2 then
+				-- Longer than the generic timeout set below, shorter than the subagent's
+				-- own budget.
+				return { StatusCode = 200, delay = 8, Body = chatBody({ content = "Took a while: found nothing." }) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "The subagent reported back." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+	handle.config.set("agent.toolTimeout", 5)
+
+	local subagent = handle.env.require("agent/subagent")
+	local tool = handle.env.require("agent/registry").get("dispatch_agent")
+	check("the tool states a timeout of its own", type(tool.timeout), "function")
+	check("resolved from the subagent budget", tool.timeout(), subagent.toolTimeout())
+	truthy("which is far past the generic one", tool.timeout() > handle.config.get("agent.toolTimeout"))
+	handle.config.set("agent.subagentBudget", 60)
+	check("and follows the setting", tool.timeout(), 120)
+	handle.config.set("agent.subagentBudget", 240)
+
+	local session = handle.sessions.current()
+	session.send("delegate something slow")
+	harness.settle(40)
+
+	local report
+	for _, entry in ipairs(session.ctx.messages) do
+		if entry.role == "tool" then report = entry end
+	end
+	truthy("the call produced a report", report ~= nil)
+	contains("carrying what the subagent found", report and report.content or "", "found nothing")
+	truthy("and nothing was abandoned",
+		not tostring(report and report.content or ""):find("did not finish"),
+		tostring(report and report.content or ""))
+	check("so the parent could answer with it",
+		session.ctx.messages[#session.ctx.messages].content, "The subagent reported back.")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("stopping a turn stops the subagents it started", function()
+	local step = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			step = step + 1
+			if step == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("d1", "dispatch_agent", { task = "keep digging", preset = "read" }) },
+				}) }
+			end
+			return { StatusCode = 200, delay = 8, Body = chatBody({
+				toolCalls = { toolCall("c1", "players_list", {}) },
+			}) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	local session = handle.sessions.current()
+	session.send("delegate then change your mind")
+	harness.settle(3)
+	truthy("the turn is running", session.busy)
+	session.abort()
+	harness.settle(40)
+
+	local done
+	for _, event in ipairs(session.log) do
+		if event.kind == "subagent:done" then done = event end
+	end
+	truthy("the subagent reported back rather than running on", done ~= nil)
+	truthy("and says it was stopped", done and done.aborted == true)
+	truthy("the child made no further requests after the stop", step <= 2,
+		"requests: " .. tostring(step))
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
 -- 18. Persistence ----------------------------------------------------------
@@ -1633,7 +1798,163 @@ scenario("the Anthropic Messages API is spoken natively", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
--- 23. Quick chat ----------------------------------------------------------
+-- 23. Token limits ---------------------------------------------------------
+
+scenario("an over-large reply ceiling is lowered to what the model allows", function()
+	local _, handle = bootWith({ provider = false })
+	local openai = handle.env.require("provider/openai")
+
+	-- The refusal is the only place a model's output limit is published -- /models
+	-- reports ids, not capabilities -- and every vendor words it differently. The last
+	-- rows are the traps: the status code rides along in the text this is handed, and
+	-- a dated model id is full of digits.
+	local cases = {
+		{ "anthropic names the maximum",
+			"the provider rejected the request (400): max_tokens: 200000 > 64000, which is the maximum allowed number of output tokens for claude-sonnet-4-5-20250929",
+			200000, 64000 },
+		{ "openai names what the model supports",
+			"max_tokens is too large: 200000. This model supports at most 16384 completion tokens",
+			200000, 16384 },
+		{ "a gateway states an inequality",
+			"max_tokens must be less than or equal to 8192", 128000, 8192 },
+		{ "a complaint naming no number halves instead of guessing",
+			"the provider rejected the request (400): max_tokens too large", 64000, 32000 },
+		{ "and a ceiling already at the floor gives up rather than crawl",
+			"max_tokens too large", 1000, nil },
+	}
+	for _, case in ipairs(cases) do
+		check(case[1], openai.ceilingFromMessage(case[2], case[3]), case[4])
+	end
+
+	-- End to end on chat completions: the 400 is repaired once, and the number is kept
+	-- on the record so no later turn pays for the lesson again.
+	local sent = {}
+	local live, liveHandle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			local body = json.decode(entry.body)
+			sent[#sent + 1] = body.max_tokens
+			if (body.max_tokens or 0) > 8192 then
+				return { StatusCode = 400, Body = json.encode({
+					error = { message = "max_tokens must be less than or equal to 8192" },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Fits now." }) }
+		end,
+	})
+	liveHandle.config.set("agent.maxTokens", 64000)
+	local session = liveHandle.sessions.current()
+	session.send("hello")
+	live.settle(20)
+
+	check("the ceiling the user chose was tried first", sent[1], 64000)
+	check("then lowered to the one the provider named", sent[2], 8192)
+	check("and the answer landed", session.ctx.messages[#session.ctx.messages].content, "Fits now.")
+	local remembered = liveHandle.providers.active().maxTokensCap
+	check("the limit was remembered", remembered and remembered.tokens, 8192)
+	check("against the model it belongs to", remembered and remembered.model, "harness-model")
+
+	session.send("again")
+	live.settle(20)
+	check("so the next turn opens with it", sent[3], 8192)
+
+	-- The limit is the model's, not the endpoint's. A record pointed at a wider model
+	-- has to ask for the full ceiling again rather than stay clamped to what the last
+	-- one allowed, which nothing on screen would explain.
+	liveHandle.providers.setModel(liveHandle.providers.active().id, "harness-model-wide")
+	live.settle(1)
+	session.send("once more")
+	live.settle(20)
+	check("switching model asks for the full ceiling again", sent[4], 64000)
+	check("and learns this one's limit too", sent[5], 8192)
+	check("no thread errors", #live.errors(), 0,
+		live.errors()[1] and live.errors()[1].traceback or nil)
+
+	-- And on the Messages API, where max_tokens is mandatory and there is no second
+	-- shape to fall back to: without this the whole provider is unusable at that
+	-- setting rather than merely capped.
+	local nativeSent = {}
+	local native = envMock.new({})
+	native.http.handler = function(entry)
+		if not tostring(entry.url):find("/messages") then return { StatusCode = 404, Body = "{}" } end
+		local body = json.decode(entry.body)
+		nativeSent[#nativeSent + 1] = body.max_tokens
+		if (body.max_tokens or 0) > 64000 then
+			return { StatusCode = 400, Body = json.encode({
+				type = "error",
+				error = {
+					type = "invalid_request_error",
+					message = "max_tokens: 96000 > 64000, which is the maximum allowed number of output tokens for claude-opus-5",
+				},
+			}) }
+		end
+		return { StatusCode = 200, Body = messagesBody({ text = "Within the limit." }) }
+	end
+	local nativeHandle = select(1, native.boot())
+	native.settle(1)
+
+	local record = nativeHandle.providers.blank("anthropic-messages")
+	record.label = "Claude"
+	record.apiKey = "sk-ant-harness"
+	record.model = "claude-opus-5"
+	record.models = { "claude-opus-5" }
+	record.stream = false
+	local saved, problems = nativeHandle.providers.save(record)
+	truthy("the native preset saves", saved, table.concat(problems or {}, ", "))
+	nativeHandle.config.set("agent.maxTokens", 96000)
+	native.settle(1)
+
+	local nativeSession = nativeHandle.sessions.current()
+	nativeSession.send("hello")
+	native.settle(20)
+
+	check("the messages api tried the chosen ceiling", nativeSent[1], 96000)
+	check("and retried at the model's own", nativeSent[2], 64000)
+	check("with an answer rather than a dead provider",
+		nativeSession.ctx.messages[#nativeSession.ctx.messages].content, "Within the limit.")
+	check("which is remembered too", (nativeHandle.providers.active().maxTokensCap or {}).tokens, 64000)
+	check("no thread errors on the native path", #native.errors(), 0,
+		native.errors()[1] and native.errors()[1].traceback or nil)
+end)
+
+scenario("the token sliders span three orders of magnitude", function()
+	local harness, handle = bootWith({ provider = false })
+	harness.click(harness.byName("Segment_settings"))
+	harness.settle(1)
+
+	-- Dragging well past either end, which clamps: the assertion is about what the
+	-- ends of the track carry, not about pixels, and the panel is the only place the
+	-- stop lists are wired to a setting.
+	local function dragTo(path, x)
+		local slider = harness.byName("Slider_" .. path)
+		local hit = slider and slider:FindFirstChildOfClass("TextButton")
+		if not hit then return false end
+		harness.drag(hit, 0, 0, x, 0)
+		return true
+	end
+
+	truthy("the context budget has a slider", dragTo("agent.contextTokens", 100000))
+	check("whose far end is a million tokens", handle.config.get("agent.contextTokens"), 1000000)
+	contains("labelled as such", harness.textOf(), "1M")
+
+	truthy("and it still goes back", dragTo("agent.contextTokens", -100000))
+	check("to four thousand", handle.config.get("agent.contextTokens"), 4000)
+
+	truthy("the reply ceiling has one", dragTo("agent.maxTokens", 100000))
+	check("reaching 128k, which the widest models will spend", handle.config.get("agent.maxTokens"), 128000)
+
+	truthy("and the tool result cap is adjustable at all", dragTo("agent.resultCap", 100000))
+	check("up to 128k characters", handle.config.get("agent.resultCap"), 128000)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+	check("no property type errors", #harness.instanceState.typeErrors, 0,
+		table.concat(harness.instanceState.typeErrors, "\n"))
+end)
+
+-- 24. Quick chat ----------------------------------------------------------
 
 scenario("quick chat opens on a keypress and sends to the same conversation", function()
 	local harness, handle = bootWith({
@@ -1683,7 +2004,7 @@ scenario("quick chat opens on a keypress and sends to the same conversation", fu
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
--- 24. Unload --------------------------------------------------------------
+-- 25. Unload --------------------------------------------------------------
 
 scenario("unloading stops everything it started", function()
 	local harness, handle = bootWith({

@@ -16,6 +16,7 @@ return function(env)
 	local util = env.require("runtime/util")
 	local config = env.require("runtime/config")
 	local clock = env.require("runtime/clock")
+	local log = env.require("runtime/log")
 	local http = env.require("net/http")
 	local sse = env.require("net/sse")
 	local registry = env.require("provider/registry")
@@ -163,7 +164,10 @@ return function(env)
 
 	function M.buildBody(record, request)
 		local messages, system = M.wireMessages(request.messages)
-		local maxTokens = request.maxTokens or config.get("agent.maxTokens", 4096)
+		-- Clamped to whatever this record's model was last told it allows, which is
+		-- shared with the chat-completions adapter because the lesson is the same one.
+		local maxTokens = openai.cappedMaxTokens(record,
+			request.maxTokens or config.get("agent.maxTokens", 4096))
 		local body = {
 			model = record.model,
 			messages = messages,
@@ -348,18 +352,45 @@ return function(env)
 		headers["Accept"] = wantStream and "text/event-stream" or "application/json"
 
 		local started = clock.ms()
-		local res, err = http.send({
-			url = M.endpoint(record),
-			method = "POST",
-			headers = headers,
-			body = util.encode(body),
-			identity = (record.claudeUa ~= false) and "claude" or "none",
-			attempts = request.attempts or config.get("agent.retries", 5),
-			aborted = request.aborted,
-			onRetry = request.onRetry,
-			tag = "messages:" .. record.id,
-			timeout = request.timeout,
-		})
+		local function fire(payload)
+			return http.send({
+				url = M.endpoint(record),
+				method = "POST",
+				headers = headers,
+				body = util.encode(payload),
+				identity = (record.claudeUa ~= false) and "claude" or "none",
+				attempts = request.attempts or config.get("agent.retries", 5),
+				aborted = request.aborted,
+				onRetry = request.onRetry,
+				tag = "messages:" .. record.id,
+				timeout = request.timeout,
+			})
+		end
+
+		local res, err = fire(body)
+
+		-- max_tokens is mandatory on this API and its limit is per model, so a reply
+		-- ceiling chosen for the widest Claude is a hard 400 on a narrower one -- and
+		-- there is no alternative shape to fall back to, the way chat completions can
+		-- rename a field. Lower it to the number the refusal names, try once more, and
+		-- keep it on the record so no later turn pays for the lesson twice. One retry:
+		-- a second refusal is a different problem and belongs in the transcript.
+		if res and res.status == 400 and tonumber(body.max_tokens) then
+			local message = M.errorText(res, nil)
+			if tostring(message):lower():find("max_tokens", 1, true) then
+				local allowed = openai.ceilingFromMessage(message, body.max_tokens)
+				if allowed and allowed < body.max_tokens then
+					local note = string.format("lowered max_tokens from %d to %d", body.max_tokens, allowed)
+					log.info("provider", record.label .. ": " .. note .. ", retrying")
+					body.max_tokens = allowed
+					openai.rememberMaxTokens(record, allowed)
+					if request.onRetry then
+						request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 400 })
+					end
+					res, err = fire(body)
+				end
+			end
+		end
 
 		if not res or not res.ok then
 			local message = M.errorText(res, err)

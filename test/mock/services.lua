@@ -58,6 +58,16 @@ function M.build(deps)
 			response = table.remove(http.queued, 1)
 		end
 		response = response or { StatusCode = 599, Body = "no mock response queued", Headers = {} }
+		-- Every response that came off a wire carries headers, even a bodyless refusal,
+		-- and the client reads their absence as "the transport gave up before anything
+		-- arrived" rather than as a decision the server made. A fixture that simply
+		-- omitted them would exercise that branch by accident, so the default is a
+		-- realistic response and a fixture opts out of it deliberately.
+		if response.headerless then
+			response.Headers = {}
+		elseif type(response.Headers) ~= "table" or next(response.Headers) == nil then
+			response.Headers = { ["content-type"] = "application/json" }
+		end
 		entry.response = response
 		if response.delay then sched.wait(response.delay) end
 		return response

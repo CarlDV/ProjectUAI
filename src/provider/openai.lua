@@ -72,7 +72,7 @@ return function(env)
 		if temperature == nil then temperature = config.get("agent.temperature", 0.4) end
 		if temperature then body.temperature = temperature end
 
-		local maxTokens = request.maxTokens or config.get("agent.maxTokens", 4096)
+		local maxTokens = M.cappedMaxTokens(record, request.maxTokens or config.get("agent.maxTokens", 4096))
 		if maxTokens and maxTokens > 0 then body.max_tokens = maxTokens end
 
 		if request.stream then
@@ -139,6 +139,61 @@ return function(env)
 		return string.format("request failed with status %d", status)
 	end
 
+	-- The output ceiling a refusal names, or nil when it names nothing usable.
+	--
+	-- Every model has its own max_tokens limit and no endpoint publishes it: /models
+	-- reports ids, not capabilities. The one place the number appears is the 400 that
+	-- comes back when a request exceeds it, and the wording is different everywhere --
+	-- "max_tokens: 200000 > 64000, which is the maximum allowed number of output
+	-- tokens for claude-sonnet-4-5-20250929", "max_tokens is too large: 200000. This
+	-- model supports at most 16384 completion tokens", "must be less than or equal to
+	-- 8192". What they share is that the limit is the largest number in the sentence
+	-- below what was sent, so that is what is taken.
+	--
+	-- The floor is a thousand and it is load-bearing: the status code is part of the
+	-- text this is handed, and clamping a reply ceiling to 400 tokens because "(400)"
+	-- appeared in the prefix would be worse than the original error. Nothing caps
+	-- output below a thousand tokens.
+	function M.ceilingFromMessage(message, current)
+		current = tonumber(current) or 0
+		if current <= 0 then return nil end
+		local best
+		for digits in tostring(message or ""):gmatch("%d+") do
+			local number = tonumber(digits)
+			if number and number >= 1000 and number < current and (not best or number > best) then
+				best = number
+			end
+		end
+		if best then return best end
+		-- Nothing quotable. Halving converges in a couple of attempts and cannot loop,
+		-- because each attempt is a fresh request against a smaller number.
+		local halved = math.floor(current / 2)
+		return (halved >= 1000) and halved or nil
+	end
+
+	-- The ceiling to actually send: what the user asked for, lowered to whatever this
+	-- record has already been told its model allows.
+	--
+	-- Kept per model rather than per record, because the limit belongs to the model.
+	-- Pointing a record at a wider Claude has to stop clamping it to the narrower
+	-- one's limit, and there would be nothing on screen to explain it if it did not:
+	-- the slider would read 64k while every request asked for 32k.
+	function M.cappedMaxTokens(record, wanted)
+		wanted = tonumber(wanted) or 0
+		local cap = record.maxTokensCap
+		if type(cap) ~= "table" or cap.model ~= record.model then return wanted end
+		local limit = tonumber(cap.tokens) or 0
+		if limit > 0 and wanted > limit then return limit end
+		return wanted
+	end
+
+	-- Stores what a refusal named, against the model it came from. Both adapters call
+	-- this; the record persists, so the lesson outlives the session.
+	function M.rememberMaxTokens(record, tokens)
+		record.maxTokensCap = { model = record.model, tokens = tokens }
+		registry.save(record, { force = true })
+	end
+
 	-- Gateways reject different subsets of the payload. Rather than maintaining a
 	-- per-vendor allowlist that goes stale, a 400 whose text names a field is
 	-- repaired once and retried -- and the repair is remembered on the record so
@@ -152,6 +207,23 @@ return function(env)
 					body.max_tokens = nil
 					return "renamed max_tokens to max_completion_tokens"
 				end
+			end,
+		},
+		{
+			-- Ordered after the rename on purpose: a gateway that wants the other field
+			-- name says so in a message this would otherwise read as a size complaint.
+			match = "max_tokens",
+			apply = function(body, message)
+				-- Only ever driven by a live refusal. Replayed from record.repairs there
+				-- is no message, and halving on every request would be a silent bug.
+				if not message then return nil end
+				local current = body.max_tokens or body.max_completion_tokens
+				if not current then return nil end
+				local allowed = M.ceilingFromMessage(message, current)
+				if not allowed or allowed >= current then return nil end
+				if body.max_tokens then body.max_tokens = allowed end
+				if body.max_completion_tokens then body.max_completion_tokens = allowed end
+				return string.format("lowered max_tokens from %d to %d", current, allowed)
 			end,
 		},
 		{
@@ -196,7 +268,7 @@ return function(env)
 		local lowered = tostring(message or ""):lower()
 		for _, entry in ipairs(REPAIRS) do
 			if lowered:find(entry.match, 1, true) then
-				local note = entry.apply(body)
+				local note = entry.apply(body, message)
 				if note then return note, entry.match end
 			end
 		end
@@ -280,7 +352,13 @@ return function(env)
 			local note, key = repair(body, message)
 			if note then
 				log.info("provider", record.label .. ": " .. note .. ", retrying")
-				remember(record, key)
+				if key == "max_tokens" then
+					-- A value, not a switch, so it cannot ride in record.repairs -- that
+					-- list replays a key with no error text to read a number out of.
+					M.rememberMaxTokens(record, body.max_tokens or body.max_completion_tokens)
+				else
+					remember(record, key)
+				end
 				if request.onRetry then
 					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 400 })
 				end

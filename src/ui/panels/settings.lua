@@ -58,7 +58,30 @@ return function(env)
 			return switch
 		end
 
+		-- A million in a 66px monospace field is a wall of zeroes, and the exact digit
+		-- is never what the reader is checking at that size.
+		local function formatCount(number)
+			number = math.floor(number)
+			if number >= 1000000 and number % 100000 == 0 then
+				local millions = number / 1000000
+				return (millions % 1 == 0) and string.format("%dM", millions) or string.format("%.1fM", millions)
+			end
+			if number >= 1000 and number % 1000 == 0 then return string.format("%dk", number / 1000) end
+			return tostring(number)
+		end
+
+		-- `min` may be a list of allowed values rather than a bound. Every row that
+		-- counts tokens uses one: the range those rows have to cover is three orders of
+		-- magnitude, and a linear track across it cannot resolve the low end where the
+		-- useful settings are.
 		local function numberRow(parentCard, label, hint, path, min, max, step)
+			local stops
+			if type(min) == "table" then
+				stops, min, max, step = min, min[1], min[#min], nil
+			end
+			local function display(number)
+				return (step and step < 1) and string.format("%.2f", number) or formatCount(number)
+			end
 			local column = P.column(parentCard, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xxs })
 			local head = P.row(column, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs })
 			local text = P.text(head, {
@@ -71,7 +94,7 @@ return function(env)
 				layoutOrder = 1,
 			})
 			local value = P.text(head, {
-				text = tostring(config.get(path, min)),
+				text = display(tonumber(config.get(path, min)) or min),
 				role = "monoSmall",
 				color = theme.color.accent,
 				align = "Right",
@@ -79,12 +102,17 @@ return function(env)
 			})
 			value.Size = UDim2.fromOffset(66, theme.text.small.size + 4)
 			C.slider(column, {
+				-- Named after the setting it writes, so the tree says which slider is
+				-- which -- eight of them called "Slider" is unreadable from a dump and
+				-- unreachable from a test.
+				name = "Slider_" .. tostring(path),
 				min = min,
 				max = max,
 				step = step,
+				stops = stops,
 				value = tonumber(config.get(path, min)) or min,
 				onChange = function(number)
-					value.Text = (step and step < 1) and string.format("%.2f", number) or tostring(math.floor(number))
+					value.Text = display(number)
 				end,
 				onCommit = function(number)
 					config.set(path, (step and step < 1) and util.round(number, 2) or math.floor(number))
@@ -190,12 +218,38 @@ return function(env)
 		end)
 
 		-- Agent ----------------------------------------------------------------
+		--
+		-- The three token rows are the only settings here whose sensible value depends
+		-- on something outside this client: the window and the output ceiling of
+		-- whatever model the active provider is pointed at. They stop where the widest
+		-- models of the moment do -- a million in, a hundred and twenty-eight thousand
+		-- out -- rather than where a default conversation needs, because a ceiling that
+		-- cannot reach the model is indistinguishable from the model not having it.
+		local BUDGET_STOPS = {
+			4000, 8000, 12000, 16000, 24000, 32000, 48000, 64000, 96000,
+			128000, 160000, 200000, 256000, 320000, 400000, 512000, 750000, 1000000,
+		}
+		local REPLY_STOPS = { 256, 512, 1024, 2048, 4096, 8192, 16000, 24000, 32000, 64000, 96000, 128000 }
+		local RESULT_STOPS = { 1000, 2000, 4000, 6000, 8000, 12000, 16000, 24000, 32000, 48000, 64000, 96000, 128000 }
+
 		local agent = section("Agent", "How hard it works before it stops and answers.")
 		numberRow(agent, "Step limit", "Tool rounds allowed in one turn.", "agent.maxTurns", 4, 60, 1)
 		numberRow(agent, "Parallel tools", "Tool calls run at once within one step.", "agent.toolConcurrency", 1, 8, 1)
-		numberRow(agent, "Tool timeout", "Seconds before a tool is abandoned.", "agent.toolTimeout", 5, 60, 1)
-		numberRow(agent, "Context budget", "Estimated tokens kept before older turns are summarised.", "agent.contextTokens", 4000, 120000, 1000)
-		numberRow(agent, "Reply ceiling", "max_tokens sent with each request.", "agent.maxTokens", 256, 16000, 256)
+		numberRow(agent, "Tool timeout",
+			"Seconds before a tool is abandoned. Subagents are exempt: they run to their own budget below.",
+			"agent.toolTimeout", 5, 60, 1)
+		numberRow(agent, "Subagent budget",
+			"Seconds one subagent may work for before it wraps up. The call that dispatched it waits this long plus a minute, so a finished report is never thrown away.",
+			"agent.subagentBudget", 30, 900, 30)
+		numberRow(agent, "Context budget",
+			"Estimated tokens kept before older turns are summarised. Set it against the model's own window, not this client: a million-token model can hold the whole session.",
+			"agent.contextTokens", BUDGET_STOPS)
+		numberRow(agent, "Reply ceiling",
+			"max_tokens sent with each request. A value above the model's own limit is lowered to whatever the provider names in its refusal, once, and remembered.",
+			"agent.maxTokens", REPLY_STOPS)
+		numberRow(agent, "Tool result cap",
+			"Characters kept from one tool result, roughly four per token. This is the floor on how much a file read or a page fetch can actually return, whatever the tool's own limit says.",
+			"agent.resultCap", RESULT_STOPS)
 		numberRow(agent, "Temperature", "Lower is steadier; 0 is as deterministic as the provider allows.", "agent.temperature", 0, 1.5, 0.05)
 		numberRow(agent, "Retries", "Attempts per provider before moving to the next.", "agent.retries", 1, 6, 1)
 		toggle(agent, "Ask for streams", "Streamed replies carry reasoning text and usage counts.", "agent.stream")

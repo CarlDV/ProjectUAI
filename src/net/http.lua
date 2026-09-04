@@ -25,6 +25,16 @@ return function(env)
 		[408] = true, [409] = true, [425] = true, [429] = true, [499] = true,
 	}
 
+	-- How long an attempt has to run before "nothing came back" reads as a deadline
+	-- rather than a decision, in milliseconds.
+	--
+	-- A refusal arrives in milliseconds: an edge filter and an exhausted quota both
+	-- answer immediately. Only a transport that ran out of time takes tens of seconds
+	-- to produce nothing at all, and by then the gateway has accepted the request and
+	-- billed the whole prompt. Retrying that re-sends every token to arrive at the same
+	-- wall, so above this an empty answer ends the sequence instead of extending it.
+	local DEADLINE_FLOOR = 10000
+
 	-- Substrings that mean "transient", wherever they appear in a response body.
 	--
 	-- These gateways report an overloaded or rate-limited upstream in the body and
@@ -129,36 +139,51 @@ return function(env)
 		return headers
 	end
 
-	local function send(url, method, headers, body)
+	-- What a transport hands back when it never got an answer varies: some set
+	-- Success = false, some invent a status code. What they share is that nothing came
+	-- off the wire -- no body and no headers -- and a real HTTP reply always carries at
+	-- least one header. Reporting that as a status writes a number into the log no
+	-- server ever sent, and the retry policy then reasons about a refusal nobody
+	-- issued: the gateway had already accepted the request and billed the prompt.
+	local function normalise(res, via)
+		local headers = res.Headers or res.ResponseHeaders or {}
+		if type(headers) ~= "table" then headers = {} end
+		local body = res.Body or res.ResponseData or ""
+		if body == "" and next(headers) == nil then
+			local said = util.trim(tostring(res.StatusMessage or ""))
+			return nil, said ~= "" and said or "the transport returned no response"
+		end
+		return {
+			status = tonumber(res.StatusCode or res.Status) or 0,
+			body = body,
+			headers = headers,
+			message = res.StatusMessage,
+			via = via,
+		}
+	end
+
+	local function send(url, method, headers, body, timeout)
 		local options = { Url = url, Method = method, Headers = headers }
 		if body and body ~= "" and method ~= "GET" and method ~= "HEAD" then
 			options.Body = body
 		end
 
 		if caps.fn.request then
+			-- Set only on this path: RequestAsync accepts a fixed set of keys. Not every
+			-- executor honours it either, which is why an attempt that runs long is also
+			-- recognised after the fact rather than only prevented here.
+			if timeout and timeout > 0 then options.Timeout = math.floor(timeout) end
 			local ok, res = pcall(caps.fn.request, options)
 			if not ok then return nil, tostring(res) end
 			if type(res) ~= "table" then return nil, "empty executor response" end
-			return {
-				status = tonumber(res.StatusCode or res.Status) or 0,
-				body = res.Body or res.ResponseData or "",
-				headers = res.Headers or res.ResponseHeaders or {},
-				message = res.StatusMessage,
-				via = "executor",
-			}
+			return normalise(res, "executor")
 		end
 
 		if caps.http == "none" then return nil, caps.reason("http") end
 		local ok, res = pcall(function() return env.hs:RequestAsync(options) end)
 		if not ok then return nil, tostring(res) end
 		if type(res) ~= "table" then return nil, "empty HttpService response" end
-		return {
-			status = tonumber(res.StatusCode) or 0,
-			body = res.Body or "",
-			headers = res.Headers or {},
-			message = res.StatusMessage,
-			via = "roblox",
-		}
+		return normalise(res, "roblox")
 	end
 
 	-- One attempt. Returns res (with .ok) or nil plus a transport error string.
@@ -170,7 +195,7 @@ return function(env)
 		local headers = buildHeaders(spec, attempt)
 		local started = clock.ms()
 
-		local res, err = send(url, method, headers, spec.body)
+		local res, err = send(url, method, headers, spec.body, spec.timeout)
 		local elapsed = clock.since(started)
 
 		local entry = record({
@@ -200,8 +225,12 @@ return function(env)
 		})
 
 		if not res then
-			log.warn("http", method .. " " .. entry.url .. " failed", err)
-			return nil, err or "request failed"
+			-- How long it ran is the whole diagnosis: a transport that refuses fails at
+			-- once, one that ran out of time fails slowly, and only the second is a
+			-- deadline. The caller needs the number to tell them apart.
+			log.warn("http", string.format("%s %s failed after %s", method, entry.url,
+				util.formatDuration(elapsed)), err)
+			return nil, err or "request failed", elapsed
 		end
 
 		res.ms = elapsed
@@ -230,13 +259,31 @@ return function(env)
 	end
 
 	-- Whether an attempt is worth repeating, and why -- the reason is reported to the
-	-- transcript so a slow turn explains itself rather than just being slow.
-	function M.shouldRetry(res, err)
+	-- transcript so a slow turn explains itself rather than just being slow. `info`
+	-- carries what the response cannot: how long the attempt took, which is the only
+	-- way to tell a refusal apart from a deadline when neither carries a body.
+	function M.shouldRetry(res, err, info)
+		local elapsed = tonumber(info and info.elapsed) or 0
+		local status = res and res.status or 0
+		local body = tostring(res and res.body or "")
+
+		-- An attempt that ran this long and returned nothing hit a deadline, whatever
+		-- status was attached to it -- most often none at all, because the transport gave
+		-- up rather than the server answering. The next attempt re-sends the entire
+		-- prompt to reach the same wall, and the gateway bills it on arrival, so the
+		-- sequence ends here and says why instead of paying three times over.
+		--
+		-- Retry-After is the exception, and the only one: a server naming a moment to
+		-- come back has told us the request will work later, which is precisely what a
+		-- deadline cannot promise.
+		local told = res and tonumber(M.header(res, "retry-after"))
+		if elapsed >= DEADLINE_FLOOR and util.trim(body) == "" and not told then
+			return false, string.format("nothing returned after %s", util.formatDuration(elapsed))
+		end
+
 		-- The transport itself failed. Nothing was decided upstream, so try again.
 		if err then return true, "transport error" end
 		if not res then return true, "no response" end
-		local status = res.status or 0
-		local body = tostring(res.body or "")
 
 		if RETRY_STATUS[status] then return true, "status " .. tostring(status) end
 		if status >= 500 and status <= 599 then return true, "status " .. tostring(status) end
@@ -276,12 +323,20 @@ return function(env)
 			if spec.aborted and spec.aborted() then return nil, "aborted" end
 			local copy = util.copy(spec)
 			copy.attempt = attempt
-			local res, err = M.request(copy)
+			local res, err, failedMs = M.request(copy)
 			lastRes, lastErr = res, err
 			-- Asked before the success check, because a 200 can carry the failure in
 			-- its body and returning that as a reply is worse than retrying it.
-			local retry, why = M.shouldRetry(res, err)
-			if not retry then return res, err end
+			local retry, why = M.shouldRetry(res, err, { elapsed = res and res.ms or failedMs })
+			if not retry then
+				-- A deadline is the one outcome the caller cannot read off the response,
+				-- because there is no response to read. Name it in the error instead of
+				-- handing back a bare transport message.
+				if why and not res then
+					return nil, err and (err .. " -- " .. why) or why
+				end
+				return res, err
+			end
 			if attempt >= attempts then return res, err end
 			local wait, source = retryDelay(res, attempt, spec.backoff)
 			if spec.onRetry then

@@ -29,7 +29,7 @@ return function(env)
 				properties = {
 					url = { type = "string" },
 					headers = { type = "object", description = "Extra request headers." },
-					limit = { type = "integer", description = "Maximum characters of body. Default 5000.", minimum = 200, maximum = 20000 },
+					limit = { type = "integer", description = "Maximum characters of body. Default 5000.", minimum = 200, maximum = 64000 },
 				},
 				required = { "url" },
 			},
@@ -60,7 +60,7 @@ return function(env)
 					method = { type = "string", enum = { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD" } },
 					headers = { type = "object" },
 					body = { type = "string", description = "Request body. JSON should be sent as a string." },
-					limit = { type = "integer", minimum = 200, maximum = 20000 },
+					limit = { type = "integer", minimum = 200, maximum = 64000 },
 				},
 				required = { "url", "method" },
 			},

@@ -30,6 +30,7 @@ return function(env)
 			scroll = scroll,
 			order = 0,
 			tools = {},
+			agents = {},
 			working = nil,
 			agentHandle = nil,
 			session = nil,
@@ -136,6 +137,7 @@ return function(env)
 			scroll.clear()
 			view.order = 0
 			view.tools = {}
+			view.agents = {}
 			view.working = nil
 			view.agentHandle = nil
 			view.pinned = true
@@ -223,6 +225,41 @@ return function(env)
 					}, nextOrder())
 				end
 				follow()
+			elseif event.kind == "subagent:start" then
+				-- Nested under the call that started it while that row is still tracked,
+				-- so a delegated task reads as one block rather than as a card floating
+				-- next to its own tool row. Standalone if the row is gone, which happens
+				-- when the log has been trimmed past it.
+				local host = event.call and view.tools[event.call] or nil
+				local into = (host and host.nest) and host.nest() or scroll.instance
+				view.agents[event.id] = message.subagent(into, event,
+					host and 1 or nextOrder(), { nested = host ~= nil })
+				follow()
+			elseif event.kind == "subagent:status" then
+				local handle = view.agents[event.id]
+				if handle then handle.status(event) end
+			elseif event.kind == "subagent:text" then
+				local handle = view.agents[event.id]
+				if handle then
+					handle.say(event)
+					follow()
+				end
+			elseif event.kind == "subagent:tool" then
+				local handle = view.agents[event.id]
+				if handle then
+					handle.tool(event)
+					follow()
+				end
+			elseif event.kind == "subagent:tool:done" then
+				local handle = view.agents[event.id]
+				if handle then handle.toolDone(event) end
+			elseif event.kind == "subagent:done" then
+				local handle = view.agents[event.id]
+				if handle then
+					handle.finish(event)
+					view.agents[event.id] = nil
+					follow()
+				end
 			elseif event.kind == "request:retry" then
 				message.notice(scroll.instance, {
 					tone = "warn",

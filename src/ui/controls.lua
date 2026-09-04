@@ -128,8 +128,15 @@ return function(env)
 	-- something to apply can wait for the commit.
 	function C.slider(parent, props)
 		props = props or {}
-		local min = props.min or 0
-		local max = props.max or 1
+		-- `stops` names the allowed values instead of a range, and the knob then moves
+		-- one stop per equal slice of the track. A token budget needs that: four
+		-- thousand to a million as a linear range puts every value anyone actually
+		-- picks inside the first three percent of the control, where one pixel is
+		-- several thousand tokens and 24k cannot be told from 32k.
+		local stops = props.stops
+		if stops and #stops < 2 then stops = nil end
+		local min = props.min or (stops and stops[1]) or 0
+		local max = props.max or (stops and stops[#stops]) or 1
 		local step = props.step
 		local height = math.max(responsive.minTarget(), 24)
 
@@ -164,15 +171,30 @@ return function(env)
 
 		local handle = { value = util.clamp(props.value or min, min, max), instance = shell }
 
+		local function nearestStop(value)
+			local bestIndex, bestGap = 1, math.huge
+			for index, candidate in ipairs(stops) do
+				local gap = math.abs(candidate - value)
+				if gap < bestGap then bestIndex, bestGap = index, gap end
+			end
+			return bestIndex
+		end
+
 		local function quantise(value)
+			if stops then return stops[nearestStop(value)] end
 			if step and step > 0 then
 				value = min + math.floor(((value - min) / step) + 0.5) * step
 			end
 			return util.clamp(value, min, max)
 		end
 
+		local function alphaFor(value)
+			if stops then return (nearestStop(value) - 1) / (#stops - 1) end
+			return (max > min) and ((value - min) / (max - min)) or 0
+		end
+
 		local function paint()
-			local alpha = (max > min) and ((handle.value - min) / (max - min)) or 0
+			local alpha = alphaFor(handle.value)
 			fill.Size = UDim2.fromScale(alpha, 1)
 			knob.Position = UDim2.new(alpha, 0, 0.5, 0)
 		end
@@ -189,7 +211,12 @@ return function(env)
 			local origin = track.AbsolutePosition.X
 			local span = math.max(track.AbsoluteSize.X, 1)
 			local alpha = util.clamp((input.Position.X - origin) / span, 0, 1)
-			handle.set(min + alpha * (max - min))
+			if stops then
+				local index = math.floor(alpha * (#stops - 1) + 0.5) + 1
+				handle.set(stops[math.max(1, math.min(#stops, index))])
+			else
+				handle.set(min + alpha * (max - min))
+			end
 		end
 
 		local hit = Instance.new("TextButton", shell)

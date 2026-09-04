@@ -42,10 +42,20 @@ return function(env)
 			stream = true,
 			temperature = 0.4,
 			maxTokens = 4096,
-			resultCap = 4000,
+			-- Characters, not tokens, and it is the last word on how much of a tool
+			-- result reaches the model. Eight thousand rather than four so that the
+			-- tools' own defaults -- a six thousand character file read, a five thousand
+			-- character response body -- arrive whole instead of being cut in half by a
+			-- limit set somewhere the caller cannot see.
+			resultCap = 8000,
 			repeatLimit = 3,
 			subagentDepth = 2,
 			subagentTurns = 14,
+			-- Seconds one subagent may run for. The tool that dispatches it derives its
+			-- own timeout from this, so the two cannot drift apart -- when they did, the
+			-- generic 25s tool timeout fired first and every finished report was thrown
+			-- away by a caller that had already given up.
+			subagentBudget = 240,
 			retries = 5,
 			fallback = true,
 		},

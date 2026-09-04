@@ -106,7 +106,11 @@ return function(env)
 		{
 			name = "dispatch_agent",
 			risk = "write",
-			description = "Hand a self-contained investigation to a subagent with its own context, and get back a written report. Use for wide searches, repetitive inspection, or anything that would otherwise fill this conversation with tool output. The subagent cannot ask questions, so state the task completely.",
+			description = "Hand a self-contained investigation to a subagent with its own context, and get back a written report. Use for wide searches, repetitive inspection, or anything that would otherwise fill this conversation with tool output. The subagent cannot ask questions, so state the task completely. The call blocks until the report is ready; several dispatched in one step run at the same time.",
+			-- Not the generic tool timeout. A subagent runs for minutes by design, and a
+			-- caller that gives up first throws away work the user has paid for: the
+			-- child cannot be killed, so it finishes into a void.
+			timeout = function() return subagent.toolTimeout() end,
 			parameters = {
 				type = "object",
 				properties = {
@@ -126,11 +130,18 @@ return function(env)
 			run = function(args, ctx)
 				local result, err = subagent.dispatch({
 					parent = ctx and ctx.session or nil,
+					-- Which call this is, so the transcript can nest the subagent's live
+					-- feed under the row the user is already looking at.
+					callId = ctx and ctx.callId or nil,
 					task = args.task,
 					preset = args.preset or "read",
 					turns = args.turns,
 				})
 				if not result then return H.fail(err) end
+				if result.aborted then
+					return string.format("Subagent stopped early (%s, %d messages). What it had:\n\n%s",
+						util.formatDuration(result.ms), result.messages, result.text)
+				end
 				return string.format("Subagent report (%s, %d messages):\n\n%s",
 					util.formatDuration(result.ms), result.messages, result.text)
 			end,

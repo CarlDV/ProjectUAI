@@ -46,7 +46,11 @@ return function(env)
 				type = "object",
 				properties = {
 					path = { type = "string", description = "Path relative to the agent folder, e.g. 'notes/plan.txt'." },
-					limit = { type = "integer", description = "Maximum characters. Default 6000.", minimum = 200, maximum = 20000 },
+					-- The ceiling is what a model may ask for, not what it gets: whatever
+					-- comes back is still cut to `agent.resultCap`. Twenty thousand was
+					-- below every setting of that slider, which made a long file
+					-- unreadable in one call even when the budget had room for it.
+					limit = { type = "integer", description = "Maximum characters. Default 6000.", minimum = 200, maximum = 64000 },
 				},
 				required = { "path" },
 			},

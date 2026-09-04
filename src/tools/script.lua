@@ -139,7 +139,7 @@ return function(env)
 				type = "object",
 				properties = {
 					path = { type = "string", description = "Dotted path to the script instance." },
-					limit = { type = "integer", description = "Maximum characters to return. Default 3000.", minimum = 200, maximum = 12000 },
+					limit = { type = "integer", description = "Maximum characters to return. Default 3000.", minimum = 200, maximum = 64000 },
 				},
 				required = { "path" },
 			},

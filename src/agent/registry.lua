@@ -210,14 +210,33 @@ return function(env)
 			return result
 		end
 
-		local timeout = tool.timeout or config.get("agent.toolTimeout", 25)
+		-- A tool may state its own timeout, as a number or as a function of nothing --
+		-- dispatch_agent computes one from the subagent budget, which is a setting and
+		-- so cannot be a constant on the definition.
+		local timeout = tool.timeout
+		if type(timeout) == "function" then
+			local okTimeout, value = pcall(timeout, coerced, ctx)
+			timeout = okTimeout and tonumber(value) or nil
+		end
+		timeout = tonumber(timeout) or config.get("agent.toolTimeout", 25)
+
+		-- The call's id travels with the context so a tool that emits events of its own
+		-- can address the row it belongs to. dispatch_agent needs it: its subagent's
+		-- live feed has to appear under the call that started it. Shallow, deliberately:
+		-- ctx carries the session and the module env, and a deep copy of either would be
+		-- both enormous and wrong.
+		local scoped = ctx
+		if type(ctx) == "table" then
+			scoped = util.copy(ctx)
+			scoped.callId = call.id
+		end
 		local finished, ok, value = clock.timeout(timeout, function()
-			return tool.run(coerced, ctx)
+			return tool.run(coerced, scoped)
 		end)
 
 		if not finished then
 			result.text = string.format(
-				"%s did not finish within %ds and was left running in the background. Do not retry the same call.",
+				"%s did not finish within %ds. It may still be running, but nothing will collect its result, so treat it as lost. Do not retry the same call.",
 				name, timeout)
 			result.error = "timeout"
 			result.ms = clock.since(started)

@@ -98,7 +98,7 @@ return function(env)
 				type = "object",
 				properties = {
 					url = { type = "string" },
-					limit = { type = "integer", description = "Maximum characters. Default 4000.", minimum = 200, maximum = 16000 },
+					limit = { type = "integer", description = "Maximum characters. Default 4000.", minimum = 200, maximum = 64000 },
 				},
 				required = { "url" },
 			},

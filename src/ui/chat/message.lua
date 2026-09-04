@@ -406,7 +406,7 @@ return function(env)
 			color = theme.color.textSecondary,
 			wrap = true,
 			auto = "Y",
-			layoutOrder = 2,
+			layoutOrder = 3,
 			visible = false,
 		})
 		resultLabel.Size = UDim2.new(1, 0, 0, 0)
@@ -418,6 +418,26 @@ return function(env)
 		end)
 
 		local handle = { root = holder, card = card }
+		local nested
+
+		-- Where a tool that runs an agent of its own puts its live feed. Sits between the
+		-- arguments and the result, which is the order it happens in, and forces the
+		-- detail pane open: a row with something moving inside it should not be the one
+		-- thing hiding it.
+		function handle.nest()
+			if not nested then
+				nested = P.column(detail, {
+					name = "Nested",
+					size = UDim2.new(1, 0, 0, 0),
+					auto = "Y",
+					gap = theme.space.xs,
+					layoutOrder = 2,
+				})
+			end
+			open = true
+			detail.Visible = true
+			return nested
+		end
 
 		function handle.progress(text)
 			preview.Text = util.ellipsis(tostring(text), ARG_PREVIEW)
@@ -442,6 +462,241 @@ return function(env)
 			end
 		end
 
+		return handle
+	end
+
+	-- A subagent's live feed.
+	--
+	-- The parent pays for one paragraph of report, but the user should still be able to
+	-- watch the work. From outside, a delegated task is a spinner on a row that says
+	-- nothing, which is indistinguishable from a hang -- and three of them at once are
+	-- indistinguishable from each other. So each dispatch gets a card that fills in as
+	-- its child works: every tool it calls, what it said between calls, the report at
+	-- the end.
+	--
+	-- Driven by events forwarded onto the parent's stream rather than by reaching into
+	-- the child session, so it replays from the log like every other row. Switching
+	-- panel mid-dispatch and coming back shows the same feed, not an empty box.
+	function M.subagent(parent, info, order, opts)
+		opts = opts or {}
+		local holder = wrapper(parent, { name = "Subagent", layoutOrder = order })
+		local card = P.column(holder, {
+			size = opts.nested and UDim2.new(1, 0, 0, 0) or UDim2.new(widthFor("agent"), 0, 0, 0),
+			auto = "Y",
+			bg = opts.nested and theme.color.surface or theme.color.bubbleTool,
+			radius = theme.radius.md,
+			gap = 0,
+			clip = true,
+		})
+		P.stroke(card, theme.color.borderSubtle)
+
+		local header = Instance.new("TextButton", card)
+		header.Text = ""
+		header.AutoButtonColor = false
+		header.BackgroundTransparency = 1
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row - 4, responsive.minTarget() - 8))
+		header.LayoutOrder = 1
+		header.Selectable = true
+
+		local row = P.row(header, {
+			size = UDim2.fromScale(1, 1),
+			gap = theme.space.xs,
+			padding = { x = theme.space.sm },
+		})
+
+		local spinner = C.spinner(row, { diameter = theme.size.icon - 2, layoutOrder = 1 })
+		local dot = P.statusDot(row, { color = theme.color.accent, diameter = 7, layoutOrder = 1 })
+		dot.Visible = false
+
+		local kindLabel = P.text(row, {
+			text = "agent",
+			role = "monoSmall",
+			color = theme.color.accent,
+			layoutOrder = 2,
+		})
+		kindLabel.Size = UDim2.fromOffset(0, theme.text.monoSmall.size + 4)
+		kindLabel.AutomaticSize = Enum.AutomaticSize.X
+		local title = P.text(row, {
+			text = tostring(info.label or "task"),
+			role = "caption",
+			color = theme.color.textSecondary,
+			truncate = true,
+			size = UDim2.new(0, 0, 1, 0),
+			flex = "Fill",
+			layoutOrder = 3,
+		})
+
+		local meta = P.text(row, {
+			text = "",
+			role = "caption",
+			color = theme.color.textTertiary,
+			align = "Right",
+			layoutOrder = 4,
+		})
+		meta.Size = UDim2.fromOffset(88, theme.text.caption.size + 4)
+
+		local feed = P.column(card, {
+			name = "Feed",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.xxs,
+			padding = { x = theme.space.sm, bottom = theme.space.sm },
+			layoutOrder = 2,
+		})
+
+		local status = P.text(feed, {
+			text = "Starting",
+			role = "caption",
+			color = theme.color.textTertiary,
+			wrap = true,
+			auto = "Y",
+			layoutOrder = 1,
+		})
+		status.Visible = false
+		status.Size = UDim2.new(1, 0, 0, 0)
+
+		-- The feed is open while the work happens, which is the whole point of it. The
+		-- header still toggles, because a finished subagent's feed is history and a
+		-- conversation with six of them in it should be collapsible.
+		local open = true
+		header.Activated:Connect(function()
+			open = not open
+			feed.Visible = open
+		end)
+		local rows = {}
+		local slot = 1
+		local function nextSlot()
+			slot = slot + 1
+			return slot
+		end
+
+		local function line(text, colour, role)
+			local label = P.text(feed, {
+				text = tostring(text),
+				role = role or "caption",
+				color = colour or theme.color.textTertiary,
+				wrap = true,
+				auto = "Y",
+				layoutOrder = nextSlot(),
+			})
+			label.Size = UDim2.new(1, 0, 0, 0)
+			return label
+		end
+
+		local started = clock.ms()
+		local calls, finished, finalMs = 0, 0, nil
+
+		local function paintMeta()
+			local bits = {}
+			if calls > 0 then bits[#bits + 1] = string.format("%d/%d", finished, calls) end
+			local waited = finalMs or clock.since(started)
+			if waited >= 1000 then bits[#bits + 1] = util.formatDuration(waited) end
+			meta.Text = table.concat(bits, "  ")
+		end
+
+		-- One timer for the clock, stopped when the subagent reports back. Same reason
+		-- the working row has one: a number that moves is what separates "this is taking
+		-- a while" from "this is stuck", and a subagent takes minutes.
+		local stop = clock.interval(0.5, function()
+			if not finalMs then paintMeta() end
+		end)
+		holder.Destroying:Connect(function() pcall(stop) end)
+		local handle = { root = holder, card = card }
+
+		function handle.status(event)
+			local text = util.trim(tostring(event.text or ""))
+			if text == "" or text == "Ready" then return end
+			status.Visible = true
+			status.Text = text
+			status.TextColor3 = event.bad and theme.color.danger or theme.color.textTertiary
+		end
+
+		function handle.say(event)
+			local text = util.trim(tostring(event.text or ""))
+			if text == "" then return end
+			line(text, theme.color.textSecondary, "small")
+		end
+
+		-- One line per tool the child calls, keyed by the child's own call id so the
+		-- result can land on the row that asked for it. The arguments are replaced by a
+		-- one-line summary of what came back, which is as much of a subagent's tool
+		-- output as belongs in the parent's transcript.
+		function handle.tool(event)
+			calls = calls + 1
+			local toolRow = P.row(feed, {
+				size = UDim2.new(1, 0, 0, theme.text.monoSmall.size + 6),
+				gap = theme.space.xs,
+				layoutOrder = nextSlot(),
+			})
+			P.statusDot(toolRow, { color = theme.riskColor(event.risk), diameter = 5, layoutOrder = 1 })
+			local name = P.text(toolRow, {
+				text = tostring(event.name or "tool"),
+				role = "monoSmall",
+				color = theme.color.textSecondary,
+				layoutOrder = 2,
+			})
+			name.Size = UDim2.fromOffset(0, theme.text.monoSmall.size + 4)
+			name.AutomaticSize = Enum.AutomaticSize.X
+			local args = P.text(toolRow, {
+				text = tostring(event.arguments or ""),
+				role = "caption",
+				color = theme.color.textTertiary,
+				truncate = true,
+				size = UDim2.new(0, 0, 1, 0),
+				flex = "Fill",
+				layoutOrder = 3,
+			})
+			local timing = P.text(toolRow, {
+				text = "",
+				role = "caption",
+				color = theme.color.textTertiary,
+				align = "Right",
+				layoutOrder = 4,
+			})
+			timing.Size = UDim2.fromOffset(46, theme.text.caption.size + 4)
+			rows[tostring(event.callId or calls)] = { args = args, timing = timing }
+			paintMeta()
+		end
+		function handle.toolDone(event)
+			finished = finished + 1
+			local entry = rows[tostring(event.callId or "")]
+			if entry then
+				entry.timing.Text = event.ms and util.formatDuration(event.ms) or ""
+				local summary = util.trim(tostring(event.summary or ""))
+				if summary ~= "" then entry.args.Text = summary end
+				if not event.ok then entry.args.TextColor3 = theme.color.danger end
+			end
+			paintMeta()
+		end
+
+		function handle.finish(event)
+			finalMs = event.ms or clock.since(started)
+			pcall(stop)
+			pcall(function() spinner:Destroy() end)
+			dot.Visible = true
+			if event.aborted then
+				dot.BackgroundColor3 = theme.color.warn
+			elseif event.ok == false then
+				dot.BackgroundColor3 = theme.color.danger
+			else
+				dot.BackgroundColor3 = theme.color.accent
+			end
+			paintMeta()
+			status.Visible = true
+			if event.aborted then
+				status.Text = "Stopped before it finished."
+			elseif event.ok == false then
+				status.Text = tostring(event.text or "Failed.")
+			else
+				status.Text = string.format("Reported back after %s over %s.",
+					util.formatDuration(finalMs), util.pluralise(event.messages or 0, "message"))
+			end
+			if event.ok ~= false and util.trim(tostring(event.text or "")) ~= "" then
+				line(tostring(event.text), theme.color.text, "small")
+			end
+		end
+
+		paintMeta()
 		return handle
 	end
 
