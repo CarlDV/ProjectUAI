@@ -5,7 +5,7 @@ against any OpenAI-compatible inference endpoint, and it identifies itself on th
 wire as the Claude Code CLI.
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/<you>/ProjectUAI/main/dist/uai.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/CarlDV/ProjectUAI/main/dist/uai.lua"))()
 ```
 
 Nothing about a specific game, gateway or host script is assumed. Under an
@@ -110,7 +110,8 @@ means the code. Read only, Auto and Allow everything are the other three modes.
 ## Embedding
 
 ```lua
-local uai = loadstring(game:HttpGet(".../dist/uai.lua"))({
+local uai = loadstring(game:HttpGet(
+    "https://raw.githubusercontent.com/CarlDV/ProjectUAI/main/dist/uai.lua"))({
     prompt = "You also control the Foo system. Use foo_* tools first.",
     hooks = {
         preTool = function(payload)
