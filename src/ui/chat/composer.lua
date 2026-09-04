@@ -60,8 +60,12 @@ return function(env)
 
 		local fieldHolder = P.frame(inputRow, {
 			name = "FieldHolder",
-			size = UDim2.new(1, -(theme.size.control + theme.space.xs), 0, 0),
+			-- Fills rather than reserving control + xs: the send button is sized to
+			-- max(control, minTarget()), which is 44 on touch, so the reserve came up
+			-- twelve pixels short on exactly the platform the minimum is there for.
+			size = UDim2.new(0, 0, 0, 0),
 			auto = "Y",
+			flex = "Fill",
 			layoutOrder = 1,
 		})
 

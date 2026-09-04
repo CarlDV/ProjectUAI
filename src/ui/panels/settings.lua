@@ -60,8 +60,15 @@ return function(env)
 		local function numberRow(parentCard, label, hint, path, min, max, step)
 			local column = P.column(parentCard, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xxs })
 			local head = P.row(column, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs })
-			local text = P.text(head, { text = label, role = "small", layoutOrder = 1 })
-			text.Size = UDim2.new(1, -70, 0, theme.text.small.size + 4)
+			local text = P.text(head, {
+				text = label,
+				role = "small",
+				-- Fills rather than reserving 70 for a 66px value plus a 6px gap, which
+				-- overlapped it by two pixels.
+				size = UDim2.new(0, 0, 0, theme.text.small.height),
+				flex = "Fill",
+				layoutOrder = 1,
+			})
 			local value = P.text(head, {
 				text = tostring(config.get(path, min)),
 				role = "monoSmall",

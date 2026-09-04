@@ -158,8 +158,11 @@ return function(env)
 			layoutOrder = 1,
 		})
 		local titleColumn = P.column(header, {
-			size = UDim2.new(1, -(theme.size.control + theme.space.sm), 0, 0),
+			-- Fills rather than reserving control + sm for the close button, which is
+			-- sized to max(control, minTarget()) and so is 44 on touch.
+			size = UDim2.new(0, 0, 0, 0),
 			auto = "Y",
+			flex = "Fill",
 			gap = theme.space.hair,
 			layoutOrder = 1,
 		})
@@ -406,7 +409,11 @@ return function(env)
 				padding = { x = theme.space.sm },
 			})
 			local labelColumn = P.column(row, {
-				size = UDim2.new(1, -theme.space.md, 1, 0),
+				-- Fills rather than reserving space.md, which was twelve pixels for a
+				-- check mark that is icon + gap, so the tick was clipped on every
+				-- selected row.
+				size = UDim2.new(0, 0, 1, 0),
+				flex = "Fill",
 				gap = 0,
 				alignY = "Center",
 				layoutOrder = 1,

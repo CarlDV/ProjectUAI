@@ -92,7 +92,9 @@ return function(env)
 		scroll = P.scroll(column, {
 			name = "LogList",
 			size = UDim2.new(1, 0, 1, 0),
-			gap = theme.space.xs,
+			-- Tight, because the rows now carry their own banding and padding; a six
+			-- pixel gap between banded rows reads as a gap in the data.
+			gap = 2,
 			padding = { x = theme.space.md, bottom = theme.space.md },
 			layoutOrder = 2,
 		})
@@ -119,9 +121,12 @@ return function(env)
 			local title = P.text(top, {
 				text = string.format("%s %s", entry.method, entry.tag or ""),
 				role = "monoSmall",
+				-- Fills rather than reserving 150 for a dot and a 96px meta column,
+				-- which left thirty-five pixels stranded on every card.
+				size = UDim2.new(0, 0, 0, theme.text.monoSmall.height),
+				flex = "Fill",
 				layoutOrder = 2,
 			})
-			title.Size = UDim2.new(1, -150, 0, theme.text.monoSmall.size + 4)
 			local meta = P.text(top, {
 				text = string.format("%s %s", entry.status > 0 and tostring(entry.status) or "-",
 					util.formatDuration(entry.ms or 0)),
@@ -199,6 +204,11 @@ return function(env)
 				size = UDim2.new(1, 0, 0, 0),
 				auto = "Y",
 				gap = theme.space.xs,
+				-- Alternating bands, because twenty-four transparent rows four pixels
+				-- apart read as one block of text rather than as a table.
+				bg = (order % 2 == 0) and theme.color.surfaceRaised or nil,
+				radius = theme.radius.sm,
+				padding = { x = theme.space.xs, y = 2 },
 				-- Top-aligned put the 6px dot's centre four pixels above the text's,
 				-- so every dot in the list rode high. The message can wrap to a second
 				-- line, so the meta columns are given the row's height and centre their

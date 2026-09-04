@@ -76,9 +76,13 @@ return function(env)
 			text = (props.lang and props.lang:lower() or "code") .. (props.unterminated and " (incomplete)" or ""),
 			role = "caption",
 			color = theme.color.textTertiary,
+			-- Fills rather than reserving controlSmall: the copy button is sized to
+			-- max(controlSmall, minTarget()), which is 44 on touch, so the reserve was
+			-- twelve pixels short on exactly the platform the minimum exists for.
+			size = UDim2.new(0, 0, 1, 0),
+			flex = "Fill",
 			layoutOrder = 1,
 		})
-		label.Size = UDim2.new(1, -(theme.size.controlSmall + theme.space.xs), 1, 0)
 
 		if caps.clipboard then
 			local copy = P.iconButton(bar, {
@@ -358,9 +362,14 @@ return function(env)
 			role = "caption",
 			color = theme.color.textTertiary,
 			truncate = true,
+			-- Takes whatever is left rather than reserving a guess. The guess was
+			-- icon + 90, but the row also has to fit an auto-width tool name, so it
+			-- over-committed by the width of that name and pushed `timing` out past
+			-- the card's clip -- which is why a tool call never showed how long it took.
+			size = UDim2.new(0, 0, 1, 0),
+			flex = "Fill",
 			layoutOrder = 3,
 		})
-		preview.Size = UDim2.new(1, -(theme.size.icon + 90), 1, 0)
 
 		local timing = P.text(row, {
 			text = "",

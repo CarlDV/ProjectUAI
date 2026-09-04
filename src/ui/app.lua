@@ -191,6 +191,26 @@ return function(env)
 		M.launcherPulse = pulse
 	end
 
+	-- A dot named "pulse" that had never pulsed: the only thing on screen saying a
+	-- turn is still running with the window closed, and it was a static toggle.
+	function M.setLauncherBusy(value)
+		if not M.launcherPulse then return end
+		local on = value == true
+		M.launcherPulse.Visible = on
+		if M.launcherTween then
+			pcall(function() M.launcherTween:Cancel() end)
+			M.launcherTween = nil
+		end
+		if not on or responsive.reduceMotion then
+			M.launcherPulse.BackgroundTransparency = 0
+			return
+		end
+		M.launcherPulse.BackgroundTransparency = 0.6
+		M.launcherTween = env.tween:Create(M.launcherPulse, theme.motion.pulse,
+			{ BackgroundTransparency = 0 })
+		M.launcherTween:Play()
+	end
+
 	-- Window -----------------------------------------------------------------
 
 	function M.buildWindow()
@@ -447,7 +467,7 @@ return function(env)
 		if not M.screen then M.mount() end
 		M.showPanel(id or M.panel)
 		M.window.show()
-		if M.launcherPulse then M.launcherPulse.Visible = false end
+		M.setLauncherBusy(false)
 	end
 
 	function M.hide()
@@ -577,8 +597,8 @@ return function(env)
 				end
 				M.syncChip()
 				-- A finished turn while the window is closed is worth a hint.
-				if not M.window.visible and M.launcherPulse then
-					M.launcherPulse.Visible = true
+				if not M.window.visible then
+					M.setLauncherBusy(true)
 				end
 			elseif event.kind == "usage" then
 				if panel and panel.composer and not session.busy then

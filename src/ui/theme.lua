@@ -152,9 +152,14 @@ return function(env)
 			scrim = NEUTRAL[0],
 
 			-- Lines.
-			borderSubtle = NEUTRAL[3],
-			border = NEUTRAL[5],
-			borderStrong = NEUTRAL[6],
+			-- Outlines sit three to five steps above the surface they are drawn on.
+			-- borderSubtle used to be NEUTRAL[3], one step above surfaceRaised, which
+			-- is a contrast ratio of about 1.05 to 1 -- every card edge, every
+			-- segmented outline and the header rule were all invisible, and the
+			-- interface read as untitled blocks of near-black rather than as panels.
+			borderSubtle = NEUTRAL[5],
+			border = NEUTRAL[6],
+			borderStrong = NEUTRAL[7],
 
 			-- Type.
 			text = NEUTRAL[11],
