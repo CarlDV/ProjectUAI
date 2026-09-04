@@ -1130,6 +1130,104 @@ scenario("every panel builds cleanly", function()
 		table.concat(harness.console.warnings, "\n"))
 end)
 
+scenario("the built interface holds its layout invariants", function()
+	-- Two rules Roblox will not enforce and the mock cannot render, so they are
+	-- asserted on the props instead.
+	--
+	-- One: a TextLabel starts at zero size, and `auto` only covers the axes it names, so
+	-- `auto = "Y"` still leaves the width to the caller. A wrapped label that never
+	-- gets one does not vanish -- which would at least be obvious -- it wraps at
+	-- zero and renders one character per line, straight down the screen. The mock
+	-- has no layout solver and cannot see that happen, but it does not need one:
+	-- the mistake is in the props, so that is where this looks.
+	--
+	-- Two: a UIListLayout owns the Position of every GuiObject child it is given. A
+	-- decoration that anchors itself to an edge does not merely fail to move, it
+	-- becomes a layout item -- and a full-width one in a row takes the whole line
+	-- and puts every sibling past the right edge, which is how a title bar goes
+	-- missing without a single error.
+	local function nameOf(value)
+		if type(value) == "table" and value.Name then return tostring(value.Name) end
+		return tostring(value)
+	end
+
+	local widths, anchors = {}, {}
+	local seenWidth, seenAnchor = {}, {}
+
+	local function sweep(harness)
+		for _, node in ipairs(harness.screen():GetDescendants()) do
+			local path = node:GetFullName()
+
+			if node.ClassName == "TextLabel" or node.ClassName == "TextBox" then
+				local truncates = nameOf(node.TextTruncate) == "AtEnd"
+				local auto = nameOf(node.AutomaticSize)
+				-- An auto width is the one case where the label sizes itself.
+				local ownsWidth = auto == "X" or auto == "XY"
+				if (node.TextWrapped == true or truncates) and not ownsWidth then
+					local size = node.Size
+					local width = type(size) == "table" and size.X or nil
+					if (not width or (width.Scale == 0 and width.Offset <= 0)) and not seenWidth[path] then
+						seenWidth[path] = true
+						widths[#widths + 1] = string.format(
+							"%s  wrap=%s truncate=%s auto=%s  text=%q",
+							path, tostring(node.TextWrapped), tostring(truncates), auto,
+							tostring(node.Text):sub(1, 48))
+					end
+				end
+			end
+
+			local parent = node.Parent
+			if node:IsA("GuiObject") and parent and parent:FindFirstChildOfClass("UIListLayout") then
+				local anchor = node.AnchorPoint
+				local position = node.Position
+				local placed = type(position) == "table"
+					and (position.X.Scale ~= 0 or position.X.Offset ~= 0
+						or position.Y.Scale ~= 0 or position.Y.Offset ~= 0)
+				local anchored = type(anchor) == "table" and (anchor.X ~= 0 or anchor.Y ~= 0)
+				if (placed or anchored) and not seenAnchor[path] then
+					seenAnchor[path] = true
+					anchors[#anchors + 1] = string.format(
+						"%s  position=(%g,%g),(%g,%g) anchor=(%g,%g)",
+						path, position.X.Scale, position.X.Offset, position.Y.Scale,
+						position.Y.Offset, anchor.X, anchor.Y)
+				end
+			end
+		end
+	end
+
+	-- Both states matter: a configured client renders the cards and headers, an
+	-- unconfigured one renders the empty states, and they share almost no labels.
+	for _, configured in ipairs({ true, false }) do
+		local harness, handle = bootWith({ provider = configured })
+		for _, panel in ipairs({ "providers", "tools", "settings", "logs", "chat" }) do
+			handle.app.show(panel)
+			harness.settle(1)
+			sweep(harness)
+		end
+
+		-- Modals build their own header rather than going through a panel, and the
+		-- provider editor is the densest form in the app, so both need walking too.
+		handle.env.require("ui/panels/providers").editor(
+			handle.providers.blank("openai"), function() end)
+		harness.settle(1)
+		sweep(harness)
+
+		handle.env.require("ui/overlay").confirm({
+			title = "Remove the thing?",
+			description = "It will not come back.",
+		})
+		harness.settle(1)
+		sweep(harness)
+	end
+
+	-- `truthy` rather than `check`, because `check` builds its own got/want detail and
+	-- the offending paths are the only part of a failure here worth reading.
+	truthy("every wrapped or truncated label has a width", #widths == 0,
+		table.concat(widths, "\n"))
+	truthy("nothing positions itself inside a list layout", #anchors == 0,
+		table.concat(anchors, "\n"))
+end)
+
 scenario("the window and its controls respond to input", function()
 	local harness, handle = bootWith({
 		handler = function() return { StatusCode = 200, Body = chatBody({ content = "Got it." }) } end,

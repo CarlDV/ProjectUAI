@@ -124,27 +124,34 @@ return function(env)
 
 		-- Chrome --------------------------------------------------------------
 
+		local headerHeight = math.max(theme.size.header, responsive.minTarget() + 8)
+
 		handle.header = P.row(root, {
 			name = "Header",
-			size = UDim2.new(1, 0, 0, math.max(theme.size.header, responsive.minTarget() + 8)),
+			size = UDim2.new(1, 0, 0, headerHeight),
 			bg = theme.color.surfaceRaised,
 			gap = theme.space.sm,
 			padding = { x = theme.space.md },
 			zIndex = theme.z.header,
 		})
-		P.frame(handle.header, {
+		-- The hairline belongs to the header's bottom edge, but the header is a row,
+		-- and a UIListLayout lays out every GuiObject child it is given -- including a
+		-- decoration that only wanted to be anchored. A full-width rule left on the
+		-- default LayoutOrder of 0 sorts ahead of the title and the controls and takes
+		-- the entire line, putting all of them past the right edge. So it hangs off
+		-- the root, where nothing is being laid out, and pins itself to the seam.
+		P.frame(root, {
 			name = "HeaderRule",
 			size = UDim2.new(1, 0, 0, 1),
-			anchor = Vector2.new(0, 1),
-			position = UDim2.fromScale(0, 1),
+			position = UDim2.new(0, 0, 0, headerHeight - 1),
 			bg = theme.color.borderSubtle,
 			zIndex = theme.z.header + 1,
 		})
 
 		handle.body = P.frame(root, {
 			name = "Body",
-			size = UDim2.new(1, 0, 1, -math.max(theme.size.header, responsive.minTarget() + 8)),
-			position = UDim2.new(0, 0, 0, math.max(theme.size.header, responsive.minTarget() + 8)),
+			size = UDim2.new(1, 0, 1, -headerHeight),
+			position = UDim2.new(0, 0, 0, headerHeight),
 		})
 
 		-- Drag ----------------------------------------------------------------

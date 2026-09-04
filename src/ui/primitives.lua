@@ -167,11 +167,21 @@ return function(env)
 		label.RichText = props.rich == true
 		if props.transparency then label.TextTransparency = props.transparency end
 		if props.truncate then label.TextTruncate = Enum.TextTruncate.AtEnd end
-		if not props.size and not props.auto then
-			-- A label with no explicit size and no automatic size collapses to
-			-- nothing inside a list layout, which is the single most common way an
-			-- interface silently loses text.
-			label.Size = UDim2.new(1, 0, 0, (props.textSize or role.size) + 4)
+		-- A label with no explicit size collapses to nothing inside a list layout,
+		-- which is the single most common way an interface silently loses text.
+		-- `auto` only covers the axes it names, so it does not save us here: with
+		-- `auto = "Y"` the width is still ours to set, and a zero-width label does
+		-- not vanish so much as wrap to one character per line -- the same bug
+		-- wearing a costume that reads as a rendering glitch instead of a layout one.
+		-- The caller owns the width only when `auto` includes X.
+		if not props.size then
+			if props.auto == "X" or props.auto == "XY" then
+				label.Size = UDim2.fromOffset(0, 0)
+			elseif props.auto == "Y" then
+				label.Size = UDim2.new(1, 0, 0, 0)
+			else
+				label.Size = UDim2.new(1, 0, 0, (props.textSize or role.size) + 4)
+			end
 		end
 		return label
 	end

@@ -33,12 +33,14 @@ return function(env)
 			visible = false,
 			clip = true,
 		})
+		-- Last in the stack rather than anchored to the bottom edge: the shell is a
+		-- column, and a UIListLayout moves every child it has to its own slot, so an
+		-- anchored rule would silently become the first row instead of the last.
 		P.frame(shell, {
 			name = "Rule",
 			size = UDim2.new(1, 0, 0, 1),
-			anchor = Vector2.new(0, 1),
-			position = UDim2.fromScale(0, 1),
 			bg = theme.color.borderSubtle,
+			layoutOrder = 3,
 		})
 
 		local header = Instance.new("TextButton", shell)

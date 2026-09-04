@@ -19,27 +19,37 @@ return function(env)
 	function M.new(parent, props)
 		props = props or {}
 
+		-- The shell is left bare so the rule can reach both edges; the padding lives on
+		-- the content column below it. A UIListLayout owns the position of every child
+		-- it is given, so a rule that anchored itself to the top edge would be moved
+		-- off that edge and become a layout row regardless -- better to be one on
+		-- purpose, in a stack with no gap, than to be one by accident.
 		local shell = P.column(parent, {
 			name = "Composer",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
-			anchor = Vector2.new(0, 1),
-			position = UDim2.fromScale(0, 1),
 			bg = theme.color.surface,
-			gap = theme.space.xs,
-			padding = { x = theme.space.md, top = theme.space.sm, bottom = theme.space.sm },
+			gap = 0,
 			zIndex = theme.z.raised,
 		})
 		P.frame(shell, {
 			name = "TopRule",
-			size = UDim2.new(1, theme.space.md * 2, 0, 1),
-			position = UDim2.new(0, -theme.space.md, 0, 0),
+			size = UDim2.new(1, 0, 0, 1),
 			bg = theme.color.borderSubtle,
+			layoutOrder = 1,
+		})
+		local content = P.column(shell, {
+			name = "Content",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.xs,
+			padding = { x = theme.space.md, top = theme.space.sm, bottom = theme.space.sm },
+			layoutOrder = 2,
 		})
 
 		local composer = { expanded = false, busy = false }
 
-		local inputRow = P.row(shell, {
+		local inputRow = P.row(content, {
 			name = "InputRow",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
@@ -90,7 +100,7 @@ return function(env)
 		-- The affordance row below carries the things a user needs occasionally: how
 		-- the model will be reached, what mode permissions are in, and the two
 		-- toggles that change how much the transcript shows.
-		local metaRow = P.row(shell, {
+		local metaRow = P.row(content, {
 			name = "Meta",
 			size = UDim2.new(1, 0, 0, theme.text.caption.size + 8),
 			gap = theme.space.xs,
