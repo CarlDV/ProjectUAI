@@ -163,7 +163,13 @@ return function(env)
 
 		function composer.setBusy(value)
 			composer.busy = value == true
-			sendButton.instance:ClearAllChildren()
+			-- ClearAllChildren would take the UICorner that P.button attached along
+			-- with the icon, and since this runs once at build time that is why the
+			-- send button has been square from the moment it existed. Only the drawn
+			-- content is replaced.
+			for _, child in ipairs(sendButton.instance:GetChildren()) do
+				if child:IsA("GuiObject") then child:Destroy() end
+			end
 			-- The primary action becomes Stop while a turn is running, in place
 			-- rather than as a second control, so there is only ever one thing to
 			-- press.
@@ -174,13 +180,30 @@ return function(env)
 			local holder = P.frame(content, {
 				size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
 			})
+			if composer.pulse then
+				pcall(function() composer.pulse:Cancel() end)
+				composer.pulse = nil
+			end
 			if composer.busy then
 				icons.stop(holder, theme.size.icon, theme.color.textOnAccent)
+				-- setVariant tweens the background over 0.12s, so assigning
+				-- BackgroundColor3 here as well only started a race the tween won.
 				sendButton.setVariant("danger")
-				sendButton.instance.BackgroundColor3 = theme.color.danger
+				-- A breathing outline. It is the one piece of motion visible with the
+				-- transcript scrolled away, which is where a long turn is usually spent.
+				if not responsive.reduceMotion then
+					composer.busyStroke = composer.busyStroke
+						or P.stroke(sendButton.instance, theme.color.danger, theme.stroke.focus)
+					composer.busyStroke.Color = theme.color.danger
+					composer.busyStroke.Transparency = 0.7
+					composer.pulse = env.tween:Create(composer.busyStroke, theme.motion.pulse,
+						{ Transparency = 0.05 })
+					composer.pulse:Play()
+				end
 			else
 				icons.send(holder, theme.size.icon, theme.color.textOnAccent)
 				sendButton.setVariant("primary")
+				if composer.busyStroke then composer.busyStroke.Transparency = 1 end
 			end
 		end
 

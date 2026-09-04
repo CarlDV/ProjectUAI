@@ -277,7 +277,11 @@ return function(env)
 
 		function handle.setMaximised(value)
 			handle.maximised = value == true
-			config.set("ui.window.maximised", handle.maximised)
+			-- Quiet, like every other geometry write here: this is a record of where
+			-- the window is, not a setting anything else derives from, and a noisy
+			-- write used to reach the theme's config subscription and rebuild the
+			-- entire interface a fifth of a second after the maximise animation.
+			config.set("ui.window.maximised", handle.maximised, { quiet = true })
 			grip.Visible = draggableNow()
 			handle.layout("maximise")
 		end

@@ -459,23 +459,54 @@ return function(env)
 	end
 
 	-- The working indicator: one row that reports the current status text, replaced
-	-- by the answer when the turn ends.
+	-- by the answer when the turn ends. It carries the two signals that separate
+	-- "thinking" from "hung" -- a label that moves and a clock that counts up --
+	-- because the HTTP call it covers can take a minute and says nothing while it
+	-- does.
 	function M.working(parent, order)
 		local holder = wrapper(parent, { name = "Working", layoutOrder = order })
 		local row = P.row(holder, {
 			size = UDim2.new(1, 0, 0, theme.size.row - 6),
 			gap = theme.space.xs,
 		})
-		C.spinner(row, { diameter = theme.size.icon - 2, layoutOrder = 1 })
+		C.spinner(row, { diameter = theme.size.icon, layoutOrder = 1 })
 		local label = P.text(row, {
 			text = "Thinking",
 			role = "small",
 			color = theme.color.textSecondary,
 			layoutOrder = 2,
 		})
-		label.Size = UDim2.new(1, -(theme.size.icon + theme.space.xs), 1, 0)
+		local elapsed = P.text(row, {
+			text = "",
+			role = "caption",
+			color = theme.color.textTertiary,
+			align = "Right",
+			layoutOrder = 3,
+		})
+		elapsed.Size = UDim2.fromOffset(52, theme.size.row - 6)
+		label.Size = UDim2.new(1, -(theme.size.icon + 52 + theme.space.xs * 2), 1, 0)
+
 		local handle = { root = holder, label = label }
-		function handle.set(text) label.Text = tostring(text) end
+		local base = "Thinking"
+		local started = clock.ms()
+		local frame = 0
+		-- One timer drives both, so the trailing dots and the clock stay in step.
+		local stop = clock.interval(0.4, function()
+			frame = frame + 1
+			if not responsive.reduceMotion then
+				label.Text = base .. string.rep(".", frame % 4)
+			end
+			local waited = clock.since(started)
+			if waited >= 1000 then elapsed.Text = util.formatDuration(waited) end
+		end)
+		holder.Destroying:Connect(function() pcall(stop) end)
+
+		-- The status text is the base the dots are appended to, not the whole label,
+		-- or the next tick would overwrite whatever was just set.
+		function handle.set(text)
+			base = tostring(text)
+			label.Text = base
+		end
 		return handle
 	end
 

@@ -62,14 +62,66 @@ return function(env)
 			end
 		end
 
+		-- The working row is transient and always belongs at the end of the
+		-- transcript, so it takes an order no real row will reach rather than the next
+		-- sequential one. Otherwise a tool row created while it is up sorts below it
+		-- and the indicator ends up stranded in the middle of the conversation.
+		local WORKING_ORDER = 1e6
+
 		local function ensureWorking()
 			if not view.working then
-				view.working = message.working(scroll.instance, nextOrder())
+				view.working = message.working(scroll.instance, WORKING_ORDER)
 			end
 			return view.working
 		end
 
+		-- Progressive reveal.
+		--
+		-- No Roblox HTTP transport reads a body incrementally, so a reply arrives whole
+		-- and there is nothing to stream. The motion is manufactured here instead: the
+		-- bubble is built empty and filled over a fixed number of ticks, so a long
+		-- answer takes the same time to land as a short one rather than crawling.
+		-- Revealed in chunks, not per character, because setText re-renders the whole
+		-- markdown tree on each call.
+		local REVEAL_TICKS = 40
+		local REVEAL_STEP = 0.04
+
+		local function stopReveal(complete)
+			local reveal = view.reveal
+			if not reveal then return end
+			view.reveal = nil
+			pcall(reveal.stop)
+			-- Whatever interrupts a reveal, the full text still has to land: a half
+			-- written answer left in the transcript would be a far worse bug than the
+			-- missing animation this replaces.
+			if complete and reveal.handle then
+				pcall(reveal.handle.setText, reveal.text)
+			end
+		end
+
+		local function revealAgent(text)
+			local handle = message.agent(scroll.instance, "", nextOrder())
+			view.agentHandle = handle
+			if responsive.reduceMotion then
+				handle.setText(text)
+				follow()
+				return handle
+			end
+			local shown = 0
+			local step = math.max(1, math.ceil(#text / REVEAL_TICKS))
+			local reveal = { handle = handle, text = text }
+			reveal.stop = clock.interval(REVEAL_STEP, function()
+				shown = math.min(#text, shown + step)
+				handle.setText(text:sub(1, shown))
+				follow()
+				if shown >= #text then stopReveal(false) end
+			end)
+			view.reveal = reveal
+			return handle
+		end
+
 		function view.empty()
+			stopReveal(false)
 			scroll.clear()
 			view.order = 0
 			view.tools = {}
@@ -104,6 +156,7 @@ return function(env)
 		-- the log carries more than a transcript should show.
 		function view.render(event)
 			if event.kind == "user" then
+				stopReveal(true)
 				clearWorking()
 				view.agentHandle = nil
 				message.user(scroll.instance, event.text, nextOrder())
@@ -116,17 +169,29 @@ return function(env)
 				elseif event.text == "Ready" then
 					clearWorking()
 				end
+			elseif event.kind == "request:start" then
+				-- The entire HTTP round trip sits between this and request:done with no
+				-- events in between, and it can run for the better part of a minute.
+				-- Without a row here that whole wait looks like nothing is happening,
+				-- which is the single largest gap in the turn.
+				ensureWorking().set("Contacting " .. tostring(event.provider))
+				follow()
 			elseif event.kind == "assistant:reasoning" then
 				message.reasoning(scroll.instance, event.text, nextOrder())
 				follow()
 			elseif event.kind == "assistant:text" then
 				if util.trim(event.text) ~= "" then
+					stopReveal(true)
 					clearWorking()
-					view.agentHandle = message.agent(scroll.instance, event.text, nextOrder())
+					revealAgent(event.text)
 					follow()
 				end
 			elseif event.kind == "tool:call" then
-				clearWorking()
+				-- The working row deliberately survives a tool call: it is the "this
+				-- turn is still running" indicator and it sorts last, so it stays put
+				-- below the tool rows instead of being destroyed and rebuilt -- which
+				-- restarted the spinner's phase and left the following request with no
+				-- indicator at all.
 				local handle = message.toolCall(scroll.instance, event, nextOrder())
 				view.tools[event.id or util.uid("tool")] = handle
 				follow()
@@ -168,6 +233,7 @@ return function(env)
 				}, nextOrder())
 				follow()
 			elseif event.kind == "error" then
+				stopReveal(true)
 				clearWorking()
 				message.notice(scroll.instance, {
 					tone = "bad",
@@ -175,6 +241,7 @@ return function(env)
 				}, nextOrder())
 				follow()
 			elseif event.kind == "abort" then
+				stopReveal(true)
 				clearWorking()
 				message.notice(scroll.instance, { tone = "warn", text = "Stopped." }, nextOrder())
 				follow()

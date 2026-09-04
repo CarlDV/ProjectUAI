@@ -695,7 +695,55 @@ scenario("the request payload is shaped the way gateways expect", function()
 		"an empty JSON array was sent where an object is required")
 	contains("zero-argument tools send an object", body, '"properties":{}')
 
+	-- Anthropic-on-Bedrock validates every tool schema against JSON Schema draft
+	-- 2020-12 and answers a bare TOOL_SCHEMA_INVALID, so the shape has to be right
+	-- before it leaves. An empty Luau table encoding as [] is how this breaks, and
+	-- it has to be caught on the wire text: once decoded, {} and [] are the same
+	-- empty Lua table and the bug is invisible.
+	local ARRAY_KEYS = {
+		required = true, enum = true, examples = true, allOf = true, anyOf = true,
+		oneOf = true, prefixItems = true,
+		-- Payload arrays, not schema keywords.
+		tools = true, messages = true, content = true, tool_calls = true, stop = true,
+	}
+	local emptyArrays = {}
+	for key in body:gmatch('"([%w_%$]+)":%[%]') do
+		if not ARRAY_KEYS[key] then emptyArrays[#emptyArrays + 1] = key end
+	end
+	truthy("no schema keyword encodes as an empty array", #emptyArrays == 0,
+		"these came out as []: " .. table.concat(emptyArrays, ", "))
+
+	local TYPES = {
+		object = true, array = true, string = true, number = true,
+		integer = true, boolean = true, ["null"] = true,
+	}
+	local schemaProblems = {}
+	local function auditSchema(node, path)
+		if type(node) ~= "table" then return end
+		if node.type ~= nil and not TYPES[node.type] then
+			schemaProblems[#schemaProblems + 1] = path .. ": type " .. tostring(node.type)
+		end
+		if node.type == "array" and node.items == nil then
+			schemaProblems[#schemaProblems + 1] = path .. ": array without items"
+		end
+		for _, name in ipairs(node.required or {}) do
+			if (node.properties or {})[name] == nil then
+				schemaProblems[#schemaProblems + 1] = path .. ": requires undeclared " .. tostring(name)
+			end
+		end
+		for key, value in pairs(node) do
+			if type(value) == "table" and not ARRAY_KEYS[key] then
+				auditSchema(value, path .. "." .. tostring(key))
+			end
+		end
+	end
 	local decoded = json.decode(body)
+	for _, definition in ipairs(decoded.tools or {}) do
+		auditSchema(definition["function"].parameters, definition["function"].name)
+	end
+	truthy("every tool schema is valid draft 2020-12", #schemaProblems == 0,
+		table.concat(schemaProblems, "\n"))
+
 	check("the system prompt leads", decoded.messages[1].role, "system")
 	contains("it describes the host", decoded.messages[1].content, "Host:")
 	contains("it names the place", decoded.messages[1].content, "PlaceId")
@@ -842,6 +890,27 @@ scenario("theme tokens react to settings", function()
 	harness.settle(1)
 	check("the accent changed", theme.accentName, "rose")
 	truthy("the interface rebuilt without error", harness.screen():FindFirstChild("UAI_Window") ~= nil)
+
+	-- And the converse, which is the expensive half. A theme rebuild fires
+	-- theme.changed, and the app answers that by destroying and reconstructing every
+	-- panel, the window and the launcher. Accepting the whole `ui.` namespace meant
+	-- maximising the window, moving the launcher or switching panel each tore the
+	-- interface down and built it again -- once a second, in the log that prompted
+	-- this test.
+	local rebuilds = 0
+	local unsubscribe = theme.changed:connect(function() rebuilds = rebuilds + 1 end)
+	for _, path in ipairs({ "ui.window.maximised", "ui.window.width", "ui.panel",
+		"ui.showReasoning", "ui.launcher.x" }) do
+		handle.config.set(path, path == "ui.window.width" and 900 or false)
+	end
+	harness.settle(1)
+	check("an unrelated ui key does not rebuild the theme", rebuilds, 0)
+
+	handle.config.set("ui.accent", "aurora")
+	harness.settle(1)
+	truthy("but a token key still does", rebuilds >= 1, tostring(rebuilds))
+	pcall(unsubscribe)
+
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)

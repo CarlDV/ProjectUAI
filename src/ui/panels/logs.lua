@@ -57,32 +57,37 @@ return function(env)
 			color = theme.color.textTertiary,
 			layoutOrder = 1,
 		})
-		countLabel.Size = UDim2.new(1, -170, 0, theme.text.caption.size + 6)
+		countLabel.Size = UDim2.fromOffset(0, theme.text.caption.size + 6)
+		countLabel.AutomaticSize = Enum.AutomaticSize.X
+		-- A growing spacer rather than a hardcoded reserve on the label: the buttons
+		-- are auto-width and grow with the text scale, so any fixed number is either
+		-- short of the right edge or overlapping them.
+		P.spacer(actions, { grow = true, size = UDim2.new(0, 0, 0, 1), layoutOrder = 2 })
 
 		if caps.clipboard then
 			local copy = P.button(actions, {
 				text = "Copy",
 				variant = "ghost",
 				size = "sm",
-				layoutOrder = 2,
+				layoutOrder = 3,
 				onClick = function()
 					pcall(caps.fn.clipboard, log.export())
 					overlay.toast("Log copied", "good", 2)
 				end,
 			})
-			copy.instance.LayoutOrder = 2
+			copy.instance.LayoutOrder = 3
 		end
 		local clear = P.button(actions, {
 			text = "Clear",
 			variant = "ghost",
 			size = "sm",
-			layoutOrder = 3,
+			layoutOrder = 4,
 			onClick = function()
 				if panel.view == "requests" then http.clearHistory() else log.clear() end
 				render()
 			end,
 		})
-		clear.instance.LayoutOrder = 3
+		clear.instance.LayoutOrder = 4
 
 		scroll = P.scroll(column, {
 			name = "LogList",
@@ -150,6 +155,16 @@ return function(env)
 			if entry.attempt and entry.attempt > 1 then
 				bits[#bits + 1] = "attempt " .. tostring(entry.attempt)
 			end
+			-- The evidence for a bodyless refusal. `server` and a trace id say the
+			-- response came from an edge rather than from the API, and `cf-mitigated`
+			-- says so outright, which is the difference between a key problem and a
+			-- filter problem.
+			if entry.server then bits[#bits + 1] = "server " .. tostring(entry.server) end
+			if entry.mitigated then bits[#bits + 1] = "mitigated " .. tostring(entry.mitigated) end
+			if entry.trace then bits[#bits + 1] = tostring(entry.trace) end
+			if entry.status >= 400 and (entry.bytes or 0) == 0 then
+				bits[#bits + 1] = "empty body"
+			end
 			local detail = P.text(card, {
 				text = table.concat(bits, "  |  "),
 				role = "caption",
@@ -172,18 +187,39 @@ return function(env)
 			return card
 		end
 
+		-- Column reserves, named once so the body's remainder cannot drift out of step
+		-- with them. They were 58 and 74 for an eight-character timestamp and a
+		-- four-letter source, which left about sixty pixels of nothing on every row.
+		local STAMP_WIDTH = 46
+		local SOURCE_WIDTH = 44
+		local DOT_WIDTH = 6
+
 		local function logRow(entry, order)
 			local row = P.row(scroll.instance, {
 				size = UDim2.new(1, 0, 0, 0),
 				auto = "Y",
 				gap = theme.space.xs,
+				-- Top-aligned put the 6px dot's centre four pixels above the text's,
+				-- so every dot in the list rode high. The message can wrap to a second
+				-- line, so the meta columns are given the row's height and centre their
+				-- own text instead.
 				alignY = "Top",
 				layoutOrder = order,
 			})
-			P.statusDot(row, {
-				color = theme.toneColor(LEVEL_TONE[entry.level] or "info"),
-				diameter = 6,
+			-- The dot gets a slot the height of one text line and centres itself in
+			-- that, rather than anchoring inside the row: the row is laid out by a
+			-- UIListLayout, which owns its children's positions, and a bare 6px dot
+			-- against 14px labels rode four pixels high on every line in the list.
+			local dotSlot = P.frame(row, {
+				name = "Level",
+				size = UDim2.fromOffset(DOT_WIDTH, theme.text.caption.size + 4),
 				layoutOrder = 1,
+			})
+			P.statusDot(dotSlot, {
+				color = theme.toneColor(LEVEL_TONE[entry.level] or "info"),
+				diameter = DOT_WIDTH,
+				anchor = Vector2.new(0.5, 0.5),
+				position = UDim2.fromScale(0.5, 0.5),
 			})
 			local stamp = P.text(row, {
 				text = entry.stamp or "",
@@ -191,7 +227,7 @@ return function(env)
 				color = theme.color.textTertiary,
 				layoutOrder = 2,
 			})
-			stamp.Size = UDim2.fromOffset(58, theme.text.caption.size + 4)
+			stamp.Size = UDim2.fromOffset(STAMP_WIDTH, theme.text.caption.size + 4)
 			local source = P.text(row, {
 				text = entry.source,
 				role = "caption",
@@ -199,16 +235,16 @@ return function(env)
 				layoutOrder = 3,
 				truncate = true,
 			})
-			source.Size = UDim2.fromOffset(74, theme.text.caption.size + 4)
+			source.Size = UDim2.fromOffset(SOURCE_WIDTH, theme.text.caption.size + 4)
 			local body = P.text(row, {
 				text = entry.message .. (entry.detail and ("  " .. entry.detail) or ""),
-				role = "caption",
+				role = "monoSmall",
 				color = entry.level == "error" and theme.color.danger or theme.color.textSecondary,
 				wrap = true,
 				auto = "Y",
 				layoutOrder = 4,
 			})
-			body.Size = UDim2.new(1, -(58 + 74 + 6 + theme.space.xs * 3), 0, 0)
+			body.Size = UDim2.new(1, -(STAMP_WIDTH + SOURCE_WIDTH + DOT_WIDTH + theme.space.xs * 3), 0, 0)
 			return row
 		end
 

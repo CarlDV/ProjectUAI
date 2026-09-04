@@ -181,7 +181,7 @@ return function(env)
 	M.byName = {
 		close = M.close, minus = M.minus, plus = M.plus, check = M.check,
 		dot = M.dot, bars = M.bars, stop = M.stop, send = M.send,
-		copy = M.copy, trash = M.trash,
+		copy = M.copy, trash = M.trash, chevron = M.chevron,
 	}
 
 	function M.draw(name, parent, size, colour, extra)

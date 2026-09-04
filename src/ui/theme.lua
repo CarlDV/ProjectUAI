@@ -97,6 +97,13 @@ return function(env)
 		hover = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 		press = TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 		slide = TweenInfo.new(0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		-- The repeating pair. These are the only tweens here with a negative repeat
+		-- count, and they deliberately do not go through M.tween: collapsing the
+		-- duration to 0.01s for reduced motion would spin them at a hundred hertz
+		-- rather than stop them. Callers check responsive.reduceMotion themselves and
+		-- skip the tween entirely.
+		spin = TweenInfo.new(0.9, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1),
+		pulse = TweenInfo.new(0.85, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, -1, true),
 	}
 
 	M.z = { base = 1, raised = 10, header = 20, dropdown = 60, overlay = 100, toast = 140, modal = 160 }
@@ -232,10 +239,21 @@ return function(env)
 
 	M.rebuild()
 
-	-- Density, accent and scale live in config, so the theme rebuilds itself when
-	-- any of them is written rather than every panel having to remember to.
+	-- Density, accent and scale live in config, so the theme rebuilds itself when any
+	-- of them is written rather than every panel having to remember to.
+	--
+	-- Only those three, though. A rebuild fires theme.changed, which the app answers
+	-- by destroying and reconstructing every panel, the window and the launcher --
+	-- so accepting the whole `ui.` namespace meant that maximising the window, moving
+	-- the launcher, switching panel or pinning the layout each tore the interface
+	-- down and built it again. Anything not in this table cannot change a token, and
+	-- so has no business rebuilding anything.
+	local TOKEN_KEYS = { ["ui.accent"] = true, ["ui.density"] = true, ["ui.fontScale"] = true }
+
 	config.changed:connect(function(path)
-		if path == nil or util.startsWith(tostring(path), "ui.") then
+		-- nil is a whole-file load; "ui" is a namespace reset, which startsWith("ui.")
+		-- does not match and which used to leave the interface on the old tokens.
+		if path == nil or path == "ui" or TOKEN_KEYS[tostring(path)] then
 			M.rebuild()
 		end
 	end)

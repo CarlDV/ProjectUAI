@@ -128,7 +128,9 @@ return function(env)
 					args = {
 						type = "array",
 						description = "Arguments in order. Strings, numbers, booleans, or a typed form such as 'vec3:1, 2, 3'.",
-						items = {},
+						-- `items` is a schema, so it has to encode as {} and not as [].
+						-- An empty one means "any value", which is the intent here.
+						items = util.emptyObject(),
 					},
 				},
 				required = { "path" },
@@ -152,7 +154,7 @@ return function(env)
 				type = "object",
 				properties = {
 					path = { type = "string" },
-					args = { type = "array", items = {} },
+					args = { type = "array", items = util.emptyObject() },
 				},
 				required = { "path" },
 			},

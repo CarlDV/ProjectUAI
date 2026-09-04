@@ -26,24 +26,27 @@ return function(env)
 			position = props.position,
 		})
 		local tint = props.color or theme.color.accent
+		-- Three dots spread evenly around the circle rather than bunched into an arc.
+		-- At icon size the arc version came out as three two-pixel dots inside eighty
+		-- degrees, two of them part-transparent -- a smudge that was hard to tell from
+		-- a static one, which rather defeated the point of animating it.
+		local dotSize = math.max(math.floor(size / 3.2), 3)
 		for index = 1, 3 do
 			local dot = P.frame(holder, {
 				name = "Dot" .. index,
-				size = UDim2.fromOffset(math.max(math.floor(size / 5), 2), math.max(math.floor(size / 5), 2)),
+				size = UDim2.fromOffset(dotSize, dotSize),
 				bg = tint,
 				radius = theme.radius.pill,
 				anchor = Vector2.new(0.5, 0.5),
 			})
-			dot.BackgroundTransparency = (index - 1) * 0.32
-			local angle = (index - 1) * 40
+			dot.BackgroundTransparency = (index - 1) * 0.3
+			local angle = (index - 1) * 120
 			dot.Position = UDim2.fromScale(
-				0.5 + math.cos(math.rad(angle)) * 0.38,
-				0.5 + math.sin(math.rad(angle)) * 0.38)
+				0.5 + math.cos(math.rad(angle)) * 0.34,
+				0.5 + math.sin(math.rad(angle)) * 0.34)
 		end
 		if not responsive.reduceMotion then
-			local spin = env.tween:Create(holder,
-				TweenInfo.new(0.9, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1),
-				{ Rotation = 360 })
+			local spin = env.tween:Create(holder, theme.motion.spin, { Rotation = 360 })
 			spin:Play()
 			holder.Destroying:Connect(function() pcall(function() spin:Cancel() end) end)
 		end
@@ -210,11 +213,27 @@ return function(env)
 
 	-- Segmented control. Used for permission mode, density, log level: anywhere a
 	-- dropdown would hide the options that matter.
+	--
+	-- The width is capped rather than left to fill the parent. Filling is right on a
+	-- phone and absurd on a desktop: at 1920 a two-option control stretched across
+	-- the whole window and rendered as two words nine hundred pixels apart, which
+	-- reads as a layout fault rather than as something to press. It still shrinks
+	-- below the cap on a narrow parent, so nothing regresses on small screens.
+	local SEGMENT_WIDTH = 108
+	local SEGMENT_CAP = 720
+
 	function C.segmented(parent, props)
 		props = props or {}
+		local height = math.max(theme.size.tab, responsive.minTarget())
+		local count = #(props.options or {})
+		local cap = math.min(count * SEGMENT_WIDTH + 4 + math.max(count - 1, 0) * 2, SEGMENT_CAP)
 		local row = P.row(parent, {
 			name = props.name or "Segmented",
-			size = UDim2.new(1, 0, 0, math.max(theme.size.tab, responsive.minTarget())),
+			-- An explicit width is an offset, because a scale width contributes
+			-- nothing to a parent that is sizing itself to its contents.
+			size = props.width and UDim2.fromOffset(props.width, height)
+				or UDim2.new(1, 0, 0, height),
+			maxSize = (not props.width) and Vector2.new(cap, math.huge) or nil,
 			bg = theme.color.surfaceRaised,
 			radius = theme.radius.md,
 			gap = 2,

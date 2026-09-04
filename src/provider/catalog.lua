@@ -29,7 +29,12 @@ return function(env)
 			authStyle = "bearer",
 			keyHint = "sk-or-...",
 			docs = "https://openrouter.ai/keys",
-			headers = { ["X-Title"] = "Project UAI" },
+			-- OpenRouter reads both of these for attribution, and sending only one of
+			-- them is a shape no real client produces.
+			headers = {
+				["X-Title"] = "Project UAI",
+				["HTTP-Referer"] = "https://github.com/CarlDV/ProjectUAI",
+			},
 			note = "Lists several hundred models. Fetch them and pick, or type the id shown on openrouter.ai.",
 		},
 		{

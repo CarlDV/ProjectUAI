@@ -137,6 +137,16 @@ return function(env)
 			uaSent = (spec.identity ~= "none") and caps.uaSupported or false,
 			error = err,
 			attempt = attempt,
+			-- A refusal with an empty body cannot be diagnosed from a status code
+			-- alone, and until now nothing about the response was kept at all. These
+			-- four are what distinguish an API decision from an edge filter: a
+			-- Cloudflare 403 carries `server` and `cf-ray` and usually `cf-mitigated`,
+			-- and the API's own 403 carries a JSON body. Kept short -- this is what the
+			-- Requests view shows, not an archive.
+			response = res and util.ellipsis(res.body, 400) or nil,
+			server = res and M.header(res, "server") or nil,
+			trace = res and (M.header(res, "cf-ray") or M.header(res, "x-request-id")) or nil,
+			mitigated = res and M.header(res, "cf-mitigated") or nil,
 		})
 
 		if not res then

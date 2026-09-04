@@ -223,6 +223,9 @@ return function(env)
 	-- Human-readable parameter list, for the tools panel.
 	function M.describe(schema)
 		if type(schema) ~= "table" or type(schema.properties) ~= "table" then return "no parameters" end
+		-- A schema marked as an intentionally empty object has no fields; the marker
+		-- is a wire-encoding detail and must not be rendered as one.
+		if util.isEmptyObject(schema.properties) then return "no parameters" end
 		local required = {}
 		for _, key in ipairs(schema.required or {}) do required[key] = true end
 		local parts = {}

@@ -65,6 +65,36 @@ return function(env)
 		return nil
 	end
 
+	-- Keywords whose value is a JSON array. Everything else in a schema that is an
+	-- empty table wants to encode as {}, not [].
+	local SCHEMA_ARRAYS = {
+		required = true, enum = true, examples = true,
+		allOf = true, anyOf = true, oneOf = true, prefixItems = true,
+	}
+
+	-- An empty Luau table encodes as [], and a strict validator -- draft 2020-12,
+	-- which Anthropic-on-Bedrock enforces and which answers with a bare
+	-- TOOL_SCHEMA_INVALID -- rejects [] anywhere a schema or a property map belongs.
+	-- Marking the empty table fixes it, but doing that only for a top-level
+	-- `properties` leaves `items` and every nested schema broken, and relies on each
+	-- of sixty-odd tool authors remembering. So the whole tree is walked here once,
+	-- on the way out, and the tools stay free to write the obvious `{}`.
+	local function normaliseSchema(node, depth)
+		depth = (depth or 0) + 1
+		if depth > 32 or type(node) ~= "table" or util.isEmptyObject(node) then return node end
+		local out = {}
+		for key, value in pairs(node) do
+			if type(value) ~= "table" or util.isEmptyObject(value) then
+				out[key] = value
+			elseif util.count(value) == 0 and not SCHEMA_ARRAYS[key] then
+				out[key] = util.emptyObject()
+			else
+				out[key] = normaliseSchema(value, depth)
+			end
+		end
+		return out
+	end
+
 	-- The definition list the provider sees.
 	--
 	-- Tools the host cannot run are omitted rather than described-and-refused: a
@@ -85,19 +115,12 @@ return function(env)
 			if opts.only and not opts.only[name] then allow = false end
 			if opts.groups and not opts.groups[tool.group] then allow = false end
 			if allow then
-				local params = tool.parameters
-				if type(params) == "table" and type(params.properties) == "table"
-					and util.count(params.properties) == 0 and not util.isEmptyObject(params.properties) then
-					-- An empty Luau table encodes as [], which gateways reject for
-					-- `properties`. The marker makes it an object.
-					params = util.merge(params, { properties = util.emptyObject() })
-				end
 				out[#out + 1] = {
 					type = "function",
 					["function"] = {
 						name = tool.name,
 						description = tool.description,
-						parameters = params,
+						parameters = normaliseSchema(tool.parameters),
 					},
 				}
 			end

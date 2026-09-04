@@ -295,6 +295,12 @@ return function(env)
 		else
 			M.nav = C.segmented(right, {
 				name = "Nav",
+				-- An explicit width, passed in rather than assigned afterwards: `right`
+				-- sizes itself to its contents, and a scale-width child contributes
+				-- nothing to that, so the nav would collapse to zero without it. Doing
+				-- it here means the control also keeps the hit-target height it works
+				-- out for the platform.
+				width = 360,
 				options = PANELS and (function()
 					local options = {}
 					for _, entry in ipairs(PANELS) do
@@ -305,7 +311,6 @@ return function(env)
 				value = M.panel,
 				onChange = function(value) M.show(value) end,
 			})
-			M.nav.instance.Size = UDim2.fromOffset(360, theme.size.tab)
 			M.nav.instance.LayoutOrder = 1
 		end
 
@@ -333,10 +338,20 @@ return function(env)
 		close.instance.LayoutOrder = 3
 	end
 
+	-- Content stops widening past this; the window itself does not. Past roughly this
+	-- width a transcript line or a log row becomes a single sentence a foot long,
+	-- which is unreadable however correct the layout is, and a maximised window at
+	-- 1920 is mostly that. The chrome still spans the full width -- it is the reading
+	-- column that is measured, and the leftover becomes margin.
+	local MAX_CONTENT = 1320
+
 	function M.buildBody()
 		M.body = P.frame(M.window.body, {
 			name = "Panels",
 			size = UDim2.fromScale(1, 1),
+			maxSize = Vector2.new(MAX_CONTENT, math.huge),
+			anchor = Vector2.new(0.5, 0),
+			position = UDim2.fromScale(0.5, 0),
 		})
 		M.panels = {}
 		M.showPanel(M.panel)

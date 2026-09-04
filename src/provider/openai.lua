@@ -91,7 +91,7 @@ return function(env)
 		[400] = "the provider rejected the request",
 		[401] = "the API key was rejected",
 		[402] = "the account is out of credit",
-		[403] = "access to this model is forbidden",
+		[403] = "the provider refused the request -- the key may lack access to it, or an edge filter blocked the call",
 		[404] = "endpoint or model not found -- check the base URL and model name",
 		[413] = "the request was too large",
 		[422] = "the provider could not process the request",
@@ -125,6 +125,14 @@ return function(env)
 			end
 		end
 		local prefix = STATUS_TEXT[status]
+		-- A refusal that carries no body at all is worth naming as such. It usually
+		-- means the call never reached the API, so nothing about the key or the model
+		-- accounts for it, and the answer is in the response headers the Requests view
+		-- now keeps rather than anywhere in this string.
+		if (not message or message == "") and res and util.trim(res.body or "") == "" then
+			return string.format("%s (%d), and the response had no body -- see the Requests view",
+				prefix or "the request was refused", status)
+		end
 		if message and prefix then return string.format("%s (%d): %s", prefix, status, message) end
 		if message then return string.format("%s (%d)", message, status) end
 		if prefix then return string.format("%s (%d)", prefix, status) end
