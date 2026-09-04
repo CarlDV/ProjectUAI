@@ -38,6 +38,19 @@ return function(env)
 			note = "Lists several hundred models. Fetch them and pick, or type the id shown on openrouter.ai.",
 		},
 		{
+			id = "anthropic-messages",
+			label = "Anthropic (Messages API)",
+			baseUrl = "https://api.anthropic.com/v1",
+			authStyle = "x-api-key",
+			keyHint = "sk-ant-...",
+			docs = "https://console.anthropic.com/settings/keys",
+			-- The native API rather than the compatibility shim: thinking blocks and
+			-- tool_use content survive the round trip, and nothing is being translated
+			-- twice on the way through someone else's adapter.
+			api = "anthropic",
+			note = "Anthropic's own Messages API. Preferred over the OpenAI-compatible route: reasoning and tool calls arrive in their real shape.",
+		},
+		{
 			id = "anthropic",
 			label = "Anthropic (OpenAI-compatible)",
 			baseUrl = "https://api.anthropic.com/v1",

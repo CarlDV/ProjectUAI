@@ -15,7 +15,7 @@ return function(env)
 	local usage = env.require("agent/usage")
 	local hooks = env.require("agent/hooks")
 	local providers = env.require("provider/registry")
-	local openai = env.require("provider/openai")
+	local chat = env.require("provider/chat")
 
 	local M = {}
 
@@ -65,7 +65,7 @@ return function(env)
 			})
 
 			local started = clock.ms()
-			local result, err = openai.complete(record, {
+			local result, err = chat.complete(record, {
 				messages = payload.request.messages,
 				tools = payload.request.tools,
 				toolChoice = payload.request.toolChoice,
@@ -120,7 +120,7 @@ return function(env)
 		return function(transcript)
 			local record = providers.active()
 			if not record then return nil end
-			local result = openai.complete(record, {
+			local result = chat.complete(record, {
 				messages = {
 					{ role = "system", content = prompt.compaction() },
 					{ role = "user", content = transcript },

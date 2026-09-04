@@ -16,7 +16,7 @@ return function(env)
 	local catalog = env.require("provider/catalog")
 	local registry = env.require("provider/registry")
 	local models = env.require("provider/models")
-	local openai = env.require("provider/openai")
+	local chat = env.require("provider/chat")
 
 	local M = {}
 
@@ -125,6 +125,14 @@ return function(env)
 				text = editing.baseUrl,
 				placeholder = "https://api.example.com/v1",
 				onChange = function(text) editing.baseUrl = text end,
+			})
+		end)
+
+		row("API", "Chat completions is the universal one. Anthropic's own Messages API keeps reasoning and tool calls in their real shape instead of translating them twice.", function(column)
+			return C.segmented(column, {
+				options = chat.STYLES,
+				value = chat.styleOf(editing),
+				onChange = function(value) editing.api = value end,
 			})
 		end)
 
@@ -357,7 +365,7 @@ return function(env)
 			task.spawn(function()
 				local candidate = util.deepCopy(editing)
 				candidate.baseUrl = registry.normaliseBaseUrl(candidate.baseUrl)
-				local result, err = openai.complete(candidate, {
+				local result, err = chat.complete(candidate, {
 					messages = { { role = "user", content = "Reply with the single word: ready" } },
 					stream = false,
 					maxTokens = 12,
@@ -461,6 +469,9 @@ return function(env)
 			})
 			P.badge(detail, { text = record.model ~= "" and record.model or "no model", tone = "info", layoutOrder = 1 })
 			P.badge(detail, { text = record.authStyle, tone = "info", layoutOrder = 2 })
+			if chat.styleOf(record) == "anthropic" then
+				P.badge(detail, { text = "messages api", tone = "good", layoutOrder = 3 })
+			end
 			if record.claudeUa == false then
 				P.badge(detail, { text = "no cli identity", tone = "warn", layoutOrder = 3 })
 			end

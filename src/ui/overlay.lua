@@ -344,9 +344,21 @@ return function(env)
 		dismiss.AutoButtonColor = false
 
 		local width = math.max(props.width or target.AbsoluteSize.X, 160)
-		local rowHeight = math.max(theme.size.row, responsive.minTarget())
 		local count = #(props.options or {})
-		local bodyHeight = math.min(count * (rowHeight + 2) + theme.space.xs * 2, 260)
+
+		-- The row height is derived from what the rows actually contain, not from a
+		-- control token. An option with a detail line stacks a `small` label over a
+		-- `caption` one, and the two together outgrow theme.size.row -- which is how
+		-- every menu in the app ended up with its detail text overlapping the label of
+		-- the row beneath it.
+		local hasDetail = false
+		for _, option in ipairs(props.options or {}) do
+			if option.detail then hasDetail = true end
+		end
+		local content = theme.text.small.height + 4
+		if hasDetail then content = content + theme.text.caption.height + 2 end
+		local rowHeight = math.max(theme.size.row, responsive.minTarget(), content + theme.space.xs)
+		local bodyHeight = math.min(count * (rowHeight + 2) + theme.space.xs * 2, 320)
 
 		local layerOrigin = M.layer.AbsolutePosition
 		local anchorX = target.AbsolutePosition.X - layerOrigin.X

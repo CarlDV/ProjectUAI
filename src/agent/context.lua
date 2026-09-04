@@ -44,6 +44,13 @@ return function(env)
 				content = result.content or "",
 				toolCalls = (result.toolCalls and #result.toolCalls > 0) and result.toolCalls or nil,
 				reasoning = (result.reasoning ~= "" ) and result.reasoning or nil,
+				-- The provider's own content blocks, when it has them. Only the
+				-- Anthropic adapter sets this, and only it reads them back: a thinking
+				-- block carries a signature that has to return unchanged, and there is
+				-- no way to rebuild that from the text. Deliberately not persisted --
+				-- see ctx.serialise -- so a reloaded conversation falls back to the
+				-- reconstructed form, which the API accepts.
+				raw = result.raw,
 				model = result.model,
 				provider = result.provider,
 				ms = result.ms,

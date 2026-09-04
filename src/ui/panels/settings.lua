@@ -17,6 +17,7 @@ return function(env)
 	local state = env.require("agent/state")
 	local usage = env.require("agent/usage")
 	local ua = env.require("net/ua")
+	local quickchat = env.require("ui/quickchat")
 
 	local M = {}
 
@@ -134,6 +135,48 @@ return function(env)
 		numberRow(appearance, "Text scale", "Multiplies every type size.", "ui.fontScale", 0.85, 1.4, 0.05)
 		toggle(appearance, "Show reasoning", "Display the model's chain of thought when it sends one.", "ui.showReasoning")
 		toggle(appearance, "Expand tool detail", "Open tool arguments and results by default.", "ui.showToolDetail")
+
+		-- Shortcuts ------------------------------------------------------------
+		local shortcuts = section("Shortcuts",
+			"Quick chat opens in the middle of the screen, takes one message to the conversation the Chat panel shows, and closes itself.")
+		do
+			local row = P.row(shortcuts, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.sm })
+			local text = P.column(row, {
+				size = UDim2.new(0, 0, 0, 0), auto = "Y", flex = "Fill", gap = 0, layoutOrder = 1,
+			})
+			P.text(text, { text = "Quick chat key", role = "small" })
+			local keyHint = P.text(text, {
+				text = "",
+				role = "caption",
+				color = theme.color.textTertiary,
+				wrap = true,
+				auto = "Y",
+			})
+			local keyButton
+			local function describeKey()
+				keyHint.Text = "Currently " .. quickchat.keyName()
+					.. ". Press the button, then the key you want it to be."
+			end
+			keyButton = P.button(row, {
+				name = "QuickKey",
+				text = quickchat.keyName(),
+				variant = "secondary",
+				size = "sm",
+				width = 132,
+				layoutOrder = 2,
+				onClick = function()
+					keyButton.setText("press a key")
+					-- Captured rather than typed: a user thinks "this key", and a
+					-- character would not survive a different keyboard layout.
+					quickchat.captureNext(function(name)
+						keyButton.setText(name)
+						describeKey()
+					end)
+				end,
+			})
+			keyButton.instance.LayoutOrder = 2
+			describeKey()
+		end
 
 		local viewportNote = P.text(appearance, {
 			text = "Now: " .. responsive.describe(),

@@ -79,6 +79,31 @@ local function chatBody(opts)
 	})
 end
 
+-- An Anthropic Messages response, which is a different shape entirely: content is a
+-- list of typed blocks and the stop reason names tool_use rather than tool_calls.
+local function messagesBody(opts)
+	opts = opts or {}
+	local content = {}
+	if opts.text then content[#content + 1] = { type = "text", text = opts.text } end
+	if opts.toolUse then
+		content[#content + 1] = {
+			type = "tool_use",
+			id = opts.toolUse.id,
+			name = opts.toolUse.name,
+			input = opts.toolUse.input or {},
+		}
+	end
+	return json.encode({
+		id = "msg_harness",
+		type = "message",
+		role = "assistant",
+		model = opts.model or "claude-opus-5",
+		content = content,
+		stop_reason = opts.stop or (opts.toolUse and "tool_use" or "end_turn"),
+		usage = { input_tokens = 100, output_tokens = 20 },
+	})
+end
+
 local function toolCall(id, name, args)
 	return {
 		id = id,
@@ -1500,6 +1525,159 @@ scenario("overlays can be dismissed and answered", function()
 	if inModal then inModal.close() end
 	if dialog then dialog.close() end
 	harness.settle(0.6)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 22. Anthropic wire ------------------------------------------------------
+
+scenario("the Anthropic Messages API is spoken natively", function()
+	local step = 0
+	local harness = envMock.new({})
+	harness.http.handler = function(entry)
+		if not tostring(entry.url):find("/messages") then return { StatusCode = 404, Body = "{}" } end
+		step = step + 1
+		if step == 1 then
+			return { StatusCode = 200, Body = messagesBody({
+				text = "Let me look.",
+				toolUse = { id = "toolu_1", name = "game_info" },
+			}) }
+		end
+		return { StatusCode = 200, Body = messagesBody({ text = "This place is Mock Place 123456789." }) }
+	end
+	local handle = select(1, harness.boot())
+	harness.settle(1)
+
+	local record = handle.providers.blank("anthropic-messages")
+	record.label = "Claude"
+	record.apiKey = "sk-ant-harness"
+	record.model = "claude-opus-5"
+	record.models = { "claude-opus-5" }
+	record.stream = false
+	local saved, problems = handle.providers.save(record)
+	truthy("the native preset saves", saved, table.concat(problems or {}, ", "))
+	check("and is marked as the messages api", handle.providers.active().api, "anthropic")
+	handle.config.set("permissions.mode", "full")
+	harness.settle(1)
+
+	local session = handle.sessions.current()
+	session.send("what game is this")
+	harness.settle(14)
+
+	local requests = {}
+	for _, entry in ipairs(harness.http.log) do
+		if tostring(entry.url):find("/messages") then requests[#requests + 1] = entry end
+	end
+	check("two requests were made", #requests, 2)
+	contains("to the messages endpoint", requests[1] and requests[1].url or "", "/v1/messages")
+	check("authenticated with x-api-key", requests[1] and requests[1].headers["x-api-key"], "sk-ant-harness")
+	check("and versioned", requests[1] and requests[1].headers["anthropic-version"], "2023-06-01")
+
+	local first = json.decode(requests[1].body)
+	truthy("the system prompt is hoisted to a top-level field",
+		type(first.system) == "string" and #first.system > 0)
+	check("so no message carries the system role", (function()
+		for _, message in ipairs(first.messages or {}) do
+			if message.role == "system" then return "found one" end
+		end
+		return "none"
+	end)(), "none")
+	truthy("max_tokens is sent, as this API requires", (first.max_tokens or 0) > 0)
+	check("temperature is not, because current models reject it", first.temperature, nil)
+	truthy("tools declare input_schema", first.tools and first.tools[1]
+		and first.tools[1].input_schema ~= nil)
+	check("and carry no function wrapper", first.tools[1]["function"], nil)
+
+	-- The fiddly half: a tool result goes back as a tool_result block inside a USER
+	-- turn, preceded by the assistant turn that asked for it. Getting either wrong is
+	-- a 400 from the API rather than a wrong answer.
+	local second = json.decode(requests[2].body)
+	local last = second.messages[#second.messages]
+	check("the tool result came back as a user turn", last.role, "user")
+	check("carrying a tool_result block", last.content[1].type, "tool_result")
+	check("addressed to the call", last.content[1].tool_use_id, "toolu_1")
+	local asked = second.messages[#second.messages - 1]
+	check("preceded by the assistant turn that asked", asked.role, "assistant")
+	truthy("which replays the tool_use block verbatim", (function()
+		for _, block in ipairs(asked.content or {}) do
+			if block.type == "tool_use" and block.id == "toolu_1" then return true end
+		end
+		return false
+	end)(), json.encode(asked.content or {}))
+
+	check("the answer landed", session.ctx.messages[#session.ctx.messages].content,
+		"This place is Mock Place 123456789.")
+
+	-- The streamed form, checked directly: its events are Anthropic's own, and the
+	-- tool input arrives as concatenated JSON fragments.
+	local anthropic = handle.env.require("provider/anthropic")
+	local streamed = anthropic.parseStream(table.concat({
+		'data: {"type":"message_start","message":{"id":"msg_s","model":"claude-opus-5","usage":{"input_tokens":9}}}',
+		'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi "}}',
+		'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"there"}}',
+		'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_s","name":"game_info"}}',
+		'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"a\\":"}}',
+		'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"1}"}}',
+		'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":7}}',
+		'data: {"type":"message_stop"}',
+	}, "\n\n") .. "\n\n")
+	check("streamed text was concatenated", streamed.content, "Hi there")
+	check("one streamed call was assembled", #streamed.toolCalls, 1)
+	check("its id survived", streamed.toolCalls[1].id, "toolu_s")
+	check("its input json was joined", streamed.toolCalls[1]["function"].arguments, '{"a":1}')
+	check("the stop reason was mapped", streamed.finish, "tool_calls")
+	check("and usage normalised", streamed.usage.completion_tokens, 7)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 23. Quick chat ----------------------------------------------------------
+
+scenario("quick chat opens on a keypress and sends to the same conversation", function()
+	local harness, handle = bootWith({
+		handler = function() return { StatusCode = 200, Body = chatBody({ content = "Quick answer." }) } end,
+	})
+	local quick = handle.env.require("ui/quickchat")
+
+	check("the default key is bound", quick.keyName(), "Semicolon")
+	truthy("and it starts hidden", not quick.visible)
+
+	harness.press("Semicolon")
+	truthy("the bound key opens it", quick.visible)
+	truthy("its surface exists", harness.byName("QuickChat") ~= nil, harness.dump())
+
+	harness.press("Escape")
+	truthy("escape closes it", not quick.visible)
+	check("without sending anything", #chatRequests(harness), 0)
+
+	-- A keystroke the interface already consumed must not open it, or typing the
+	-- bound character into the composer would open it on every keypress.
+	harness.press("Semicolon", true)
+	truthy("a processed keystroke is ignored", not quick.visible)
+
+	harness.press("Semicolon")
+	truthy("it opens again", quick.visible)
+	quick.submit("hello from quick chat")
+	truthy("sending closes it", not quick.visible)
+	harness.settle(8)
+
+	check("one request was sent", #chatRequests(harness), 1)
+	contains("the transcript has it, so it is the same session",
+		harness.textOf(), "hello from quick chat")
+	contains("and the reply", harness.textOf(), "Quick answer.")
+
+	-- Rebinding captures the next key rather than parsing a typed character.
+	quick.captureNext(function() end)
+	harness.press("Q")
+	check("the captured key was stored", quick.keyName(), "Q")
+	check("and persisted", handle.config.get("ui.quickKey"), "Q")
+	harness.press("Semicolon")
+	truthy("the old key no longer opens it", not quick.visible)
+	harness.press("Q")
+	truthy("the new one does", quick.visible)
+	quick.hide()
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)

@@ -311,6 +311,18 @@ function M.new(opts)
 		harness.settle(1.5)
 	end
 
+	-- A keyboard press on the service, which is where a global shortcut is bound.
+	-- Takes the KeyCode's NAME so a scenario does not need the mock's Enum in scope.
+	-- `processed` mirrors Roblox's second InputBegan argument: true means the
+	-- keystroke already went to a text box or to CoreGui.
+	function harness.press(keyName, processed)
+		local input = inputObject(Enum.UserInputType.Keyboard, 0, 0)
+		input.KeyCode = Enum.KeyCode[tostring(keyName)] or Enum.KeyCode.Unknown
+		api.services.UserInputService.InputBegan:Fire(input, processed == true)
+		harness.settle(0.2)
+		return input
+	end
+
 	function harness.click(gui)
 		if not gui then return false, "no instance" end
 		if gui.__signals and gui.__signals.Activated then

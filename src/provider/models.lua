@@ -105,8 +105,7 @@ return function(env)
 		end
 
 		local url = registry.endpoint(record, "/models")
-		local headers = registry.authHeaders(record)
-		for key, value in pairs(record.headers or {}) do headers[key] = value end
+		local headers = env.require("provider/chat").headers(record)
 
 		local decoded, err, res = http.json({
 			url = url,

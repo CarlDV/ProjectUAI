@@ -24,6 +24,10 @@ return function(env)
 			fontScale = 1,
 			showReasoning = true,
 			showToolDetail = false,
+			-- The key that opens quick chat, stored as an Enum.KeyCode name because
+			-- that is what the capture in Settings produces and what survives a
+			-- keyboard layout the character would not.
+			quickKey = "Semicolon",
 			showUsage = true,
 			window = { width = 0, height = 0, x = 0, y = 0, maximised = false, placed = false },
 			launcher = { x = 0, y = 0, placed = false },

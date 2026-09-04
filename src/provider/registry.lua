@@ -84,6 +84,9 @@ return function(env)
 			baseUrl = preset.baseUrl,
 			apiKey = "",
 			authStyle = preset.authStyle or "bearer",
+			-- Which wire protocol the record speaks. Absent means chat completions,
+			-- which is what every record saved before the second adapter existed has.
+			api = preset.api or "openai",
 			models = util.deepCopy(preset.models or {}),
 			model = (preset.models or {})[1] or "",
 			headers = util.deepCopy(preset.headers or {}),

@@ -16,6 +16,7 @@ return function(env)
 	local P = env.require("ui/primitives")
 	local C = env.require("ui/controls")
 	local overlay = env.require("ui/overlay")
+	local quickchat = env.require("ui/quickchat")
 	local windowModule = env.require("ui/window")
 	local sessions = env.require("agent/session")
 	local providers = env.require("provider/registry")
@@ -74,6 +75,11 @@ return function(env)
 
 		responsive.init(screen)
 		overlay.mount(screen)
+
+		-- Quick chat lives on the overlay layer and outlives every rebuild: it holds no
+		-- transcript of its own, only a field, so there is nothing in it to rebuild.
+		quickchat.mount(overlay.layer)
+		quickchat.bind()
 
 		M.buildLauncher()
 		M.buildWindow()

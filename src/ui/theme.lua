@@ -126,7 +126,7 @@ return function(env)
 	-- A dropdown is always opened from something, so it has to sit above whatever
 	-- opened it -- including a modal. It used to rank below one, which is why the
 	-- preset menu in the Add provider dialog opened behind the dialog.
-	M.z = { base = 1, raised = 10, header = 20, overlay = 100, modal = 160, dropdown = 200, toast = 240 }
+	M.z = { base = 1, raised = 10, header = 20, overlay = 100, modal = 160, dropdown = 200, quick = 210, toast = 240 }
 
 	-- Recomputed whenever density, accent or text scale changes.
 	function M.rebuild()
