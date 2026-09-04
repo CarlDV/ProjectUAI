@@ -138,8 +138,7 @@ return function(env)
 
 		-- Shortcuts ------------------------------------------------------------
 		local shortcuts = section("Shortcuts",
-			"Quick chat opens in the middle of the screen, takes one message to the conversation the Chat panel shows, and closes itself.")
-		do
+			"Quick chat opens in the middle of the screen, takes one message to the conversation the Chat panel shows, and closes itself.")		do
 			local row = P.row(shortcuts, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.sm })
 			local text = P.column(row, {
 				size = UDim2.new(0, 0, 0, 0), auto = "Y", flex = "Fill", gap = 0, layoutOrder = 1,
@@ -379,6 +378,33 @@ return function(env)
 						config.reset("ui")
 						config.reset("agent")
 						overlay.toast("Settings reset", "good")
+					end,
+				})
+			end,
+		})
+
+		P.button(session, {
+			text = "Unload UAI",
+			variant = "danger",
+			size = "sm",
+			onClick = function()
+				overlay.confirm({
+					title = "Unload UAI?",
+					description = "Stops the current turn, drains every timer and input handler, saves your settings and removes the interface. Run the loader again to come back.",
+					confirmText = "Unload",
+					danger = true,
+					onConfirm = function()
+						-- The handle the bootstrap published, which is the only thing
+						-- holding the disposer registry and the ScreenGui together.
+						local globals = (type(getgenv) == "function") and getgenv() or nil
+						local live = globals and globals.UAI
+						if live and live.destroy then
+							live.destroy()
+						else
+							-- No global table on this host: do what can be done from here.
+							env.require("runtime/dispose").drain()
+							pcall(function() env.require("ui/app").screen:Destroy() end)
+						end
 					end,
 				})
 			end,

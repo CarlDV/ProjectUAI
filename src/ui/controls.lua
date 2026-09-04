@@ -8,6 +8,7 @@ return function(env)
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
 	local icons = env.require("ui/icons")
+	local dispose = env.require("runtime/dispose")
 	local P = env.require("ui/primitives")
 
 	local C = {}
@@ -216,12 +217,12 @@ return function(env)
 			if props.onCommit then pcall(props.onCommit, handle.value) end
 		end)
 
-		env.uis.InputChanged:Connect(function(input)
+		dispose.connection(env.uis.InputChanged:Connect(function(input)
 			if not dragging then return end
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
 			fromInput(input)
-		end)
+		end))
 
 		paint()
 		return handle

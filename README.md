@@ -142,3 +142,24 @@ A Luau loop that never yields cannot be interrupted by anything, including this
 client's own timeouts. `run_luau` rewrites the two unconditional freeze forms and
 reports honestly when a script outlives its deadline: the thread was abandoned,
 not stopped.
+
+## Unloading
+
+The interface can be removed and everything it started stopped:
+
+```lua
+getgenv().UAI.destroy()
+```
+
+or from Settings, at the bottom: **Unload UAI**. Destroying the ScreenGui on its
+own is not enough -- timers keep ticking, input handlers stay bound to
+`UserInputService`, and a later config write would rebuild a window that is no
+longer on screen -- so anything outliving the instance tree registers a cleanup in
+`runtime/dispose` and the unload drains it. A turn in flight is aborted first and
+settings are flushed before the tree goes.
+
+## License
+
+MIT. Do whatever you like with it, including commercially and in closed source --
+the only condition is that the copyright notice and permission notice travel with
+any substantial portion of it. See [LICENSE](LICENSE).

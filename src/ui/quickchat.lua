@@ -15,6 +15,7 @@ return function(env)
 	local clock = env.require("runtime/clock")
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
+	local dispose = env.require("runtime/dispose")
 	local P = env.require("ui/primitives")
 	local sessions = env.require("agent/session")
 
@@ -169,7 +170,7 @@ return function(env)
 		if M.bound then return end
 		M.bound = true
 
-		env.uis.InputBegan:Connect(function(input, processed)
+		dispose.connection(env.uis.InputBegan:Connect(function(input, processed)
 			if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
 
 			if M.visible then
@@ -194,7 +195,7 @@ return function(env)
 			end
 
 			if input.KeyCode == M.keyCode() then M.show() end
-		end)
+		end))
 
 		-- Clicking the scrim dismisses without sending.
 		if M.scrim then

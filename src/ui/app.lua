@@ -13,6 +13,7 @@ return function(env)
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
 	local icons = env.require("ui/icons")
+	local dispose = env.require("runtime/dispose")
 	local P = env.require("ui/primitives")
 	local C = env.require("ui/controls")
 	local overlay = env.require("ui/overlay")
@@ -85,17 +86,19 @@ return function(env)
 		M.buildWindow()
 
 		-- A real layout switch rebuilds; a resize does not. Debounced inside
-		-- responsive, so a desktop drag does not thrash.
-		responsive.modeChanged:connect(function()
+		-- responsive, so a desktop drag does not thrash. Theme changes (accent,
+		-- density, text scale) rebuild too: colours and metrics are read at build time
+		-- by design, which keeps every component free of subscription bookkeeping.
+		--
+		-- Both are registered for disposal, because after an unload a config write must
+		-- not rebuild an interface that is no longer there.
+		dispose.add(responsive.modeChanged:connect(function()
 			M.rebuild("mode")
-		end)
+		end), "app.modeChanged")
 
-		-- Theme changes (accent, density, text scale) also need a rebuild: colours
-		-- and metrics are read at build time by design, which keeps every component
-		-- free of subscription bookkeeping.
-		theme.changed:connect(clock.debounce(function()
+		dispose.add(theme.changed:connect(clock.debounce(function()
 			M.rebuild("theme")
-		end, 0.2))
+		end, 0.2)), "app.themeChanged")
 
 		log.info("app", "interface mounted in " .. tostring(container.Name) .. " as " .. responsive.mode)
 		return M
@@ -166,7 +169,7 @@ return function(env)
 			end)
 		end)
 
-		env.uis.InputChanged:Connect(function(input)
+		dispose.connection(env.uis.InputChanged:Connect(function(input)
 			if not dragging then return end
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
@@ -177,7 +180,7 @@ return function(env)
 			button.Position = UDim2.fromOffset(
 				math.floor(util.clamp(startPosition.X + delta.X, 0, viewport.X - diameter)),
 				math.floor(util.clamp(startPosition.Y + delta.Y, responsive.inset.Y, viewport.Y - diameter)))
-		end)
+		end))
 
 		button.MouseEnter:Connect(function()
 			env.tween:Create(outline, theme.tween("hover"), { Color = theme.color.accentBorder }):Play()

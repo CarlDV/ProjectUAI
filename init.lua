@@ -115,7 +115,12 @@ local function start()
 	app.show(config.get("ui.panel", "chat"))
 
 	-- The handle a host script (or the user, from a console) can drive.
-	local handle = {
+	-- Declared before it is populated: `local handle = { ... }` does not put `handle`
+	-- in scope inside its own initialiser, so every closure below that reaches for
+	-- `handle` would have captured a nil global instead. `destroy` did exactly that,
+	-- which is why unloading raised rather than unloading.
+	local handle
+	handle = {
 		alive = true,
 		version = VERSION,
 		env = env,
@@ -133,11 +138,30 @@ local function start()
 			local session = sessions.current()
 			return session.send(text)
 		end,
+		-- The kill switch. Destroying the ScreenGui is not unloading: timers keep
+		-- ticking, input handlers keep firing on the service, and a config write
+		-- would rebuild an interface that is no longer on screen. Everything that
+		-- outlives the instance tree registers a cleanup in runtime/dispose, and
+		-- this is what drains it.
+		--
+		--     getgenv().UAI.destroy()
 		destroy = function()
+			if not handle.alive then return 0 end
 			handle.alive = false
+			-- A turn in flight is stopped first, so no reply arrives to a transcript
+			-- that has already gone.
+			pcall(function() sessions.current().abort() end)
+			local ran, failed = env.require("runtime/dispose").drain()
 			pcall(function() app.screen:Destroy() end)
+			pcall(function() config.saveNow() end)
 			if globalTable then globalTable.UAI = nil end
+			log.info("boot", string.format("unloaded -- %d cleanups run", ran or 0))
+			for _, problem in ipairs(failed or {}) do
+				log.warn("boot", "cleanup failed", problem)
+			end
+			return ran
 		end,
+		unload = function() return handle.destroy() end,
 	}
 
 	if globalTable then globalTable.UAI = handle end

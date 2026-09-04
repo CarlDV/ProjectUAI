@@ -63,6 +63,18 @@ return function(env)
 			note = "Anthropic's OpenAI-compatible endpoint. Tool calling works; some sampling fields are ignored.",
 		},
 		{
+			id = "google",
+			label = "Google Gemini",
+			-- Google's OpenAI-compatible surface rather than generateContent: it speaks
+			-- /chat/completions and /models, so it needs no adapter of its own. The
+			-- path is part of the base URL here, which normaliseBaseUrl leaves alone.
+			baseUrl = "https://generativelanguage.googleapis.com/v1beta/openai",
+			authStyle = "bearer",
+			keyHint = "AIza...",
+			docs = "https://aistudio.google.com/apikey",
+			note = "Gemini through Google's OpenAI-compatible endpoint. Tool calling works. The native generateContent API is not implemented.",
+		},
+		{
 			id = "groq",
 			label = "Groq",
 			baseUrl = "https://api.groq.com/openai/v1",

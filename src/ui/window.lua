@@ -12,6 +12,7 @@ return function(env)
 	local log = env.require("runtime/log")
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
+	local dispose = env.require("runtime/dispose")
 	local P = env.require("ui/primitives")
 
 	local DRAG_SLOP = 6
@@ -185,7 +186,7 @@ return function(env)
 			end)
 		end)
 
-		env.uis.InputChanged:Connect(function(input)
+		dispose.connection(env.uis.InputChanged:Connect(function(input)
 			if not dragging or not startPosition then return end
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
@@ -195,7 +196,7 @@ return function(env)
 				startPosition.X.Scale, math.floor(startPosition.X.Offset + delta.X),
 				startPosition.Y.Scale, math.floor(startPosition.Y.Offset + delta.Y))
 			handle.clampIntoView()
-		end)
+		end))
 
 		-- Snapping to an edge is what makes a floating window feel placed rather than
 		-- dropped. Only the near edge snaps, and only within a small margin.
@@ -264,7 +265,7 @@ return function(env)
 			end)
 		end)
 
-		env.uis.InputChanged:Connect(function(input)
+		dispose.connection(env.uis.InputChanged:Connect(function(input)
 			if not resizing or not startSize then return end
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
@@ -273,7 +274,7 @@ return function(env)
 			root.Size = UDim2.fromOffset(
 				math.floor(util.clamp(startSize.X + delta.X * 2, minWidth, viewport.X - theme.space.md * 2)),
 				math.floor(util.clamp(startSize.Y + delta.Y * 2, minHeight, viewport.Y - theme.space.md * 2)))
-		end)
+		end))
 
 		function handle.setMaximised(value)
 			handle.maximised = value == true

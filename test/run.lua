@@ -1683,6 +1683,45 @@ scenario("quick chat opens on a keypress and sends to the same conversation", fu
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+-- 24. Unload --------------------------------------------------------------
+
+scenario("unloading stops everything it started", function()
+	local harness, handle = bootWith({
+		handler = function() return { StatusCode = 200, Body = chatBody({ content = "Hi." }) } end,
+	})
+	local dispose = handle.env.require("runtime/dispose")
+
+	truthy("the interface is up", harness.screen() ~= nil)
+	truthy("and cleanups are registered", dispose.count() > 0, tostring(dispose.count()))
+
+	-- A turn leaves a working row behind with a timer driving it, so the drain has
+	-- real work rather than an empty registry.
+	handle.sessions.current().send("hello")
+	harness.settle(1)
+
+	local ran = handle.destroy()
+	truthy("the drain ran cleanups", (ran or 0) > 0, tostring(ran))
+	check("the registry is empty afterwards", dispose.count(), 0)
+	check("the handle is no longer alive", handle.alive, false)
+	truthy("the interface is gone", harness.screen() == nil, harness.dump(harness.coreGui))
+
+	-- The whole point: nothing keeps running. Advancing the clock a long way must not
+	-- raise from a timer writing to a label that no longer exists.
+	harness.settle(25)
+	check("no thread errors after unloading", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+
+	-- And a config write must not rebuild an interface that has gone.
+	handle.config.set("ui.accent", "amber")
+	handle.config.set("ui.density", "compact")
+	harness.settle(3)
+	truthy("a config change does not resurrect it", harness.screen() == nil)
+	check("still no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+
+	check("a second unload is a no-op", handle.destroy(), 0)
+end)
+
 print(("="):rep(72))
 print(string.format("%d scenarios, %d checks passed, %d failed",
 	suite.scenarios, suite.passed, suite.failed))

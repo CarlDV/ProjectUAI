@@ -9,6 +9,7 @@ return function(env)
 	local clock = env.require("runtime/clock")
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
+	local dispose = env.require("runtime/dispose")
 	local P = env.require("ui/primitives")
 	local C = env.require("ui/controls")
 	local icons = env.require("ui/icons")
@@ -38,12 +39,12 @@ return function(env)
 		})
 
 		-- Escape closes the topmost surface. Bound once, on the layer's lifetime.
-		env.uis.InputBegan:Connect(function(input, processed)
+		dispose.connection(env.uis.InputBegan:Connect(function(input, processed)
 			if processed then return end
 			if input.KeyCode ~= Enum.KeyCode.Escape and input.KeyCode ~= Enum.KeyCode.ButtonB then return end
 			local topmost = M.open[#M.open]
 			if topmost then topmost.close() end
-		end)
+		end))
 
 		return M.layer
 	end

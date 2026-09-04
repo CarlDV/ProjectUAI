@@ -97,7 +97,12 @@ return function(env)
 				if not ok then env.require("runtime/log").warn("clock", "interval handler failed", err) end
 			end
 		end)
-		return function() alive = false end
+		-- Registered centrally as well as returned. A caller that forgets the
+		-- canceller -- or one whose owning instance is destroyed without its
+		-- Destroying handler running -- would otherwise leave a thread ticking for the
+		-- lifetime of the process, and an unload could not stop it. The registry's
+		-- closure both cancels and unregisters, so it is the one to hand back.
+		return env.require("runtime/dispose").add(function() alive = false end, "interval")
 	end
 
 	-- Exponential backoff with full jitter, capped. Full jitter rather than a
