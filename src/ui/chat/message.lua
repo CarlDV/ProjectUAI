@@ -233,7 +233,9 @@ return function(env)
 			name = "Body",
 			size = UDim2.new(widthFor("agent"), 0, 0, 0),
 			auto = "Y",
-			gap = theme.space.sm,
+			-- Paragraphs need more than eight pixels between them or a long reply
+			-- arrives as one grey slab with no shape to it.
+			gap = theme.space.md,
 		})
 		local handle = { root = holder, column = column }
 		function handle.setText(value)

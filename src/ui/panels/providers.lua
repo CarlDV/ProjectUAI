@@ -42,7 +42,11 @@ return function(env)
 		local body = P.scroll(modal.content, {
 			name = "Form",
 			size = UDim2.new(1, 0, 0, math.min(responsive.viewport.Y * 0.5, 420)),
-			gap = theme.space.sm,
+			-- Each row is a label, a control and often a hint, so the gap between rows
+			-- has to be clearly larger than the gaps inside one or the hint reads as a
+			-- caption for the row below it.
+			gap = theme.space.lg,
+			padding = { right = theme.space.sm },
 		})
 
 		local errorLabel
@@ -51,7 +55,7 @@ return function(env)
 			local column = P.column(body.instance, {
 				size = UDim2.new(1, 0, 0, 0),
 				auto = "Y",
-				gap = theme.space.xxs,
+				gap = theme.space.xs,
 			})
 			P.text(column, {
 				text = tostring(label):upper(),

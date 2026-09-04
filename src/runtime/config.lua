@@ -42,7 +42,7 @@ return function(env)
 			repeatLimit = 3,
 			subagentDepth = 2,
 			subagentTurns = 14,
-			retries = 3,
+			retries = 5,
 			fallback = true,
 		},
 		permissions = {

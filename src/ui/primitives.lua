@@ -180,7 +180,12 @@ return function(env)
 			elseif props.auto == "Y" then
 				label.Size = UDim2.new(1, 0, 0, 0)
 			else
-				label.Size = UDim2.new(1, 0, 0, (props.textSize or role.size) + 4)
+				-- One rendered line plus a little slack. Sized from the role's line
+				-- height, not its font size: at a 1.5 line height the two differ by
+				-- seven pixels and the descenders go missing.
+				local single = props.textSize and math.ceil(props.textSize * (props.line or role.line))
+					or role.height or (role.size + 4)
+				label.Size = UDim2.new(1, 0, 0, single + 4)
 			end
 		end
 		return label

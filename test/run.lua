@@ -491,6 +491,73 @@ scenario("a failing provider hands over to the next", function()
 		(handle.providers.get("primary") or primary).health.fail > 0)
 end)
 
+scenario("transient failures are retried and real refusals are not", function()
+	local _, handle = bootWith({ provider = false })
+	local http = handle.env.require("net/http")
+
+	-- The policy is a predicate, so it is cheaper and far clearer to state it
+	-- exhaustively here than to script fifteen handlers. The 403 rows are the point:
+	-- these gateways return one for an exhausted shared quota or an edge filter and
+	-- interleave them with 200s, so the body is what separates "busy" from "no".
+	local cases = {
+		{ "a transport error", nil, "timed out", true },
+		{ "408", { status = 408, body = "" }, nil, true },
+		{ "429", { status = 429, body = "" }, nil, true },
+		{ "500", { status = 500, body = "" }, nil, true },
+		{ "529", { status = 529, body = "" }, nil, true },
+		{ "a 502 HTML error page", { status = 502, body = "<html>bad gateway</html>" }, nil, true },
+		{ "a 403 with no body at all", { status = 403, body = "" }, nil, true },
+		{ "a 403 naming an exhausted quota", { status = 403,
+			body = '{"error":{"message":"用户额度不足"}}' }, nil, true },
+		{ "a 403 refusing the model", { status = 403,
+			body = '{"error":{"message":"You do not have access to this model"}}' }, nil, false },
+		{ "401", { status = 401, body = '{"error":{"message":"bad key"}}' }, nil, false },
+		{ "404", { status = 404, body = '{"error":{"message":"no such model"}}' }, nil, false },
+		{ "a 400 schema complaint", { status = 400,
+			body = '{"error":{"message":"TOOL_SCHEMA_INVALID"}}' }, nil, false },
+		{ "a 200 hiding an overload", { status = 200, ok = true,
+			body = '{"error":{"message":"server_is_overloaded"}}' }, nil, true },
+		{ "a 200 hiding a rate limit in an SSE frame", { status = 200, ok = true,
+			body = 'data: {"type":"error","error":{"message":"upstream_provider_rate_limit"}}' }, nil, true },
+		{ "a 200 whose reply merely mentions rate limits", { status = 200, ok = true,
+			body = '{"choices":[{"message":{"content":"You will hit a rate_limit if you loop."}}]}' }, nil, false },
+	}
+	for _, case in ipairs(cases) do
+		local got = http.shouldRetry(case[2], case[3]) and true or false
+		check(case[1] .. " -> " .. (case[4] and "retry" or "report"), got, case[4])
+	end
+
+	-- And end to end, because the unit table proves the predicate and not the wiring:
+	-- a bodyless 403 followed by a 200 has to produce an answer rather than an error,
+	-- which is exactly the sequence in the log that prompted this.
+	local hits = 0
+	local live, liveHandle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			hits = hits + 1
+			if hits == 1 then return { StatusCode = 403, Body = "" } end
+			return { StatusCode = 200, Body = chatBody({ content = "Recovered after a 403." }) }
+		end,
+	})
+	local session = liveHandle.sessions.current()
+	session.send("hello")
+	live.settle(30)
+
+	check("the bodyless 403 was retried once", hits, 2)
+	check("and the answer landed", session.ctx.messages[#session.ctx.messages].content,
+		"Recovered after a 403.")
+	local reason
+	for _, event in ipairs(session.log) do
+		if event.kind == "request:retry" then reason = event.reason end
+	end
+	truthy("the transcript was told a retry happened", reason ~= nil, "no request:retry event")
+	contains("and why", tostring(reason), "403")
+	check("no thread errors", #live.errors(), 0,
+		live.errors()[1] and live.errors()[1].traceback or nil)
+end)
+
 -- 9. Permissions -----------------------------------------------------------
 
 scenario("a write tool waits for permission", function()
@@ -1411,6 +1478,29 @@ scenario("overlays can be dismissed and answered", function()
 	harness.settle(0.3)
 	contains("the toast is visible", harness.textOf(), "saved")
 	harness.settle(3)
+
+	-- A dropdown opened from inside a modal has to sit above it. The preset menu in
+	-- the Add provider dialog opened *behind* the dialog, because the dropdown layer
+	-- ranked below the modal one -- and since ZIndexBehavior is Sibling, the
+	-- comparison that decides it is between the two scrims, which are siblings under
+	-- the overlay layer.
+	local dialog = overlay.modal({ title = "Pick a preset", width = 380 })
+	harness.settle(0.4)
+	local inModal = overlay.menu({
+		target = harness.byName("Launcher"),
+		options = { { label = "One", value = "1" }, { label = "Two", value = "2" } },
+	})
+	harness.settle(0.4)
+	local menuLayer = harness.byName("MenuLayer")
+	local modalScrim = harness.byName("Scrim")
+	truthy("a menu opened over a modal exists", menuLayer ~= nil, harness.dump())
+	truthy("and ranks above the modal it was opened from",
+		menuLayer and modalScrim and menuLayer.ZIndex > modalScrim.ZIndex,
+		tostring(menuLayer and menuLayer.ZIndex) .. " vs " .. tostring(modalScrim and modalScrim.ZIndex))
+	if inModal then inModal.close() end
+	if dialog then dialog.close() end
+	harness.settle(0.6)
+
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)

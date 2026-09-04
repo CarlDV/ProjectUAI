@@ -31,6 +31,7 @@ return function(env)
 		-- degrees, two of them part-transparent -- a smudge that was hard to tell from
 		-- a static one, which rather defeated the point of animating it.
 		local dotSize = math.max(math.floor(size / 3.2), 3)
+		local dots = {}
 		for index = 1, 3 do
 			local dot = P.frame(holder, {
 				name = "Dot" .. index,
@@ -39,6 +40,7 @@ return function(env)
 				radius = theme.radius.pill,
 				anchor = Vector2.new(0.5, 0.5),
 			})
+			dots[index] = dot
 			dot.BackgroundTransparency = (index - 1) * 0.3
 			local angle = (index - 1) * 120
 			dot.Position = UDim2.fromScale(
@@ -48,7 +50,21 @@ return function(env)
 		if not responsive.reduceMotion then
 			local spin = env.tween:Create(holder, theme.motion.spin, { Rotation = 360 })
 			spin:Play()
-			holder.Destroying:Connect(function() pcall(function() spin:Cancel() end) end)
+			-- The dots chase each other in opacity as well as going round. A single
+			-- Rotation tween on a sixteen-pixel box is easy to miss, and if a client
+			-- ever declines to tween Rotation there is nothing left at all -- this does
+			-- not depend on the tween having taken.
+			local phase = 0
+			local stop = clock.interval(0.16, function()
+				phase = (phase + 1) % 3
+				for index = 1, 3 do
+					dots[index].BackgroundTransparency = ((index + phase) % 3) * 0.34
+				end
+			end)
+			holder.Destroying:Connect(function()
+				pcall(function() spin:Cancel() end)
+				pcall(stop)
+			end)
 		end
 		return holder
 	end
@@ -217,16 +233,27 @@ return function(env)
 	-- The width is capped rather than left to fill the parent. Filling is right on a
 	-- phone and absurd on a desktop: at 1920 a two-option control stretched across
 	-- the whole window and rendered as two words nine hundred pixels apart, which
-	-- reads as a layout fault rather than as something to press. It still shrinks
-	-- below the cap on a narrow parent, so nothing regresses on small screens.
-	local SEGMENT_WIDTH = 108
-	local SEGMENT_CAP = 720
+	-- reads as a layout fault rather than as something to press. The cap comes from
+	-- the labels, because a fixed budget per segment either wastes half the control
+	-- on "Log" or truncates "Auto (ask for dangerous)".
+	local SEGMENT_MIN = 64
+	local SEGMENT_CAP = 860
+
+	local function segmentedWidth(options)
+		local total = 0
+		for _, option in ipairs(options or {}) do
+			local text = tostring(option.label or option.value or option)
+			-- ~6.4px per character at the label role, plus the button's own padding.
+			total = total + math.max(SEGMENT_MIN, math.floor(#text * 6.4) + theme.space.md * 2)
+		end
+		total = total + 4 + math.max(#(options or {}) - 1, 0) * 2
+		return math.min(total, SEGMENT_CAP)
+	end
 
 	function C.segmented(parent, props)
 		props = props or {}
 		local height = math.max(theme.size.tab, responsive.minTarget())
-		local count = #(props.options or {})
-		local cap = math.min(count * SEGMENT_WIDTH + 4 + math.max(count - 1, 0) * 2, SEGMENT_CAP)
+		local cap = segmentedWidth(props.options)
 		local row = P.row(parent, {
 			name = props.name or "Segmented",
 			-- An explicit width is an offset, because a scale width contributes

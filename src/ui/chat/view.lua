@@ -21,8 +21,8 @@ return function(env)
 		local scroll = P.scroll(parent, {
 			name = "Transcript",
 			size = props.size or UDim2.new(1, 0, 1, 0),
-			gap = theme.space.md,
-			padding = { x = theme.space.md, top = theme.space.md, bottom = theme.space.md },
+			gap = theme.space.lg,
+			padding = { x = theme.space.lg, top = theme.space.lg, bottom = theme.space.lg },
 			fade = false,
 		})
 
@@ -107,11 +107,22 @@ return function(env)
 				follow()
 				return handle
 			end
+			-- Cuts land on a UTF-8 boundary. Replies are full of em dashes and curly
+			-- quotes, and slicing one in half shows a replacement glyph for a frame --
+			-- Lua's # and sub work in bytes, not characters.
+			local function boundary(index)
+				while index < #text do
+					local byte = text:byte(index + 1)
+					if not byte or byte < 128 or byte >= 192 then return index end
+					index = index + 1
+				end
+				return #text
+			end
 			local shown = 0
 			local step = math.max(1, math.ceil(#text / REVEAL_TICKS))
 			local reveal = { handle = handle, text = text }
 			reveal.stop = clock.interval(REVEAL_STEP, function()
-				shown = math.min(#text, shown + step)
+				shown = boundary(math.min(#text, shown + step))
 				handle.setText(text:sub(1, shown))
 				follow()
 				if shown >= #text then stopReveal(false) end

@@ -19,10 +19,60 @@ return function(env)
 	-- inference included, carries the Claude Code identity.
 	local BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
+	-- Statuses that are always worth another attempt, regardless of what the body
+	-- says. Everything in 5xx joins them by range below.
 	local RETRY_STATUS = {
-		[408] = true, [409] = true, [425] = true, [429] = true,
-		[500] = true, [502] = true, [503] = true, [504] = true, [522] = true, [524] = true,
+		[408] = true, [409] = true, [425] = true, [429] = true, [499] = true,
 	}
+
+	-- Substrings that mean "transient", wherever they appear in a response body.
+	--
+	-- These gateways report an overloaded or rate-limited upstream in the body and
+	-- pick the status code almost at random, so the text is the more reliable signal.
+	-- The list is taken from the reference proxy that sits in front of them, which
+	-- sees the upstream errors this client only ever sees second-hand -- including the
+	-- Chinese quota wording, which arrives under a 403.
+	local TRANSIENT_MARKERS = {
+		"rate_limit", "chatratelimited",
+		"upstream_provider_rate_limit", "server_is_overloaded",
+		"service_unavailable_error", "server_error", "overloaded_error",
+		"internal_server_error", "temporarily unavailable", "please try again",
+		"用户额度不足", "剩余额度",
+	}
+
+	local function transient(body)
+		if type(body) ~= "string" or body == "" then return false end
+		local lowered = body:lower()
+		for _, marker in ipairs(TRANSIENT_MARKERS) do
+			if lowered:find(marker, 1, true) then return true end
+		end
+		return false
+	end
+
+	-- A gateway that answers 200 and then puts the failure in the body. Detected
+	-- structurally -- a decodable object carrying an `error`, or an SSE frame whose
+	-- type is "error" -- and never by substring, because a reply that happens to
+	-- discuss rate limits must not be mistaken for one.
+	local function errorPayload(body)
+		if type(body) ~= "string" or body == "" then return nil end
+		local function check(text)
+			local decoded = util.decode(text)
+			if type(decoded) ~= "table" then return nil end
+			if decoded.type == "error" then return decoded end
+			if decoded.error ~= nil then return decoded end
+			return nil
+		end
+		local direct = check(body)
+		if direct then return direct end
+		for line in body:gmatch("[^\r\n]+") do
+			local data = line:match("^data:%s*(.+)$")
+			if data and data ~= "[DONE]" then
+				local hit = check(data)
+				if hit then return hit end
+			end
+		end
+		return nil
+	end
 
 	local M = {
 		history = {},
@@ -179,10 +229,41 @@ return function(env)
 		return clock.backoff(attempt, opts), "backoff"
 	end
 
+	-- Whether an attempt is worth repeating, and why -- the reason is reported to the
+	-- transcript so a slow turn explains itself rather than just being slow.
 	function M.shouldRetry(res, err)
-		if err then return true end
-		if not res then return true end
-		return RETRY_STATUS[res.status] == true
+		-- The transport itself failed. Nothing was decided upstream, so try again.
+		if err then return true, "transport error" end
+		if not res then return true, "no response" end
+		local status = res.status or 0
+		local body = tostring(res.body or "")
+
+		if RETRY_STATUS[status] then return true, "status " .. tostring(status) end
+		if status >= 500 and status <= 599 then return true, "status " .. tostring(status) end
+
+		-- A 403 from these gateways is usually an edge filter or an exhausted shared
+		-- quota pool rather than a decision about this key: in the log that prompted
+		-- this they arrive interleaved with 200s on the same endpoint, seconds apart.
+		-- A genuine permission refusal explains itself in the body, so one that
+		-- explains nothing gets another attempt and one that does is reported.
+		if status == 403 then
+			if util.trim(body) == "" then return true, "403 with no explanation" end
+			if transient(body) then return true, "403, upstream busy" end
+			return false
+		end
+
+		if res.ok then
+			local payload = errorPayload(body)
+			if payload then
+				local text = type(payload.error) == "table" and tostring(payload.error.message or "")
+					or tostring(payload.error or payload.message or "")
+				if transient(text) or transient(body) then return true, "error inside a 200" end
+			end
+			return false
+		end
+
+		if transient(body) then return true, "upstream busy" end
+		return false
 	end
 
 	-- Retries the whole attempt sequence. `spec.attempts` caps it; `spec.onRetry`
@@ -197,17 +278,18 @@ return function(env)
 			copy.attempt = attempt
 			local res, err = M.request(copy)
 			lastRes, lastErr = res, err
-			if res and res.ok then return res end
-			if attempt >= attempts or not M.shouldRetry(res, err) then
-				return res, err
-			end
-			local wait, why = retryDelay(res, attempt, spec.backoff)
+			-- Asked before the success check, because a 200 can carry the failure in
+			-- its body and returning that as a reply is worse than retrying it.
+			local retry, why = M.shouldRetry(res, err)
+			if not retry then return res, err end
+			if attempt >= attempts then return res, err end
+			local wait, source = retryDelay(res, attempt, spec.backoff)
 			if spec.onRetry then
 				spec.onRetry({
 					attempt = attempt,
 					attempts = attempts,
 					wait = wait,
-					reason = why,
+					reason = why or source,
 					status = res and res.status or 0,
 					error = err,
 				})

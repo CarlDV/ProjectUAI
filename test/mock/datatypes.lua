@@ -305,7 +305,7 @@ M.Random = {
 -- resolves (the client may legitimately touch enums this harness has never heard
 -- of) but is recorded in Enum.__unknown for the report.
 local KNOWN = {
-	Font = "Gotham GothamMedium GothamBold GothamSemibold GothamBlack Code RobotoMono SourceSans SourceSansBold SourceSansSemibold Arial ArialBold Legacy Nunito",
+	Font = "Gotham GothamMedium GothamBold GothamSemibold GothamBlack Code RobotoMono SourceSans SourceSansBold SourceSansSemibold Arial ArialBold Legacy Nunito BuilderSans BuilderSansMedium BuilderSansBold BuilderSansExtraBold",
 	EasingStyle = "Linear Sine Back Quad Quart Quint Exponential Circular Elastic Bounce Cubic",
 	EasingDirection = "In Out InOut",
 	TextXAlignment = "Left Center Right",

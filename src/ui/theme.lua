@@ -51,18 +51,35 @@ return function(env)
 
 	M.ACCENTS = ACCENTS
 
+	-- Roblox's current UI family. Resolved defensively: on a client old enough not to
+	-- have it the enum member is simply absent, and assigning nil to Font would take
+	-- the whole interface down, so each weight falls back to its Gotham equivalent.
+	-- Gotham is what made this look like a 2016 forum in the first place.
+	local function fontOr(name, fallback)
+		local ok, item = pcall(function() return Enum.Font[name] end)
+		if ok and item then return item end
+		return fallback
+	end
+
+	local SANS = fontOr("BuilderSans", Enum.Font.Gotham)
+	local SANS_MEDIUM = fontOr("BuilderSansMedium", Enum.Font.GothamMedium)
+	local SANS_BOLD = fontOr("BuilderSansBold", Enum.Font.GothamBold)
+
+	-- Sizes are a step up from where they were and the line heights are looser. At
+	-- 13px on 1.35 a reply arrived as a dense grey slab; body text is the one thing
+	-- in here a person actually reads, so it gets the room.
 	local BASE_TEXT = {
-		display = { size = 20, font = Enum.Font.GothamBold, line = 1.15 },
-		title = { size = 16, font = Enum.Font.GothamBold, line = 1.2 },
-		heading = { size = 14, font = Enum.Font.GothamMedium, line = 1.25 },
-		body = { size = 13, font = Enum.Font.Gotham, line = 1.35 },
-		bodyStrong = { size = 13, font = Enum.Font.GothamMedium, line = 1.35 },
-		small = { size = 12, font = Enum.Font.Gotham, line = 1.35 },
-		label = { size = 11, font = Enum.Font.GothamMedium, line = 1.2 },
-		caption = { size = 10, font = Enum.Font.Gotham, line = 1.3 },
-		overline = { size = 10, font = Enum.Font.GothamBold, line = 1.2 },
-		mono = { size = 12, font = Enum.Font.Code, line = 1.4 },
-		monoSmall = { size = 11, font = Enum.Font.Code, line = 1.4 },
+		display = { size = 22, font = SANS_BOLD, line = 1.2 },
+		title = { size = 17, font = SANS_BOLD, line = 1.25 },
+		heading = { size = 15, font = SANS_MEDIUM, line = 1.3 },
+		body = { size = 14, font = SANS, line = 1.5 },
+		bodyStrong = { size = 14, font = SANS_MEDIUM, line = 1.5 },
+		small = { size = 13, font = SANS, line = 1.45 },
+		label = { size = 12, font = SANS_MEDIUM, line = 1.2 },
+		caption = { size = 11, font = SANS, line = 1.3 },
+		overline = { size = 11, font = SANS_BOLD, line = 1.2 },
+		mono = { size = 13, font = Enum.Font.Code, line = 1.5 },
+		monoSmall = { size = 12, font = Enum.Font.Code, line = 1.45 },
 	}
 
 	local BASE_SPACE = {
@@ -106,7 +123,10 @@ return function(env)
 		pulse = TweenInfo.new(0.85, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, -1, true),
 	}
 
-	M.z = { base = 1, raised = 10, header = 20, dropdown = 60, overlay = 100, toast = 140, modal = 160 }
+	-- A dropdown is always opened from something, so it has to sit above whatever
+	-- opened it -- including a modal. It used to rank below one, which is why the
+	-- preset menu in the Add provider dialog opened behind the dialog.
+	M.z = { base = 1, raised = 10, header = 20, overlay = 100, modal = 160, dropdown = 200, toast = 240 }
 
 	-- Recomputed whenever density, accent or text scale changes.
 	function M.rebuild()
@@ -174,10 +194,15 @@ return function(env)
 
 		M.text = {}
 		for role, spec in pairs(BASE_TEXT) do
+			local size = math.max(math.floor(spec.size * textScale + 0.5), 8)
 			M.text[role] = {
-				size = math.max(math.floor(spec.size * textScale + 0.5), 8),
+				size = size,
 				font = spec.font,
 				line = spec.line,
+				-- One rendered line, rounded up. A fixed-height label sized from `size`
+				-- alone clips its descenders the moment the line height goes past 1.3,
+				-- so the height a caller needs is published rather than recomputed.
+				height = math.ceil(size * spec.line),
 			}
 		end
 
