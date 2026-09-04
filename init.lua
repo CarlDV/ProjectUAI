@@ -114,6 +114,13 @@ local function start()
 	app.mount()
 	app.show(config.get("ui.panel", "chat"))
 
+	-- After the interface, because the bridge attaches to whichever thread is
+	-- active and the interface is what establishes that on a fresh install. A
+	-- no-op unless the setting has been turned on.
+	local bridge = env.require("net/bridge")
+	local bridgeOk, bridgeWhy = bridge.sync()
+	if not bridgeOk and bridgeWhy then log.warn("bridge", "not started", bridgeWhy) end
+
 	-- The handle a host script (or the user, from a console) can drive.
 	-- Declared before it is populated: `local handle = { ... }` does not put `handle`
 	-- in scope inside its own initialiser, so every closure below that reaches for
@@ -129,6 +136,7 @@ local function start()
 		config = config,
 		log = log,
 		caps = caps,
+		bridge = bridge,
 		providers = env.require("provider/registry"),
 		tools = env.require("agent/registry"),
 		toggle = function() app.toggle() end,

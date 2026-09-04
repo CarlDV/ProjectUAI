@@ -17,6 +17,7 @@ return function(env)
 	local state = env.require("agent/state")
 	local usage = env.require("agent/usage")
 	local ua = env.require("net/ua")
+	local bridgeModule = env.require("net/bridge")
 	local quickchat = env.require("ui/quickchat")
 
 	local M = {}
@@ -478,6 +479,48 @@ return function(env)
 				})
 			end,
 		})
+
+		-- Web bridge ------------------------------------------------------------
+		local webBridge = section("Web bridge",
+			"Chat from a browser on this machine. Run bridge/server.js, paste its token below, and the browser joins whichever conversation is open here.")
+		toggle(webBridge, "Enabled", "Polls the local bridge for messages typed in the browser.", "bridge.enabled")
+
+		P.text(webBridge, { text = "Port", role = "small" })
+		P.field(webBridge, {
+			text = tostring(config.get("bridge.port", 8790)),
+			placeholder = "8790",
+			onBlur = function(text)
+				local port = tonumber(util.trim(text))
+				config.set("bridge.port", (port and port > 0 and port < 65536) and math.floor(port) or 8790)
+			end,
+		})
+
+		P.text(webBridge, { text = "Token", role = "small" })
+		P.field(webBridge, {
+			text = tostring(config.get("bridge.token", "")),
+			placeholder = "paste from the bridge console",
+			onBlur = function(text) config.set("bridge.token", util.trim(text)) end,
+		})
+
+		local bridgeState = P.text(webBridge, {
+			text = "",
+			role = "monoSmall",
+			color = theme.color.textSecondary,
+			wrap = true,
+			auto = "Y",
+		})
+		bridgeState.Size = UDim2.new(1, 0, 0, 0)
+
+		local function describeBridge()
+			local status = bridgeModule.status()
+			if not status.running then return "Off. Nothing is listening and nothing is polled." end
+			if status.online then return "Connected to " .. status.url .. ". Open it in a browser." end
+			return "Polling " .. status.url .. " -- " .. (status.error or "no answer yet") ..
+				". Is bridge/server.js running?"
+		end
+
+		bridgeState.Text = describeBridge()
+		bridgeModule.changed:connect(function() bridgeState.Text = describeBridge() end)
 
 		-- Session --------------------------------------------------------------
 		local session = section("This session", usage.line())

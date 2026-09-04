@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bridge",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["bridge/server.js"],
+      "port": 8790
+    }
+  ]
+}

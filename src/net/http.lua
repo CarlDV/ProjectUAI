@@ -198,7 +198,11 @@ return function(env)
 		local res, err = send(url, method, headers, spec.body, spec.timeout)
 		local elapsed = clock.since(started)
 
-		local entry = record({
+		-- `spec.silent` keeps a request out of the history and out of the log. The web
+		-- bridge polls continuously for as long as it is enabled, and against a
+		-- 60-entry ceiling that would evict the inference calls the Requests view
+		-- exists to explain. A silent caller reports its own failures instead.
+		local entry = {
 			at = started,
 			stamp = clock.stamp(),
 			method = method,
@@ -222,20 +226,26 @@ return function(env)
 			server = res and M.header(res, "server") or nil,
 			trace = res and (M.header(res, "cf-ray") or M.header(res, "x-request-id")) or nil,
 			mitigated = res and M.header(res, "cf-mitigated") or nil,
-		})
+		}
+		if not spec.silent then record(entry) end
 
 		if not res then
 			-- How long it ran is the whole diagnosis: a transport that refuses fails at
 			-- once, one that ran out of time fails slowly, and only the second is a
 			-- deadline. The caller needs the number to tell them apart.
-			log.warn("http", string.format("%s %s failed after %s", method, entry.url,
-				util.formatDuration(elapsed)), err)
+			if not spec.silent then
+				log.warn("http", string.format("%s %s failed after %s", method, entry.url,
+					util.formatDuration(elapsed)), err)
+			end
 			return nil, err or "request failed", elapsed
 		end
 
 		res.ms = elapsed
 		res.ok = res.status >= 200 and res.status < 300
 		res.entry = entry
+		if spec.silent then
+			return res
+		end
 		if not res.ok then
 			log.warn("http", string.format("%s %s -> %d", method, entry.url, res.status),
 				util.ellipsis(res.body, 240))

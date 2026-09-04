@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UAI</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="gate" hidden>
+  <form id="gate-form">
+    <h1>UAI</h1>
+    <p>Paste the token the bridge printed when it started.</p>
+    <input id="gate-token" type="password" placeholder="token" autocomplete="off" spellcheck="false">
+    <button type="submit">Connect</button>
+    <p id="gate-error" class="error" hidden></p>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <span id="dot" class="dot" title="game connection"></span>
+    <strong>UAI</strong>
+    <span id="status">connecting</span>
+    <button id="clear" type="button" class="ghost" title="Clear the conversation">clear</button>
+  </header>
+
+  <main id="transcript" aria-live="polite"></main>
+
+  <footer>
+    <textarea id="input" rows="1" placeholder="Ask UAI to do something…" autocomplete="off"></textarea>
+    <button id="send" type="button">Send</button>
+    <button id="stop" type="button" class="danger" hidden>Stop</button>
+  </footer>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

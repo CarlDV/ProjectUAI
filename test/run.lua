@@ -2177,6 +2177,122 @@ scenario("unloading stops everything it started", function()
 	check("a second unload is a no-op", handle.destroy(), 0)
 end)
 
+-- 44. The web bridge -------------------------------------------------------
+--
+-- A Roblox client cannot be connected to, so the browser half of this feature is a
+-- local process that the client polls. Three things have to hold: a command coming
+-- back off that poll reaches the session, the reply is pushed back out, and none of
+-- the polling lands in the request history the Logs panel reads.
+
+scenario("the web bridge relays a browser message into the session", function()
+	local uploads, inboxCalls = {}, 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			local url = tostring(entry.url)
+			if url:find("/api/agent/inbox") then
+				inboxCalls = inboxCalls + 1
+				if inboxCalls == 1 then
+					return { StatusCode = 200, Body = json.encode({
+						commands = { { type = "send", text = "what game is this" } },
+					}) }
+				end
+				return { StatusCode = 200, Body = json.encode({ commands = {} }) }
+			end
+			if url:find("/api/agent/events") then
+				uploads[#uploads + 1] = json.decode(entry.body or "{}")
+				return { StatusCode = 204, Body = "" }
+			end
+			if url:find("/chat/completions") then
+				return { StatusCode = 200, Body = chatBody({
+					content = "This place is Mock Place 123456789.",
+				}) }
+			end
+			return { StatusCode = 404, Body = "{}" }
+		end,
+	})
+
+	handle.config.set("bridge.token", ("a"):rep(64))
+	handle.config.set("bridge.enabled", true)
+	harness.settle(10)
+
+	local bridge = handle.env.require("net/bridge")
+	truthy("the bridge is running", bridge.running)
+	truthy("and finds the local process reachable", bridge.online)
+
+	local session = handle.sessions.current()
+	local kinds = {}
+	for _, event in ipairs(session.log) do kinds[event.kind] = (kinds[event.kind] or 0) + 1 end
+	check("the browser's message became a user turn", kinds["user"], 1)
+	truthy("and the agent answered it", (kinds["assistant:text"] or 0) >= 1)
+
+	-- The answer has to travel back out, or the browser shows a question and then
+	-- nothing at all.
+	local relayed = {}
+	for _, upload in ipairs(uploads) do
+		for _, event in ipairs(upload.events or {}) do relayed[#relayed + 1] = event end
+		for _, event in ipairs(upload.snapshot or {}) do relayed[#relayed + 1] = event end
+	end
+	local sawUser, sawReply = false, false
+	for _, event in ipairs(relayed) do
+		if event.kind == "user" and tostring(event.text):find("what game") then sawUser = true end
+		if event.kind == "assistant:text" and tostring(event.text):find("Mock Place") then
+			sawReply = true
+		end
+	end
+	truthy("the user turn was pushed to the bridge", sawUser)
+	truthy("so was the answer", sawReply)
+
+	local http = handle.env.require("net/http")
+	local leaked = 0
+	for _, item in ipairs(http.history) do
+		if tostring(item.url):find("/api/agent/") then leaked = leaked + 1 end
+	end
+	check("bridge traffic stays out of the request history", leaked, 0)
+	truthy("while the inference call is still in it", #http.history > 0)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("unloading stops the bridge", function()
+	local inboxCalls = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			local url = tostring(entry.url)
+			if url:find("/api/agent/inbox") then
+				inboxCalls = inboxCalls + 1
+				return { StatusCode = 200, Body = json.encode({ commands = {} }) }
+			end
+			if url:find("/api/agent/events") then return { StatusCode = 204, Body = "" } end
+			return { StatusCode = 404, Body = "{}" }
+		end,
+	})
+
+	handle.config.set("bridge.token", ("b"):rep(64))
+	handle.config.set("bridge.enabled", true)
+	harness.settle(6)
+
+	local bridge = handle.env.require("net/bridge")
+	truthy("the bridge started", bridge.running)
+	truthy("and polled at least once", inboxCalls > 0, tostring(inboxCalls))
+
+	handle.destroy()
+	local before = inboxCalls
+	harness.settle(30)
+
+	check("it stopped with everything else", bridge.running, false)
+	check("and its poller made no further requests", inboxCalls, before)
+
+	-- Re-enabling the setting afterwards must not bring the threads back: the
+	-- subscription watching that setting is drained along with them.
+	handle.config.set("bridge.enabled", false)
+	handle.config.set("bridge.enabled", true)
+	harness.settle(6)
+	check("a config write does not restart it", bridge.running, false)
+	check("still nothing polling", inboxCalls, before)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 print(("="):rep(72))
 print(string.format("%d scenarios, %d checks passed, %d failed",
 	suite.scenarios, suite.passed, suite.failed))

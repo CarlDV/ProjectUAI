@@ -54,13 +54,14 @@ pointer.
 ```
 init.lua              bootstrap: builds env, mounts the app
 src/runtime/          util, signal, clock, caps, fsx, log, config
-src/net/              ua, http, sse, ws
+src/net/              ua, http, sse, ws, bridge
 src/provider/         catalog, registry, openai, models
 src/agent/            prompt, context, schema, registry, permissions,
                       hooks, state, usage, loop, session, subagent
 src/tools/            13 groups behind one registry
 src/ui/               theme, responsive, icons, primitives, controls,
                       overlay, markdown, window, app, chat/*, panels/*
+bridge/               the optional web chat: node server plus its page
 dist/uai.lua          the built single file
 ```
 
@@ -76,9 +77,9 @@ annotations, no backtick interpolation, no `continue` -- and `test/check.lua`
 fails the build on a violation.
 
 ```bash
-luajit test/check.lua      # lint, parse and link all 59 modules
+luajit test/check.lua      # lint, parse and link all 65 modules
 luajit tools/bundle.lua    # src/ + init.lua -> dist/uai.lua
-luajit test/run.lua        # 29 scenarios against the built bundle
+luajit test/run.lua        # 45 scenarios against the built bundle
 ```
 
 `test/run.lua` loads `dist/uai.lua` -- the actual artifact -- into a mocked
@@ -106,6 +107,26 @@ one, and send a message.
 Permissions default to **Ask first**: reads run freely, anything that changes the
 game waits for you, and the prompt shows the arguments -- which for `run_luau`
 means the code. Read only, Auto and Allow everything are the other three modes.
+
+## Chatting from a browser
+
+A Roblox client cannot accept a connection, so it cannot be talked to directly. A
+small local process sits in between and both sides dial out to it: the browser
+holds an SSE stream, the client long-polls for whatever you typed.
+
+```bash
+node bridge/server.js
+```
+
+It prints a link with a one-time token in the fragment -- open that, then paste the
+same token into **Settings -> Web bridge** and turn it on. The browser joins
+whichever conversation is already open in-game rather than starting its own, so a
+turn begun in one place continues in the other, and permission prompts can be
+answered from either side.
+
+Loopback only, token-gated, and Origin-checked. Whoever reaches it drives an agent
+that can run code on your machine, so it stays off until you turn it on and the
+token is regenerated on every start.
 
 ## Embedding
 
