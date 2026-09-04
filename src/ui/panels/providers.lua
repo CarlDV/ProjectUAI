@@ -17,6 +17,7 @@ return function(env)
 	local registry = env.require("provider/registry")
 	local models = env.require("provider/models")
 	local chat = env.require("provider/chat")
+	local traits = env.require("provider/traits")
 
 	local M = {}
 
@@ -152,6 +153,22 @@ return function(env)
 			})
 		end)
 
+		-- The only way to get a long reply out of this client.
+		--
+		-- No Roblox HTTP transport reads a body incrementally, so an ordinary request
+		-- has to sit there until the whole completion exists -- and the host abandons
+		-- it after about a minute, which a large reply cannot beat. A socket delivers
+		-- the same SSE stream in frames instead, with no single-request deadline. The
+		-- field is blank on every record because most endpoints do not offer one; where
+		-- one does, this is where it goes.
+		row("Socket URL", "Optional. A wss:// endpoint for streamed completions, which is what lifts the one-minute ceiling on a long reply. Left empty, replies arrive over HTTP in one piece.", function(column)
+			return P.field(column, {
+				text = editing.wsUrl,
+				placeholder = "wss://api.example.com/v1",
+				onChange = function(text) editing.wsUrl = text end,
+			})
+		end)
+
 		-- Models. Nothing is pre-filled: the list is whatever the endpoint reports
 		-- plus whatever the user types. Both are editable here before the record is
 		-- ever saved, so an endpoint with no /models route is still usable.
@@ -263,15 +280,23 @@ return function(env)
 						truncate = true,
 						layoutOrder = 2,
 					})
-					label.Size = UDim2.new(1, -(theme.size.controlSmall + 40), 1, 0)
-					if not own[id] then
+					label.Size = UDim2.new(1, -(theme.size.controlSmall + 72), 1, 0)
+					-- The context window where this client knows it, and whether the id came
+					-- from /models rather than from the record. Both are right-aligned facts
+					-- about the row, so they share one caption instead of competing for the
+					-- same slot.
+					local notes = {}
+					local badge = traits.badge(id)
+					if badge then notes[#notes + 1] = badge end
+					if not own[id] then notes[#notes + 1] = "fetched" end
+					if #notes > 0 then
 						P.text(entryRow, {
-							text = "fetched",
+							text = table.concat(notes, "  "),
 							role = "caption",
 							color = theme.color.textTertiary,
 							align = "Right",
 							layoutOrder = 3,
-						}).Size = UDim2.fromOffset(46, theme.text.caption.size + 4)
+						}).Size = UDim2.fromOffset(78, theme.text.caption.size + 4)
 					end
 					if own[id] then
 						local remove = P.iconButton(entryRow, {

@@ -122,6 +122,74 @@ return function(env)
 			return column
 		end
 
+		-- A row whose stops are words rather than numbers.
+		--
+		-- A track is still the right control when the values are not numeric: the stops
+		-- are ordered and the reader is picking a position on a scale, which a row of
+		-- buttons states less clearly. The value reads in the label's own type rather
+		-- than numberRow's monospace, because a word set in code font looks like an
+		-- identifier, and both ends are named above the track -- what the scale *means*
+		-- is the part neither the numbers nor the level names carry.
+		local function choiceRow(parentCard, label, hint, path, values, labels, ends)
+			local index, stored = 1, tostring(config.get(path, values[1]))
+			for position, value in ipairs(values) do
+				if value == stored then index = position end
+			end
+			local stops = {}
+			for position = 1, #values do stops[position] = position end
+
+			local column = P.column(parentCard, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xxs })
+			local head = P.row(column, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs })
+			P.text(head, {
+				text = label,
+				role = "small",
+				size = UDim2.new(0, 0, 0, theme.text.small.height),
+				flex = "Fill",
+				layoutOrder = 1,
+			})
+			local value = P.text(head, {
+				text = labels[index],
+				role = "label",
+				color = theme.color.accent,
+				align = "Right",
+				auto = "X",
+				layoutOrder = 2,
+			})
+
+			local feet = P.row(column, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs })
+			P.text(feet, {
+				text = ends[1],
+				role = "caption",
+				color = theme.color.textTertiary,
+				size = UDim2.new(0, 0, 0, theme.text.caption.height),
+				flex = "Fill",
+				layoutOrder = 1,
+			})
+			P.text(feet, {
+				text = ends[2],
+				role = "caption",
+				color = theme.color.textTertiary,
+				align = "Right",
+				auto = "X",
+				layoutOrder = 2,
+			})
+			C.slider(column, {
+				name = "Slider_" .. tostring(path),
+				stops = stops,
+				value = index,
+				onChange = function(number)
+					value.Text = labels[math.floor(number)] or value.Text
+				end,
+				onCommit = function(number)
+					local position = math.max(math.min(math.floor(number), #values), 1)
+					value.Text = labels[position]
+					config.set(path, values[position])
+				end,
+			})
+			P.text(column, { text = hint, role = "caption", color = theme.color.textTertiary, wrap = true, auto = "Y" })
+			return column
+		end
+
 		-- Appearance -----------------------------------------------------------
 		local appearance = section("Appearance",
 			"Layout follows the viewport by default. Pin it if you would rather it did not.")
@@ -161,8 +229,23 @@ return function(env)
 		})
 
 		numberRow(appearance, "Text scale", "Multiplies every type size.", "ui.fontScale", 0.85, 1.4, 0.05)
-		toggle(appearance, "Show reasoning", "Display the model's chain of thought when it sends one.", "ui.showReasoning")
+		toggle(appearance, "Show reasoning", "Display the model's chain of thought when it sends one. Applies to the conversation already on screen.", "ui.showReasoning")
 		toggle(appearance, "Expand tool detail", "Open tool arguments and results by default.", "ui.showToolDetail")
+
+		-- Built here rather than after the Shortcuts section below it, because nothing in
+		-- this card sets a layout order: the rows appear in the order they are created,
+		-- and a note constructed later landed wherever the tie-break put it.
+		local viewportNote = P.text(appearance, {
+			text = "Now: " .. responsive.describe(),
+			role = "caption",
+			color = theme.color.textTertiary,
+			wrap = true,
+			auto = "Y",
+		})
+		viewportNote.Size = UDim2.new(1, 0, 0, 0)
+		responsive.changed:connect(function()
+			viewportNote.Text = "Now: " .. responsive.describe()
+		end)
 
 		-- Shortcuts ------------------------------------------------------------
 		local shortcuts = section("Shortcuts",
@@ -205,18 +288,6 @@ return function(env)
 			describeKey()
 		end
 
-		local viewportNote = P.text(appearance, {
-			text = "Now: " .. responsive.describe(),
-			role = "caption",
-			color = theme.color.textTertiary,
-			wrap = true,
-			auto = "Y",
-		})
-		viewportNote.Size = UDim2.new(1, 0, 0, 0)
-		responsive.changed:connect(function()
-			viewportNote.Text = "Now: " .. responsive.describe()
-		end)
-
 		-- Agent ----------------------------------------------------------------
 		--
 		-- The three token rows are the only settings here whose sensible value depends
@@ -250,7 +321,14 @@ return function(env)
 		numberRow(agent, "Tool result cap",
 			"Characters kept from one tool result, roughly four per token. This is the floor on how much a file read or a page fetch can actually return, whatever the tool's own limit says.",
 			"agent.resultCap", RESULT_STOPS)
-		numberRow(agent, "Temperature", "Lower is steadier; 0 is as deterministic as the provider allows.", "agent.temperature", 0, 1.5, 0.05)
+		choiceRow(agent, "Effort",
+			"How hard a reasoning model works before it answers. Sent as the provider's " ..
+			"effort level and clamped to what the chosen model offers; models without one ignore it.",
+			"agent.effort",
+			{ "low", "medium", "high", "xhigh", "max" },
+			{ "Low", "Medium", "High", "Very high", "Max" },
+			{ "Faster", "Smarter" })
+		numberRow(agent, "Temperature", "Lower is steadier; 0 is as deterministic as the provider allows. The current Claude models reject it, and it is not sent to them.", "agent.temperature", 0, 1.5, 0.05)
 		numberRow(agent, "Retries", "Attempts per provider before moving to the next.", "agent.retries", 1, 6, 1)
 		toggle(agent, "Ask for streams", "Streamed replies carry reasoning text and usage counts.", "agent.stream")
 		toggle(agent, "Summarise old turns", "Keeps a long conversation inside the context budget.", "agent.compaction")

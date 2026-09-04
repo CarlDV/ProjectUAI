@@ -41,6 +41,12 @@ return function(env)
 			compaction = true,
 			stream = true,
 			temperature = 0.4,
+			-- Reasoning depth: sent as `reasoning_effort` on chat completions and as
+			-- `output_config.effort` on the Messages API. "high" is what the API itself
+			-- uses when the field is absent, so this default changes nothing until it is
+			-- moved, and "off" sends no field at all. Clamped per model, because the
+			-- scales differ by generation -- "xhigh" did not exist before Opus 4.7.
+			effort = "high",
 			maxTokens = 4096,
 			-- Characters, not tokens, and it is the last word on how much of a tool
 			-- result reaches the model. Eight thousand rather than four so that the

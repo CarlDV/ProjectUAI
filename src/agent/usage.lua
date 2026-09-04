@@ -17,6 +17,11 @@ return function(env)
 
 	-- input, output per million tokens. Matched longest-prefix, so a dated model
 	-- id still resolves.
+	--
+	-- The current Claude generations are listed individually because the family
+	-- names no longer predict the price: an Opus has cost $5/$25 since 4.6, a third
+	-- of what the 4.5-and-earlier line did, and reporting the old number made every
+	-- turn in this client look three times more expensive than it was.
 	local PRICES = {
 		["gpt-4o-mini"] = { 0.15, 0.60 },
 		["gpt-4o"] = { 2.50, 10.00 },
@@ -25,7 +30,15 @@ return function(env)
 		["o4-mini"] = { 1.10, 4.40 },
 		["claude-haiku"] = { 1.00, 5.00 },
 		["claude-sonnet"] = { 3.00, 15.00 },
+		["claude-sonnet-5"] = { 2.00, 10.00 },
 		["claude-opus"] = { 15.00, 75.00 },
+		["claude-opus-4-6"] = { 5.00, 25.00 },
+		["claude-opus-4-7"] = { 5.00, 25.00 },
+		["claude-opus-4-8"] = { 5.00, 25.00 },
+		["claude-opus-5"] = { 5.00, 25.00 },
+		-- Covers the .1 revisions too: the id is a superstring of this prefix.
+		["claude-fable-5"] = { 10.00, 50.00 },
+		["claude-mythos-5"] = { 10.00, 50.00 },
 		["deepseek-reasoner"] = { 0.55, 2.19 },
 		["deepseek-chat"] = { 0.27, 1.10 },
 		["llama-3.3-70b"] = { 0.59, 0.79 },

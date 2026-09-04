@@ -14,6 +14,7 @@ return function(env)
 	local icons = env.require("ui/icons")
 	local P = env.require("ui/primitives")
 	local C = env.require("ui/controls")
+	local usage = env.require("agent/usage")
 
 	local CODE_LINES = 40
 	local ARG_PREVIEW = 90
@@ -281,9 +282,22 @@ return function(env)
 			text = "reasoning",
 			role = "label",
 			color = theme.color.textTertiary,
+			size = UDim2.new(0, 0, 1, 0),
+			flex = "Fill",
 			layoutOrder = 2,
 		})
-		title.Size = UDim2.new(1, -(theme.size.icon + theme.space.xs), 1, 0)
+		-- How much of it there is, in the unit it is billed in. A card that says only
+		-- "reasoning" gives no grounds for opening it or for leaving it shut, and this
+		-- is the one part of a turn whose size is otherwise invisible: reasoning is
+		-- charged as output and never appears in the reply.
+		P.text(row, {
+			text = "~" .. util.formatNumber(usage.estimateText(text)) .. " tokens",
+			role = "caption",
+			color = theme.color.textTertiary,
+			align = "Right",
+			auto = "X",
+			layoutOrder = 3,
+		})
 
 		local body = P.text(card, {
 			text = markdown.plain(text),
@@ -292,24 +306,25 @@ return function(env)
 			wrap = true,
 			auto = "Y",
 			layoutOrder = 2,
-			visible = false,
 		})
 		body.Size = UDim2.new(1, 0, 0, 0)
 
-		local open = false
+		-- Open on arrival. The thinking is what explains the answer, and a card that
+		-- hides it by default reads as though there were nothing inside; the header
+		-- still folds a long one away once it has been read.
+		local open = true
+		caret.Rotation = 90
 		local function toggle()
 			open = not open
 			body.Visible = open
 			caret.Rotation = open and 90 or 0
 		end
 		header.Activated:Connect(toggle)
-		if config.get("ui.showReasoning", true) == false then card.Visible = false end
+		-- The wrapper, not the card: hiding the card alone left its frame in the list
+		-- layout, so a hidden reasoning row still pushed the reply down by its padding.
+		if config.get("ui.showReasoning", true) == false then holder.Visible = false end
 
-		local handle = { root = holder, body = body }
-		function handle.append(more)
-			body.Text = markdown.plain(body.Text .. more)
-		end
-		return handle
+		return { root = holder, body = body }
 	end
 
 	-- A tool call row: risk dot, name, argument preview, timing, and an expandable

@@ -330,10 +330,13 @@ return function(env)
 			local retry, why = M.shouldRetry(res, err, { elapsed = res and res.ms or failedMs })
 			if not retry then
 				-- A deadline is the one outcome the caller cannot read off the response,
-				-- because there is no response to read. Name it in the error instead of
-				-- handing back a bare transport message.
+				-- because there is no response to read. The transport's own words for it
+				-- stay in the log entry rather than the message: they are usually a raise
+				-- from inside the executor ("Argument 1 missing or nil") and say nothing
+				-- a reader can act on, where the wait and its cause do.
 				if why and not res then
-					return nil, err and (err .. " -- " .. why) or why
+					return nil, why .. " -- the transport gave up while the request was still " ..
+						"running. A smaller context budget or reply ceiling fits inside it."
 				end
 				return res, err
 			end

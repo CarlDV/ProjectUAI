@@ -13,6 +13,7 @@ return function(env)
 	local http = env.require("net/http")
 	local sse = env.require("net/sse")
 	local registry = env.require("provider/registry")
+	local traits = env.require("provider/traits")
 
 	local M = {}
 
@@ -68,12 +69,24 @@ return function(env)
 			end
 		end
 
+		-- Sampling parameters are rejected outright by the current Claude generations
+		-- rather than ignored, so a model documented to refuse one is never sent it.
+		-- Every other model keeps the behaviour it has always had, because
+		-- withholding a parameter a gateway would have honoured is its own bug.
 		local temperature = request.temperature
 		if temperature == nil then temperature = config.get("agent.temperature", 0.4) end
-		if temperature then body.temperature = temperature end
+		if temperature and traits.allowsSampling(record.model) then
+			body.temperature = temperature
+		end
 
 		local maxTokens = M.cappedMaxTokens(record, request.maxTokens or config.get("agent.maxTokens", 4096))
 		if maxTokens and maxTokens > 0 then body.max_tokens = maxTokens end
+
+		-- Reasoning depth, spelled the way the chat-completions wire spells it. Only
+		-- sent to a model with a scale to place it on, and clamped to that scale, so
+		-- asking for more than a model has is a smaller request rather than a refusal.
+		local effort = M.effortFor(record, request)
+		if effort then body.reasoning_effort = effort end
 
 		if request.stream then
 			body.stream = true
@@ -180,11 +193,31 @@ return function(env)
 	-- the slider would read 64k while every request asked for 32k.
 	function M.cappedMaxTokens(record, wanted)
 		wanted = tonumber(wanted) or 0
+		-- What the model documents comes first, so a slider set above a model's
+		-- ceiling costs nothing to discover. What a refusal actually taught this
+		-- record still applies after it, because the gateway is the final word on
+		-- what it will accept.
+		local documented = traits.maxOutput(record.model)
+		if documented and wanted > documented then wanted = documented end
 		local cap = record.maxTokensCap
 		if type(cap) ~= "table" or cap.model ~= record.model then return wanted end
 		local limit = tonumber(cap.tokens) or 0
 		if limit > 0 and wanted > limit then return limit end
 		return wanted
+	end
+
+	-- The effort level to send, or nil for none. Both adapters ask this and differ
+	-- only in how the answer is spelled on the wire.
+	--
+	-- Clamped to the model's own scale rather than passed through, because the scales
+	-- differ by generation -- "xhigh" arrived after 4.6 -- and a level a model has
+	-- never heard of is a refusal rather than a rounding.
+	function M.effortFor(record, request)
+		local wanted = request and request.effort
+		if wanted == nil then wanted = config.get("agent.effort", "high") end
+		wanted = tostring(wanted or "")
+		if wanted == "" or wanted == "off" then return nil end
+		return traits.nearestEffort(record and record.model, wanted)
 	end
 
 	-- Stores what a refusal named, against the model it came from. Both adapters call
@@ -250,6 +283,17 @@ return function(env)
 				if body.stream_options ~= nil then
 					body.stream_options = nil
 					return "dropped stream_options"
+				end
+			end,
+		},
+		{
+			-- Not every gateway that relays to a reasoning model forwards the field
+			-- that asks for a depth. Dropping it costs the setting, not the turn.
+			match = "reasoning_effort",
+			apply = function(body)
+				if body.reasoning_effort ~= nil then
+					body.reasoning_effort = nil
+					return "dropped reasoning_effort"
 				end
 			end,
 		},

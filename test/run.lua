@@ -70,6 +70,7 @@ end
 local function chatBody(opts)
 	opts = opts or {}
 	local message = { role = "assistant", content = opts.content or "" }
+	if opts.reasoning then message.reasoning_content = opts.reasoning end
 	if opts.toolCalls then message.tool_calls = opts.toolCalls end
 	return json.encode({
 		id = "cmpl_1",
@@ -1800,6 +1801,74 @@ end)
 
 -- 23. Token limits ---------------------------------------------------------
 
+scenario("what a model accepts is known before a refusal teaches it", function()
+	local _, handle = bootWith({ provider = false })
+	local traits = handle.env.require("provider/traits")
+
+	check("Opus 5 holds a million tokens", traits.contextWindow("claude-opus-5"), 1000000)
+	check("badged for a picker", traits.badge("claude-opus-5"), "1M")
+	check("through a gateway's prefix too", traits.badge("anthropic/claude-opus-5"), "1M")
+	check("and a dated snapshot", traits.contextWindow("claude-opus-5-20260101"), 1000000)
+	check("Haiku 4.5 is smaller", traits.badge("claude-haiku-4-5"), "200K")
+	check("an unfamiliar model claims nothing", traits.contextWindow("harness-model"), nil)
+
+	-- Silence has to mean "send it": withholding a parameter a gateway would have
+	-- honoured breaks every model this table has never heard of.
+	check("sampling is refused by Opus 5", traits.allowsSampling("claude-opus-5"), false)
+	check("allowed on 4.6", traits.allowsSampling("claude-opus-4-6"), true)
+	check("and on anything unknown", traits.allowsSampling("harness-model"), true)
+
+	-- The effort scales differ by generation, and a level a model never had is a
+	-- refusal rather than a rounding, so a setting is clamped down and never up.
+	check("xhigh is honoured where it exists", traits.nearestEffort("claude-opus-5", "xhigh"), "xhigh")
+	check("and lands on high where it does not", traits.nearestEffort("claude-opus-4-6", "xhigh"), "high")
+	check("max survives on both", traits.nearestEffort("claude-opus-4-6", "max"), "max")
+	check("a model with no scale takes no level", traits.nearestEffort("harness-model", "high"), nil)
+
+	-- An Opus has cost a third of the 4.5 rate since 4.6, and reporting the old
+	-- number made every turn in this client look three times dearer than it was.
+	local usage = handle.env.require("agent/usage")
+	local opus5 = usage.priceFor("claude-opus-5")
+	check("Opus 5 input is five dollars", opus5 and opus5[1], 5.00)
+	check("and output twenty-five", opus5 and opus5[2], 25.00)
+	check("Sonnet 5 is cheaper still", (usage.priceFor("claude-sonnet-5") or {})[1], 2.00)
+	check("an older Opus keeps its own price", (usage.priceFor("claude-opus-4-1") or {})[1], 15.00)
+end)
+
+scenario("a Claude request omits what Claude rejects and asks for a depth", function()
+	local sent = {}
+	local harness, handle = bootWith({
+		model = "claude-opus-5",
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			sent[#sent + 1] = json.decode(entry.body)
+			return { StatusCode = 200, Body = chatBody({ content = "ok" }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+	handle.config.set("agent.maxTokens", 999999)
+
+	handle.sessions.current().send("hello")
+	harness.settle(10)
+
+	truthy("a request went out", sent[1] ~= nil)
+	check("temperature is withheld from a model that refuses it",
+		sent[1] and sent[1].temperature, nil)
+	check("the reply ceiling is clamped to what the model allows",
+		sent[1] and sent[1].max_tokens, 128000)
+	check("and a reasoning depth is asked for", sent[1] and sent[1].reasoning_effort, "high")
+
+	handle.config.set("agent.effort", "off")
+	handle.sessions.current().send("again")
+	harness.settle(10)
+	check("which can be switched off entirely", sent[2] and sent[2].reasoning_effort, nil)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 scenario("an over-large reply ceiling is lowered to what the model allows", function()
 	local _, handle = bootWith({ provider = false })
 	local openai = handle.env.require("provider/openai")
@@ -1952,6 +2021,71 @@ scenario("the token sliders span three orders of magnitude", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 	check("no property type errors", #harness.instanceState.typeErrors, 0,
 		table.concat(harness.instanceState.typeErrors, "\n"))
+end)
+
+scenario("effort reads as a scale rather than a number", function()
+	local harness, handle = bootWith({ provider = false })
+	harness.click(harness.byName("Segment_settings"))
+	harness.settle(1)
+
+	local slider = harness.byName("Slider_agent.effort")
+	truthy("the effort setting has a track of its own", slider ~= nil)
+	local hit = slider and slider:FindFirstChildOfClass("TextButton")
+	truthy("with something to drag", hit ~= nil)
+
+	-- Words, not numbers. What the scale costs and buys is the part a reader needs,
+	-- and "xhigh" is not a quantity anyone can place on a bare track.
+	contains("the near end says what it buys", harness.textOf(), "Faster")
+	contains("and the far end too", harness.textOf(), "Smarter")
+
+	if hit then
+		harness.drag(hit, 0, 0, 100000, 0)
+		check("the far end spends the most", handle.config.get("agent.effort"), "max")
+		contains("and names itself", harness.textOf(), "Max")
+		harness.drag(hit, 0, 0, -100000, 0)
+		check("the near end the least", handle.config.get("agent.effort"), "low")
+	end
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+	check("no property type errors", #harness.instanceState.typeErrors, 0,
+		table.concat(harness.instanceState.typeErrors, "\n"))
+end)
+
+scenario("reasoning arrives open, sized, and answers its switch", function()
+	local harness, handle = bootWith({
+		handler = function()
+			return { StatusCode = 200, Body = chatBody({
+				content = "Forty-two.",
+				reasoning = string.rep("weighing the options ", 40),
+			}) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+	handle.sessions.current().send("what is the answer")
+	harness.settle(10)
+
+	contains("the thinking is on screen", harness.textOf(), "weighing the options")
+	contains("under a header naming it", harness.textOf(), "reasoning")
+	-- Reasoning is billed as output and never appears in the reply, so its size is a
+	-- number the reader cannot get from anywhere else on the row.
+	contains("with its size in tokens", harness.textOf(), "tokens")
+	contains("and the answer as well", harness.textOf(), "Forty-two.")
+
+	local card = harness.byName("Reasoning")
+	truthy("the row exists", card ~= nil)
+	truthy("and is open on arrival, not folded away", card and card.Visible ~= false)
+
+	-- The switch used to be read only while a row was being built, so turning it off
+	-- left the conversation exactly as it was and read as a dead toggle.
+	handle.config.set("ui.showReasoning", false)
+	harness.settle(3)
+	local after = harness.byName("Reasoning")
+	truthy("switching it off takes the row off screen", after == nil or after.Visible == false)
+	contains("and leaves the answer alone", harness.textOf(), "Forty-two.")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
 -- 24. Quick chat ----------------------------------------------------------

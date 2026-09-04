@@ -21,6 +21,7 @@ return function(env)
 	local sse = env.require("net/sse")
 	local registry = env.require("provider/registry")
 	local openai = env.require("provider/openai")
+	local traits = env.require("provider/traits")
 
 	local M = {}
 
@@ -178,6 +179,25 @@ return function(env)
 		local tools = M.wireTools(request.tools)
 		if #tools > 0 then body.tools = tools end
 		if request.stream then body.stream = true end
+
+		-- Reasoning. Adaptive is the only shape the current generations accept: a
+		-- fixed `budget_tokens` was removed after 4.6 and answers 400 on everything
+		-- since. `display` is the part that matters to a client with a transcript --
+		-- it defaults to omitted, so the thinking blocks arrive with empty text, and a
+		-- client that never asks for a summary looks like it has no reasoning support
+		-- at all rather than like one that was never told to show any.
+		if traits.thinkingStyle(record.model) == "adaptive" then
+			body.thinking = {
+				type = "adaptive",
+				display = (config.get("ui.showReasoning", true) ~= false) and "summarized" or "omitted",
+			}
+		end
+
+		-- Depth, on the wire field the Messages API uses for it. Same setting and same
+		-- clamping as the chat-completions adapter, which spells it differently.
+		local effort = openai.effortFor(record, request)
+		if effort then body.output_config = { effort = effort } end
+
 		for key, value in pairs(record.params or {}) do body[key] = value end
 		for key, value in pairs(request.extra or {}) do body[key] = value end
 		return body
@@ -260,6 +280,22 @@ return function(env)
 			return slots[key]
 		end
 
+		-- Thinking is collected per block rather than only as flat text, because a
+		-- thinking block carries a signature and the next turn has to hand both back
+		-- exactly as they arrived. Rebuilding one from its text would produce a block
+		-- the API cannot verify, and dropping it -- which this path used to do -- makes
+		-- extended thinking unusable the moment a turn calls a tool.
+		local thinking, thinkingOrder = {}, {}
+
+		local function thinkingFor(index)
+			local key = tostring(index or 0)
+			if not thinking[key] then
+				thinking[key] = { index = tonumber(index) or 0, text = {} }
+				thinkingOrder[#thinkingOrder + 1] = key
+			end
+			return thinking[key]
+		end
+
 		for _, frame in ipairs(frames) do
 			local payload = util.trim(frame.data)
 			if payload ~= "" and payload ~= "[DONE]" then
@@ -278,6 +314,17 @@ return function(env)
 							slot.id, slot.name = block.id, block.name
 						elseif block.type == "text" and type(block.text) == "string" and block.text ~= "" then
 							content[#content + 1] = block.text
+						elseif block.type == "thinking" then
+							local slot = thinkingFor(event.index)
+							if type(block.thinking) == "string" and block.thinking ~= "" then
+								slot.text[#slot.text + 1] = block.thinking
+								reasoning[#reasoning + 1] = block.thinking
+							end
+							if type(block.signature) == "string" then slot.signature = block.signature end
+						elseif block.type == "redacted_thinking" then
+							-- Nothing to show and nothing to read, but it still has to be
+							-- replayed: the turn it belongs to is incomplete without it.
+							thinkingFor(event.index).redacted = block.data
 						end
 					elseif kind == "content_block_delta" and type(event.delta) == "table" then
 						local delta = event.delta
@@ -285,6 +332,11 @@ return function(env)
 							content[#content + 1] = delta.text
 						elseif delta.type == "thinking_delta" and type(delta.thinking) == "string" then
 							reasoning[#reasoning + 1] = delta.thinking
+							local slot = thinkingFor(event.index)
+							slot.text[#slot.text + 1] = delta.thinking
+						elseif delta.type == "signature_delta" and type(delta.signature) == "string" then
+							local slot = thinkingFor(event.index)
+							slot.signature = (slot.signature or "") .. delta.signature
 						elseif delta.type == "input_json_delta" and type(delta.partial_json) == "string" then
 							local slot = slotFor(event.index)
 							slot.json[#slot.json + 1] = delta.partial_json
@@ -303,6 +355,26 @@ return function(env)
 
 		local text = table.concat(content)
 		local calls, raw = {}, {}
+
+		-- Thinking leads the content array, and the order is not cosmetic: a replayed
+		-- assistant turn has to present its thinking before its text and its tool calls.
+		table.sort(thinkingOrder, function(a, b) return thinking[a].index < thinking[b].index end)
+		for _, key in ipairs(thinkingOrder) do
+			local slot = thinking[key]
+			if slot.redacted ~= nil then
+				raw[#raw + 1] = { type = "redacted_thinking", data = slot.redacted }
+			elseif slot.signature and slot.signature ~= "" then
+				-- Only a signed block is worth replaying. An unsigned one cannot be
+				-- verified, so sending it back is a refusal where omitting it is merely
+				-- an incomplete record of the turn.
+				raw[#raw + 1] = {
+					type = "thinking",
+					thinking = table.concat(slot.text),
+					signature = slot.signature,
+				}
+			end
+		end
+
 		if util.trim(text) ~= "" then raw[#raw + 1] = { type = "text", text = text } end
 		table.sort(order, function(a, b) return slots[a].index < slots[b].index end)
 		for _, key in ipairs(order) do

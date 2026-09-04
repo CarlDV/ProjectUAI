@@ -22,6 +22,7 @@ return function(env)
 	local sessions = env.require("agent/session")
 	local providers = env.require("provider/registry")
 	local models = env.require("provider/models")
+	local traits = env.require("provider/traits")
 	local usage = env.require("agent/usage")
 
 	local PANELS = {
@@ -99,6 +100,23 @@ return function(env)
 		dispose.add(theme.changed:connect(clock.debounce(function()
 			M.rebuild("theme")
 		end, 0.2)), "app.themeChanged")
+
+		-- Two settings decide what a transcript row *shows* rather than how it looks, so
+		-- the theme's token list does not cover them and nothing else would notice they
+		-- moved. Every row reads them at build time like everything else here, which
+		-- meant the switch did nothing to the rows already on screen: turning reasoning
+		-- on left the conversation exactly as it was, which reads as a broken toggle
+		-- rather than as a setting that applies from the next turn.
+		--
+		-- Only these two keys. A nil path and the whole "ui" section already reach
+		-- rebuild through theme.changed, and answering both here would rebuild twice.
+		local VIEW_KEYS = { ["ui.showReasoning"] = true, ["ui.showToolDetail"] = true }
+		local rebuildForView = clock.debounce(function()
+			M.rebuild("view setting")
+		end, 0.2)
+		dispose.add(config.changed:connect(function(path)
+			if VIEW_KEYS[tostring(path)] then rebuildForView() end
+		end), "app.viewSettings")
 
 		log.info("app", "interface mounted in " .. tostring(container.Name) .. " as " .. responsive.mode)
 		return M
@@ -526,8 +544,12 @@ return function(env)
 		if record then
 			local known = models.list(record)
 			for _, id in ipairs(known) do
+				-- The window is the one thing about a model worth reading at a glance,
+				-- and no endpoint publishes it -- so where it is known, it rides on the
+				-- label. The value stays the bare id, which is what goes on the wire.
+				local badge = traits.badge(id)
 				options[#options + 1] = {
-					label = id,
+					label = badge and (id .. " (" .. badge .. ")") or id,
 					value = "model:" .. id,
 					detail = "model on " .. record.label,
 					selected = id == record.model,
