@@ -34,6 +34,14 @@ return function(env)
 		},
 		agent = {
 			maxTurns = 24,
+			-- Lifts the step limit and the turn deadline for the top-level
+			-- conversation, so a long job runs until the model answers in prose
+			-- instead of stopping mid-way with "I reached this session's step limit".
+			-- What still bounds a runaway: the repeat breaker, each tool's own
+			-- timeout, the provider retry cap, and Stop. Subagents keep their own
+			-- turn and time budgets either way -- an unbounded child is the one
+			-- thing here nobody is watching.
+			unlimitedTurns = false,
 			toolConcurrency = 4,
 			toolTimeout = 25,
 			contextTokens = 24000,
@@ -57,6 +65,12 @@ return function(env)
 			repeatLimit = 3,
 			subagentDepth = 2,
 			subagentTurns = 14,
+			-- Live subagents anywhere in the tree. `toolConcurrency` bounds one batch,
+			-- so it is what caps a parallel dispatch from the main conversation; this
+			-- caps the whole tree, which nothing else did. Depth alone does not: a
+			-- subagent's own batch is bounded separately, and two levels of that
+			-- multiply rather than add.
+			subagentConcurrency = 8,
 			-- Seconds one subagent may run for. The tool that dispatches it derives its
 			-- own timeout from this, so the two cannot drift apart -- when they did, the
 			-- generic 25s tool timeout fired first and every finished report was thrown

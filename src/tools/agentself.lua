@@ -106,7 +106,7 @@ return function(env)
 		{
 			name = "dispatch_agent",
 			risk = "write",
-			description = "Hand a self-contained investigation to a subagent with its own context, and get back a written report. Use for wide searches, repetitive inspection, or anything that would otherwise fill this conversation with tool output. The subagent cannot ask questions, so state the task completely. The call blocks until the report is ready; several dispatched in one step run at the same time.",
+			description = "Hand a self-contained investigation to a subagent with its own context, and get back a written report. Use for wide searches, repetitive inspection, or anything that would otherwise fill this conversation with tool output. Call it several times in one step to run that many subagents at once: they work in parallel and you wait once, not once each. A subagent cannot ask questions, so state the task completely. The call blocks until its report is ready.",
 			-- Not the generic tool timeout. A subagent runs for minutes by design, and a
 			-- caller that gives up first throws away work the user has paid for: the
 			-- child cannot be killed, so it finishes into a void.

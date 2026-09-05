@@ -37,7 +37,10 @@ How to work:
 - Save durable facts with memory_write: what the user is building, a path you had
   to hunt for, a preference they stated. Do not save transcript chatter.
 - Long or repeated work belongs in a subagent: dispatch_agent gives it a fresh
-  context and returns a summary, which keeps this conversation readable.]]
+  context and returns a summary, which keeps this conversation readable.
+- Subagents run in parallel. When a job splits into independent investigations,
+  dispatch one per investigation in the same step rather than one after another:
+  they work at the same time and you wait once instead of once each.]]
 
 	local CAUTION = [[
 Care:

@@ -305,7 +305,10 @@ return function(env)
 		local RESULT_STOPS = { 1000, 2000, 4000, 6000, 8000, 12000, 16000, 24000, 32000, 48000, 64000, 96000, 128000 }
 
 		local agent = section("Agent", "How hard it works before it stops and answers.")
-		numberRow(agent, "Step limit", "Tool rounds allowed in one turn.", "agent.maxTurns", 4, 60, 1)
+		numberRow(agent, "Step limit", "Tool rounds allowed in one turn, unless the switch below removes it.", "agent.maxTurns", 4, 60, 1)
+		toggle(agent, "Unlimited tool calls",
+			"Ignore the step limit and the fifteen-minute turn deadline, and keep calling tools until the answer is written. The repeat breaker, each tool's own timeout and Stop still apply, and subagents keep their own budgets.",
+			"agent.unlimitedTurns")
 		numberRow(agent, "Parallel tools", "Tool calls run at once within one step.", "agent.toolConcurrency", 1, 8, 1)
 		numberRow(agent, "Tool timeout",
 			"Seconds before a tool is abandoned. Subagents are exempt: they run to their own budget below.",
@@ -313,6 +316,9 @@ return function(env)
 		numberRow(agent, "Subagent budget",
 			"Seconds one subagent may work for before it wraps up. The call that dispatched it waits this long plus a minute, so a finished report is never thrown away.",
 			"agent.subagentBudget", 30, 900, 30)
+		numberRow(agent, "Parallel subagents",
+			"Subagents alive at once across the whole tree. Several dispatched in one step run together; this is the ceiling on how many, including the ones a subagent starts itself. Anything over it waits for a slot.",
+			"agent.subagentConcurrency", 1, 12, 1)
 		numberRow(agent, "Context budget",
 			"Estimated tokens kept before older turns are summarised. Set it against the model's own window, not this client: a million-token model can hold the whole session.",
 			"agent.contextTokens", BUDGET_STOPS)

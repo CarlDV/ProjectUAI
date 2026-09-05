@@ -125,7 +125,6 @@ return function(env)
 					{ role = "system", content = prompt.compaction() },
 					{ role = "user", content = transcript },
 				},
-				stream = false,
 				temperature = 0,
 				maxTokens = 400,
 				attempts = 1,
@@ -140,21 +139,42 @@ return function(env)
 		local ctx = session.ctx
 		local maxTurns = session.maxTurns or config.get("agent.maxTurns", 24)
 		local repeatLimit = config.get("agent.repeatLimit", 3)
-		local deadline = clock.ms() + (session.budgetSeconds or 900) * 1000
 
-		usage.startTurn()
+		-- Unlimited tool calling, for the conversation the user is watching and only
+		-- that one. A session carrying its own step budget -- every subagent does --
+		-- keeps it: the switch is for a turn someone can see and stop, not for a
+		-- delegated child running with nobody's attention on it.
+		local unlimited = session.maxTurns == nil
+			and config.get("agent.unlimitedTurns", false) == true
+
+		-- The wall-clock bound goes with the step limit rather than outliving it. A
+		-- fifteen-minute ceiling left standing behind a switch labelled unlimited
+		-- stops the same long job at roughly twice the step count and calls it running
+		-- out of time -- the same wall wearing a different sign.
+		local deadline = nil
+		if not unlimited then
+			deadline = clock.ms() + (session.budgetSeconds or 900) * 1000
+		end
+
+		-- Turn totals belong to the turn the user started. A subagent runs this same
+		-- loop, so without this guard every dispatch reset the counter the interface is
+		-- showing, and a batch of them reset it repeatedly, mid-turn, to whatever the
+		-- last child happened to have spent.
+		if not session.headless then usage.startTurn() end
 		ctx.pushUser(text)
-		session.emit("turn:start", { turns = maxTurns })
+		session.emit("turn:start", { turns = unlimited and 0 or maxTurns, unlimited = unlimited })
 
 		local lastSignature, streak = "", 0
 		local finalText = nil
+		local turn = 0
 
-		for turn = 1, maxTurns do
+		while unlimited or turn < maxTurns do
+			turn = turn + 1
 			if session.aborted() then
 				session.emit("abort", {})
 				return "Stopped."
 			end
-			if clock.ms() > deadline then
+			if deadline and clock.ms() > deadline then
 				session.emit("error", { message = "This turn ran out of time.", fatal = false })
 				return "I ran out of time on this turn. Ask me to continue if you want me to keep going."
 			end

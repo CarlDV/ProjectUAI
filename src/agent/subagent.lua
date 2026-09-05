@@ -56,6 +56,42 @@ return function(env)
 		return M.budgetSeconds() + SLACK_SECONDS
 	end
 
+	-- Width, not just depth.
+	--
+	-- Several dispatch_agent calls in one step run at the same time, which is the
+	-- point: three searches in parallel cost one step instead of three. What that
+	-- leaves unbounded is the tree. `agent.toolConcurrency` caps one batch, so it caps
+	-- a parallel dispatch from the main conversation -- but a subagent given the
+	-- `full` preset dispatches its own batch under its own cap, and two levels of
+	-- that multiply rather than add. This is the ceiling on live children anywhere,
+	-- and the depth cap above is no substitute for it.
+	M.live = 0
+
+	function M.concurrencyLimit()
+		return math.max(tonumber(config.get("agent.subagentConcurrency", 8)) or 8, 1)
+	end
+
+	-- A dispatch over the ceiling waits for a slot instead of failing: the model has
+	-- already paid for the step that asked, and a refusal would spend another one
+	-- learning that it asked for too much at once.
+	--
+	-- The wait is bounded and comes out of the child's own budget, which is what keeps
+	-- `toolTimeout` a valid bound on the call above it. Without that subtraction a
+	-- queued child could finish after the tool that started it had given up, and a
+	-- report nobody is left to collect is exactly the failure the budget and the
+	-- timeout were tied together to prevent.
+	local function waitForSlot(budget, aborted)
+		local ceiling = math.min(45, budget / 4)
+		local waited = 0
+		while M.live >= M.concurrencyLimit() and waited < ceiling do
+			if aborted and aborted() then return nil end
+			waited = waited + (clock.wait(0.2) or 0.2)
+		end
+		if waited <= 0 then return budget end
+		log.info("subagent", string.format("queued %.1fs for a slot (%d live)", waited, M.live))
+		return math.max(budget - waited, 15)
+	end
+
 	-- The card in the transcript is titled with the task, so the first line of it is
 	-- what the user reads to tell three concurrent subagents apart.
 	local function labelFor(task)
@@ -83,14 +119,26 @@ return function(env)
 		local id = util.uid("agent")
 		local label = labelFor(task_text)
 		local groups = M.PRESETS[opts.preset or "read"]
+
+		local budget = waitForSlot(opts.budgetSeconds or M.budgetSeconds(),
+			parent and parent.aborted or nil)
+		if not budget then return nil, "the turn was stopped before this subagent started" end
+
 		local child = session.create({
 			title = "subagent",
 			depth = depth,
 			headless = true,
 			maxTurns = opts.turns or config.get("agent.subagentTurns", 14),
 			toolGroups = groups,
-			budgetSeconds = opts.budgetSeconds or M.budgetSeconds(),
-			stream = false,
+			budgetSeconds = budget,
+			-- Streaming is left to the provider and the Ask-for-streams setting, the
+			-- same as the main conversation. It used to be refused here, on the reading
+			-- that a child with no interface has nothing to stream into -- but no Roblox
+			-- transport delivers a body incrementally anyway, so that bought nothing and
+			-- cost the two things the streamed shape carries: reasoning text, and the
+			-- per-request usage block some gateways report token counts in at all. Every
+			-- subagent request landing without one was enough to mark the whole session's
+			-- cost readout estimated.
 		})
 
 		-- Live view.
@@ -179,7 +227,11 @@ return function(env)
 			depth = depth,
 		})
 
+		-- Counted around the pcall rather than around the whole setup, so a raise
+		-- anywhere inside cannot leak a slot and permanently narrow the ceiling.
+		M.live = M.live + 1
 		local ok, reply = pcall(loop.run, child, task_text)
+		M.live = math.max(M.live - 1, 0)
 
 		local elapsed = clock.since(started)
 		if not ok then

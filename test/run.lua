@@ -767,6 +767,113 @@ scenario("a stop request ends the turn", function()
 	truthy("an abort was reported", aborted)
 end)
 
+-- The step limit is there to stop a runaway, but on a long job it stops the work
+-- instead: the turn ends part-way through with "I reached this session's step limit"
+-- and the user has to ask it to continue. `agent.unlimitedTurns` removes it, and the
+-- turn deadline with it -- a fifteen-minute ceiling left standing behind a switch
+-- labelled unlimited stops the same job at roughly twice the step count and reports
+-- it as running out of time.
+scenario("unlimited tool calls runs past the step limit", function()
+	-- Alternating tool names, because the repeat breaker is the bound that stays in
+	-- force and three identical batches would trip it before the ninth step.
+	local function scripted()
+		local step = 0
+		return function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			step = step + 1
+			if step <= 9 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("c" .. tostring(step),
+						(step % 2 == 0) and "todo_read" or "game_info", {}) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Finished after nine steps." }) }
+		end
+	end
+
+	local limited, limitedHandle = bootWith({ handler = scripted() })
+	limitedHandle.config.set("agent.maxTurns", 4)
+	local capped = limitedHandle.sessions.current()
+	capped.send("do a long job")
+	limited.settle(40)
+
+	local stopped
+	for _, event in ipairs(capped.log) do
+		if event.kind == "error" then stopped = event.message end
+	end
+	contains("the step limit stops the turn by default", stopped or "", "Reached the step limit of 4")
+	check("after exactly that many requests", #chatRequests(limited), 4)
+
+	local free, freeHandle = bootWith({ handler = scripted() })
+	freeHandle.config.set("agent.maxTurns", 4)
+	freeHandle.config.set("agent.unlimitedTurns", true)
+	local session = freeHandle.sessions.current()
+	session.send("do the same long job")
+	free.settle(60)
+
+	check("with the switch on it works through to the answer",
+		session.ctx.messages[#session.ctx.messages].content, "Finished after nine steps.")
+	check("which took more steps than the limit allowed", #chatRequests(free), 10)
+
+	local reported, announced
+	for _, event in ipairs(session.log) do
+		if event.kind == "error" then reported = event.message end
+		if event.kind == "turn:start" then announced = event.unlimited end
+	end
+	check("nothing was reported as a limit", reported, nil)
+	check("and the turn said so when it started", announced, true)
+	check("the session is idle again", session.busy, false)
+	check("no thread errors", #free.errors(), 0,
+		free.errors()[1] and free.errors()[1].traceback or nil)
+end)
+
+-- A subagent runs this same loop, so the switch has to stop at the conversation the
+-- user is watching. A child is dispatched with a step budget of its own; if the
+-- toggle overrode that too, the one session nobody is looking at would be the one
+-- with no bound on it.
+scenario("unlimited tool calls does not reach a subagent", function()
+	local parentStep, childStep = 0, 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			-- The child's requests are the ones carrying the subagent brief.
+			if tostring(entry.body):find("You are a subagent", 1, true) then
+				childStep = childStep + 1
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("k" .. tostring(childStep),
+						(childStep % 2 == 0) and "players_list" or "game_info", {}) },
+				}) }
+			end
+			parentStep = parentStep + 1
+			if parentStep == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("d1", "dispatch_agent", { task = "dig forever", preset = "read" }) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "The subagent ran out of steps." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+	handle.config.set("agent.unlimitedTurns", true)
+	handle.config.set("agent.subagentTurns", 3)
+
+	local session = handle.sessions.current()
+	session.send("delegate something endless")
+	harness.settle(60)
+
+	check("the child stopped at its own step budget", childStep, 3)
+
+	local report
+	for _, message in ipairs(session.ctx.messages) do
+		if message.role == "tool" then report = message end
+	end
+	contains("and said so in its report", report and report.content or "", "step limit")
+	check("the parent, which is unlimited, carried on and answered",
+		session.ctx.messages[#session.ctx.messages].content, "The subagent ran out of steps.")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 -- 11. Context --------------------------------------------------------------
 
 scenario("context trimming never orphans a tool result", function()
@@ -1247,6 +1354,213 @@ scenario("stopping a turn stops the subagents it started", function()
 		"requests: " .. tostring(step))
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- Parallel dispatch is the reason a subagent is worth having for a wide job: three
+-- searches in one step cost one wait instead of three. It comes out of the ordinary
+-- parallel-tool path, so what this pins down is that nothing in the dispatch itself
+-- serialises the batch -- a shared lock, a shared prompt, a shared counter -- and
+-- that two children finishing out of order both still land.
+scenario("two subagents dispatched in one step run at the same time", function()
+	local parentStep = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			local body = tostring(entry.body)
+			-- Checked before the task text, which also appears in the parent's own
+			-- messages once the calls are on the transcript.
+			if body:find("You are a subagent", 1, true) then
+				if body:find("alpha sweep", 1, true) then
+					return { StatusCode = 200, delay = 6, Body = chatBody({ content = "Alpha found three doors." }) }
+				end
+				return { StatusCode = 200, delay = 1, Body = chatBody({ content = "Bravo found one key." }) }
+			end
+			parentStep = parentStep + 1
+			if parentStep == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = {
+						toolCall("d1", "dispatch_agent", { task = "alpha sweep", preset = "read" }),
+						toolCall("d2", "dispatch_agent", { task = "bravo sweep", preset = "read" }),
+					},
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Three doors and one key." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	local session = handle.sessions.current()
+	session.send("sweep the place two ways")
+	harness.settle(40)
+
+	local reports = {}
+	for _, message in ipairs(session.ctx.messages) do
+		if message.role == "tool" then reports[#reports + 1] = message end
+	end
+	check("both dispatches produced a report", #reports, 2)
+	contains("the first carries its own child's answer", reports[1].content, "three doors")
+	contains("and the second its own", reports[2].content, "one key")
+	check("the parent answered with both",
+		session.ctx.messages[#session.ctx.messages].content, "Three doors and one key.")
+
+	local starts, dones = {}, {}
+	for _, event in ipairs(session.log) do
+		if event.kind == "subagent:start" then starts[#starts + 1] = event end
+		if event.kind == "subagent:done" then dones[#dones + 1] = event end
+	end
+	check("two cards were opened", #starts, 2)
+	truthy("addressed to different calls", starts[1].call ~= starts[2].call)
+	truthy("and keyed to different children", starts[1].id ~= starts[2].id)
+	contains("the first card is labelled with its task", starts[1].label, "alpha sweep")
+	contains("the second with its own", starts[2].label, "bravo sweep")
+
+	check("two cards were closed", #dones, 2)
+	-- The whole point: the one-second child reports before the six-second child, which
+	-- is only possible if the second dispatch was not waiting on the first.
+	contains("the quicker child finished first", dones[1].label, "bravo sweep")
+	truthy("so the slower one was still running when it did",
+		(dones[2].at - dones[2].ms) < dones[1].at,
+		string.format("alpha ran %d-%d, bravo ended %d",
+			dones[2].at - dones[2].ms, dones[2].at, dones[1].at))
+	truthy("and the turn took about one wait, not two",
+		dones[2].at - (dones[2].at - dones[2].ms) < (dones[1].ms + dones[2].ms))
+
+	local shown = harness.textOf()
+	contains("both tasks are on screen", shown, "alpha sweep")
+	contains("both of them", shown, "bravo sweep")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- Depth caps how deep the tree goes; nothing capped how wide. `toolConcurrency`
+-- bounds one batch, so it bounds a dispatch from the main conversation -- but a
+-- subagent's own batch is bounded separately, and two levels of that multiply. A
+-- dispatch over the ceiling waits for a slot rather than failing, because the step
+-- that asked has already been paid for.
+scenario("the subagent ceiling serialises what it cannot fit", function()
+	local parentStep = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			local body = tostring(entry.body)
+			if body:find("You are a subagent", 1, true) then
+				if body:find("alpha sweep", 1, true) then
+					return { StatusCode = 200, delay = 6, Body = chatBody({ content = "Alpha done." }) }
+				end
+				return { StatusCode = 200, delay = 1, Body = chatBody({ content = "Bravo done." }) }
+			end
+			parentStep = parentStep + 1
+			if parentStep == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = {
+						toolCall("d1", "dispatch_agent", { task = "alpha sweep", preset = "read" }),
+						toolCall("d2", "dispatch_agent", { task = "bravo sweep", preset = "read" }),
+					},
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Both back." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+	handle.config.set("agent.subagentConcurrency", 1)
+
+	local subagent = handle.env.require("agent/subagent")
+	check("the ceiling follows the setting", subagent.concurrencyLimit(), 1)
+
+	local session = handle.sessions.current()
+	session.send("sweep the place two ways")
+	harness.settle(60)
+
+	local dones = {}
+	for _, event in ipairs(session.log) do
+		if event.kind == "subagent:done" then dones[#dones + 1] = event end
+	end
+	check("both children still ran", #dones, 2)
+	contains("the first dispatched went first", dones[1].label, "alpha sweep")
+	truthy("and the second waited for it rather than running beside it",
+		(dones[2].at - dones[2].ms) >= dones[1].at - 500,
+		string.format("alpha ended %d, bravo started %d", dones[1].at, dones[2].at - dones[2].ms))
+	check("nothing was abandoned", dones[2].ok, true)
+	check("the parent got both reports",
+		session.ctx.messages[#session.ctx.messages].content, "Both back.")
+	check("and the ceiling was given back afterwards", subagent.live, 0)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- A subagent used to refuse streaming, on the reading that a child with no interface
+-- has nothing to stream into. No Roblox transport delivers a body incrementally
+-- anyway, so that bought nothing and cost the two things only the streamed shape
+-- carries: reasoning text, and the per-request usage block that is the only place
+-- some gateways report token counts at all.
+scenario("a subagent's own requests stream like the main conversation", function()
+	local parentStep = 0
+	local harness, handle = bootWith({
+		stream = true,
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			if tostring(entry.body):find("You are a subagent", 1, true) then
+				return { StatusCode = 200, Body = chatBody({ content = "Nothing unusual here." }) }
+			end
+			parentStep = parentStep + 1
+			if parentStep == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("d1", "dispatch_agent", { task = "look around", preset = "read" }) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "It looked around." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	local session = handle.sessions.current()
+	session.send("send someone to look")
+	harness.settle(30)
+
+	local parent, child
+	for _, entry in ipairs(chatRequests(harness)) do
+		if tostring(entry.body):find("You are a subagent", 1, true) then
+			child = child or entry
+		else
+			parent = parent or entry
+		end
+	end
+	truthy("the parent made a request", parent ~= nil)
+	truthy("and so did the child", child ~= nil)
+	contains("the parent asked for a stream", parent.body, '"stream":true')
+	contains("and the child asked for one too", child.body, '"stream":true')
+	contains("including the usage block it is asked for", child.body, "include_usage")
+	check("the child's report still came back",
+		session.ctx.messages[#session.ctx.messages].content, "It looked around.")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- The two switches this section is about are settings, and a setting nobody can reach
+-- is not one. Nothing else in this suite mounts the Settings panel, so a mistyped
+-- control here would have surfaced first on a real client.
+scenario("the new agent switches are reachable from Settings", function()
+	local harness, handle = bootWith({ provider = false })
+	handle.show("settings")
+	harness.settle(3)
+
+	local shown = harness.textOf()
+	contains("the step limit still has its row", shown, "Step limit")
+	contains("the unlimited switch is there", shown, "Unlimited tool calls")
+	contains("saying what still bounds it", shown, "Stop still apply")
+	contains("and the subagent ceiling has a row", shown, "Parallel subagents")
+	truthy("the ceiling is on a named track",
+		harness.byName("Slider_agent.subagentConcurrency") ~= nil)
+
+	local config = handle.config
+	check("the switch starts off", config.get("agent.unlimitedTurns"), false)
+	config.set("agent.unlimitedTurns", true)
+	check("and persists when turned on", config.get("agent.unlimitedTurns"), true)
+	check("the ceiling has a default", config.get("agent.subagentConcurrency"), 8)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+	check("nothing was warned", #harness.console.warnings, 0,
+		table.concat(harness.console.warnings, "\n"))
 end)
 
 -- 18. Persistence ----------------------------------------------------------

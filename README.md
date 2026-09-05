@@ -17,9 +17,16 @@ takes a context table and adds that script's own instructions and hooks.
 
 **A real agent loop.** Streaming, parallel tool calls, retry with backoff that
 honours `Retry-After`, provider fallback, automatic context compaction with a
-summary, permission gating, hooks, a task list, persistent memory, subagents,
-token and cost accounting, abort, and a request log. Every stage emits an event,
-and the interface is a subscriber -- the loop never touches a GUI.
+summary, permission gating, hooks, a task list, persistent memory, subagents that
+run several at a time, token and cost accounting, abort, and a request log. Every
+stage emits an event, and the interface is a subscriber -- the loop never touches a
+GUI.
+
+A turn stops after twenty-four tool rounds by default, which is there to catch a
+runaway rather than to end the work; **Unlimited tool calls** in Settings removes
+that ceiling and the fifteen-minute turn deadline with it, leaving the repeat
+breaker, each tool's own timeout and Stop as what bounds a turn. Subagents keep
+their own step and time budgets either way.
 
 **Any provider.** A provider is a base URL, an auth style, a key and a model.
 Presets exist for the common hosts, and "Custom endpoint" takes anything that
@@ -79,7 +86,7 @@ fails the build on a violation.
 ```bash
 luajit test/check.lua      # lint, parse and link all 65 modules
 luajit tools/bundle.lua    # src/ + init.lua -> dist/uai.lua
-luajit test/run.lua        # 45 scenarios against the built bundle
+luajit test/run.lua        # 51 scenarios against the built bundle
 ```
 
 `test/run.lua` loads `dist/uai.lua` -- the actual artifact -- into a mocked
@@ -90,8 +97,9 @@ enum. The scenarios cover boot, capability degradation, the identity headers on
 the wire, model discovery, the tool loop, parallel calls, SSE assembly, retry,
 provider fallover, permissions, the repeat breaker, abort, context trimming,
 payload shape, argument repair, path traversal, viewport changes, theme changes,
-markdown, subagents, persistence, error surfaces, window drag and resize, and
-overlay interaction.
+markdown, subagents and the parallel dispatch of several at once, the unlimited
+step budget, persistence, error surfaces, window drag and resize, and overlay
+interaction.
 
 ```bash
 luajit test/run.lua identity      # run one scenario
