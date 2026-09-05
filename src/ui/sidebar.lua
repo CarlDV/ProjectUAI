@@ -9,12 +9,15 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local config = env.require("runtime/config")
+	local clock = env.require("runtime/clock")
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
 	local icons = env.require("ui/icons")
 	local overlay = env.require("ui/overlay")
 	local P = env.require("ui/primitives")
+	local C = env.require("ui/controls")
 	local sessions = env.require("agent/session")
+	local subagent = env.require("agent/subagent")
 	local providers = env.require("provider/registry")
 	local place = env.require("runtime/place")
 
@@ -23,6 +26,7 @@ return function(env)
 	-- The panels the "More" row reveals. Chat is not in it: the mode switch above is
 	-- what selects between the conversation and the shared session.
 	local MORE_PANELS = {
+		{ id = "agents", label = "Subagents", icon = "spark" },
 		{ id = "providers", label = "Providers", icon = "sliders" },
 		{ id = "tools", label = "Tools", icon = "worktree" },
 		{ id = "logs", label = "Logs & traces", icon = "document" },
@@ -225,7 +229,15 @@ return function(env)
 					end,
 				})
 				row.icon(entry.icon, 1, selected and theme.color.text or theme.color.textTertiary, ROW_ICON)
-				row.label(entry.label, 2, selected and theme.color.text or theme.color.textSecondary)
+				-- How many subagents are working, on the row that leads to them. A
+				-- dispatch runs for minutes with nothing on screen once its card has
+				-- scrolled away, so the count is the only standing sign of it.
+				local label = entry.label
+				if entry.id == "agents" then
+					local running = #subagent.running()
+					if running > 0 then label = label .. "  " .. tostring(running) end
+				end
+				row.label(label, 2, selected and theme.color.text or theme.color.textSecondary)
 			end
 		end
 
@@ -353,8 +365,24 @@ return function(env)
 							host.openSession(session.id)
 						end,
 					})
-					row.icon(selected and "dot" or "circleHollow", 1,
-						selected and theme.color.accent or theme.color.textTertiary, ROW_ICON)
+					-- A conversation you are not looking at can still be working: leaving
+					-- one does not stop it. The spinner is what says so, and it is the
+					-- reason the list refreshes on every busy transition.
+					if session.busy then
+						local slot = P.frame(row.row, {
+							name = "IconSlot",
+							size = UDim2.fromOffset(ROW_ICON, ROW_ICON),
+							layoutOrder = 1,
+						})
+						C.spinner(slot, {
+							diameter = ROW_ICON,
+							anchor = Vector2.new(0.5, 0.5),
+							position = UDim2.fromScale(0.5, 0.5),
+						})
+					else
+						row.icon(selected and "dot" or "circleHollow", 1,
+							selected and theme.color.accent or theme.color.textTertiary, ROW_ICON)
+					end
 					local titleText = session.title
 					if session.ephemeral then titleText = titleText .. "  (not saved)" end
 					row.label(titleText, 2,
@@ -476,11 +504,20 @@ return function(env)
 			if not sidebar.Parent then return end
 			handle.renderHistory()
 		end)
+		-- The count on the Subagents row. Debounced, because the register changes on
+		-- every tool call a child makes and this rebuilds a list of rows -- and
+		-- debounced rather than throttled so the last change in a burst, which is the
+		-- one that drops the count back to nothing, is not the one that gets dropped.
+		local unsubscribeAgents = subagent.changed:connect(clock.debounce(function()
+			if not sidebar.Parent then return end
+			handle.renderMore()
+		end, 0.3))
 
 		sidebar.Destroying:Connect(function()
 			pcall(unsubscribeSessions)
 			pcall(unsubscribeProviders)
 			pcall(unsubscribePlace)
+			pcall(unsubscribeAgents)
 		end)
 
 		handle.instance = sidebar

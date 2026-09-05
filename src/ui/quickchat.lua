@@ -121,7 +121,13 @@ return function(env)
 		else
 			M.scale.Scale = theme.scale.enter
 			M.scrim.BackgroundTransparency = 1
-			env.tween:Create(M.scale, theme.tween("enter"), { Scale = 1 }):Play()
+			-- Snapped on completion: a card left mid-tween keeps its field laid out at
+			-- 98% of its metrics until the next time it opens.
+			local grow = env.tween:Create(M.scale, theme.tween("enter"), { Scale = 1 })
+			grow.Completed:Connect(function()
+				if M.visible then M.scale.Scale = 1 end
+			end)
+			grow:Play()
 			env.tween:Create(M.scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
 		end
 		-- One frame late: capturing focus in the same frame the surface becomes

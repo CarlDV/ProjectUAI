@@ -236,7 +236,11 @@ return function(env)
 	-- centre line -- a title at the reading measure of 1.6 is 40px of box around 16px
 	-- of glyph, which is why the window header's two lines had one pixel of air above
 	-- and below them.
-	M.line = { tight = 1.2, snug = 1.35, normal = 1.5, reading = 1.6 }
+	-- `code` is the loosest of them on purpose. A block of output is read one line at
+	-- a time, looking for the one that matters, and at the 1.5 the rest of the mono
+	-- text uses, eleven lines of `key: value` arrive as a solid slab -- the gaps
+	-- between the lines are what the eye scans down.
+	M.line = { tight = 1.2, snug = 1.35, normal = 1.5, reading = 1.6, code = 1.85 }
 
 	-- Body text is the one thing in here a person actually reads, so it gets the
 	-- room: 14 on a 1.6 line, which is a reading measure rather than a UI measure.

@@ -357,15 +357,22 @@ return function(env)
 
 		-- Decoration, and the only thing in this interface that is. It has no handler,
 		-- because a mascot that announced "Ready to code!" in a toast was pretending to
-		-- be a control.
+		-- be a control. It does march, though, and what it does is tied to the turn: see
+		-- ui/icons for why that is the one honest thing a mascot can do here.
+		--
+		-- A step larger than iconLarge, which is what the animation needs to read: at
+		-- twenty pixels the hop is three of them and the arms move by five, and nobody
+		-- notices either from a foot away.
+		local mascotSize = theme.size.iconLarge + theme.space.sm
 		local mascotSlot = P.frame(inputHolder, {
 			name = "Mascot",
-			size = UDim2.fromOffset(theme.size.iconLarge + theme.space.xs, theme.size.iconLarge),
+			size = UDim2.fromOffset(mascotSize + theme.space.xs, mascotSize),
 			anchor = Vector2.new(0.5, 1),
 			position = UDim2.new(1, -(theme.size.control + theme.space.xl), 0, theme.space.hair),
 			zIndex = theme.z.raised + 1,
 		})
-		icons.mascot(mascotSlot, theme.size.iconLarge, theme.color.accent)
+		local _, mascot = icons.mascot(mascotSlot, mascotSize, theme.color.accent)
+		composer.mascot = mascot
 
 		local fieldHolder = P.frame(inputRow, {
 			name = "FieldHolder",
@@ -652,6 +659,9 @@ return function(env)
 
 		function composer.setBusy(value)
 			composer.busy = value == true
+			-- The mascot works while the agent does. It is peripheral motion next to the
+			-- field, which is where the eyes are just after sending.
+			if composer.mascot then pcall(composer.mascot.setBusy, composer.busy) end
 			-- ClearAllChildren would take the UICorner that P.button attached along
 			-- with the icon, and since this runs once at build time that is why the
 			-- send button has been square from the moment it existed. Only the drawn

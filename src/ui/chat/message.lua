@@ -19,7 +19,14 @@ return function(env)
 	-- How many lines of a block are shown before it folds. Generous, because the point
 	-- of showing code at all is that it can be read; the fold is for a thousand-line
 	-- file, not for a function.
+	--
+	-- A tool call's listing gets a much tighter one. Sixty lines of Luau between two
+	-- paragraphs is the single largest thing in a transcript, and the model writes one
+	-- of those per call: a turn that ran four scripts pushed the answer it was working
+	-- towards several screens down. Twelve lines is enough to recognise what the call
+	-- is doing, and "Show all N lines" is on the block.
 	local CODE_LINES = 60
+	local TOOL_CODE_LINES = 12
 	local ARG_PREVIEW = 90
 
 	-- Average glyph advance for the mono families, as a fraction of the font size.
@@ -111,7 +118,16 @@ return function(env)
 		if #lines == 0 then lines = { "" } end
 		local numbered = props.numbers ~= false
 		local role = theme.textRole("mono")
-		local lineHeight = math.ceil(role.size * role.line)
+		-- Looser than the rest of the mono text, and the one number in here that both
+		-- labels and the row height have to agree on: the gutter is a separate label
+		-- from the code, so a line height that is not shared puts number 11 beside line
+		-- 9. Everything below reads `codeLine`; nothing recomputes it from the role.
+		local codeLine = theme.line.code
+		local lineHeight = math.ceil(role.size * codeLine)
+		-- Air inside the block. At sm the first line sat against the language bar and
+		-- the last against the bottom edge, which is what makes a block read as cramped
+		-- however much room there is between its lines.
+		local padY = theme.space.md
 
 		local card = P.column(parent, {
 			name = "Code",
@@ -184,7 +200,7 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			gap = 0,
 			alignY = "Top",
-			padding = { top = theme.space.sm, bottom = theme.space.sm },
+			padding = { top = padY, bottom = padY },
 			layoutOrder = 2,
 		})
 
@@ -205,6 +221,7 @@ return function(env)
 				name = "Numbers",
 				text = "",
 				role = "mono",
+				line = codeLine,
 				color = theme.color.codeGutter,
 				align = "Right",
 				alignY = "Top",
@@ -218,7 +235,10 @@ return function(env)
 			size = UDim2.new(0, 0, 1, 0),
 			flex = "Fill",
 			gap = 0,
-			padding = { right = theme.space.md },
+			-- Air on both sides of the code rather than only on the right. Without a
+			-- gutter to hold it off the edge -- a result block, a raw JSON envelope --
+			-- the first character sat on the block's own border.
+			padding = { left = numbered and 0 or theme.space.md, right = theme.space.md },
 			bar = theme.size.scrollbar,
 		})
 		-- Not wrapped, and sized from the text: that is what makes the gutter line up
@@ -228,6 +248,7 @@ return function(env)
 			name = "Source",
 			text = "",
 			role = "mono",
+			line = codeLine,
 			color = theme.color.codeText,
 			alignY = "Top",
 			size = UDim2.new(0, 0, 1, 0),
@@ -236,11 +257,14 @@ return function(env)
 
 		local expanded = false
 		local foldRow
+		-- Where this block folds. A reply's code gets the generous default; a tool
+		-- call's listing passes its own, because there are several of them per turn.
+		local foldAt = math.max(tonumber(props.maxLines) or CODE_LINES, 1)
 
 		local function paint()
 			local shown = lines
-			if not expanded and #lines > CODE_LINES then
-				shown = util.slice(lines, 1, CODE_LINES)
+			if not expanded and #lines > foldAt then
+				shown = util.slice(lines, 1, foldAt)
 			end
 			body.Text = table.concat(shown, "\n")
 			if gutterLabel then
@@ -249,7 +273,7 @@ return function(env)
 				gutterLabel.Text = table.concat(numbers, "\n")
 			end
 			local height = #shown * lineHeight
-			bodyRow.Size = UDim2.new(1, 0, 0, height + theme.space.sm * 2 + theme.size.scrollbar)
+			bodyRow.Size = UDim2.new(1, 0, 0, height + padY * 2 + theme.size.scrollbar)
 			if gutter then gutter.Size = UDim2.fromOffset(gutterWidth, height) end
 			if foldRow then
 				foldRow.setText(expanded
@@ -258,7 +282,7 @@ return function(env)
 			end
 		end
 
-		if #lines > CODE_LINES then
+		if #lines > foldAt then
 			foldRow = P.button(card, {
 				name = "Fold",
 				-- Given its text up front, because P.button only builds a label when it
@@ -362,47 +386,54 @@ return function(env)
 							math.ceil(#item.marker * theme.text.body.size * MONO_RATIO))
 					end
 				end
+				-- The marker is text, in the same role and on the same line height as the
+				-- item beside it, and both are top-aligned inside boxes of that same
+				-- height. That is what makes them line up: two labels with one role, one
+				-- line height and one top edge put their first line on one baseline by
+				-- construction. It used to be a 4px frame centred in a 23px slot next to a
+				-- label centred in its own measured bounds -- two heights computed
+				-- separately, agreeing only by luck, and they did not: every bullet in a
+				-- reply sat low, near the descender of the line it belonged to.
+				local bulletRole = theme.textRole("body")
 				for position, item in ipairs(block.items) do
 					local row = P.row(list, {
 						size = UDim2.new(1, 0, 0, 0),
 						auto = "Y",
-						gap = theme.space.sm,
+						-- Closer to its own text than to the item above it. At sm the gap
+						-- was wider than the mark, which reads as a stray dot rather than
+						-- as the start of a line.
+						gap = theme.space.xs,
 						alignY = "Top",
 						layoutOrder = position,
 					})
 					if (item.depth or 0) > 0 then
 						P.frame(row, {
 							name = "Indent",
-							size = UDim2.fromOffset(item.depth * theme.space.lg, theme.text.body.height),
+							size = UDim2.fromOffset(item.depth * theme.space.lg, bulletRole.height),
 							layoutOrder = 1,
 						})
 					end
-					local slot = P.frame(row, {
+					P.text(row, {
 						name = "Marker",
-						size = UDim2.fromOffset(markerWidth, theme.text.body.height),
+						-- The middle dot rather than a bullet: it is Latin-1, so every family
+						-- the engine offers has it, and at body size a round bullet next to
+						-- 14px text is the loudest thing in the paragraph.
+						text = item.marker or "\194\183",
+						role = "body",
+						line = bulletRole.line,
+						color = theme.color.textTertiary,
+						align = "Right",
+						alignY = "Top",
+						size = UDim2.new(0, markerWidth, 0, bulletRole.height),
 						layoutOrder = 2,
 					})
-					if item.marker then
-						P.text(slot, {
-							text = item.marker,
-							role = "body",
-							color = theme.color.textTertiary,
-							align = "Right",
-							size = UDim2.fromScale(1, 1),
-						})
-					else
-						P.statusDot(slot, {
-							diameter = theme.size.dotSmall,
-							color = theme.color.textTertiary,
-							anchor = Vector2.new(1, 0.5),
-							position = UDim2.fromScale(1, 0.5),
-						})
-					end
 					P.text(row, {
 						text = markdown.inline(item.text),
 						role = "body",
+						line = bulletRole.line,
 						rich = true,
 						wrap = true,
+						alignY = "Top",
 						auto = "Y",
 						size = UDim2.new(0, 0, 0, 0),
 						flex = "Fill",
@@ -671,6 +702,147 @@ return function(env)
 		return util.ellipsis(table.concat(parts, "  \194\183  "), ARG_PREVIEW)
 	end
 
+	-- A run of tool calls, as one block.
+	--
+	-- Every call used to be a top-level row in the transcript, and the transcript puts
+	-- xxl between top-level rows because that gap is what separates a question from the
+	-- reply to it. Eight calls therefore arrived as eight paragraph-spaced lines with
+	-- eight listings hanging off them, which is what makes a turn look like machinery
+	-- with an answer buried in it: the tools were louder than anything the agent said.
+	--
+	-- So consecutive calls go in here instead. Inside, rows are one step apart; the
+	-- block keeps the transcript's own gap to whatever is above and below it. The header
+	-- counts the run and folds it -- automatically once it has finished and there are
+	-- more of them than anyone reads line by line, since a finished run is a receipt.
+	local FOLD_RUN_AT = 4
+
+	function M.toolRun(parent, order)
+		local holder = wrapper(parent, { name = "ToolRun", layoutOrder = order })
+		local card = P.column(holder, {
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.xxs,
+		})
+
+		local header = Instance.new("TextButton", card)
+		header.Name = "RunHeader"
+		header.Text = ""
+		header.AutoButtonColor = false
+		header.BackgroundTransparency = 1
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.rowTight,
+			responsive.minTarget() - theme.space.sm))
+		header.LayoutOrder = 1
+		header.Selectable = true
+		header.Visible = false
+
+		local headerRow = P.row(header, { size = UDim2.fromScale(1, 1), gap = theme.space.xs })
+		local caret = P.frame(headerRow, {
+			name = "Caret",
+			size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+			layoutOrder = 1,
+		})
+		icons.chevron(caret, theme.size.icon, theme.color.textTertiary, "right")
+		local summary = P.text(headerRow, {
+			name = "RunSummary",
+			text = "",
+			role = "caption",
+			color = theme.color.textTertiary,
+			truncate = true,
+			size = UDim2.new(0, 0, 1, 0),
+			flex = "Fill",
+			layoutOrder = 2,
+		})
+		local timing = P.text(headerRow, {
+			name = "RunTiming",
+			text = "",
+			role = "caption",
+			color = theme.color.textTertiary,
+			align = "Right",
+			layoutOrder = 3,
+		})
+		timing.Size = UDim2.fromOffset(theme.size.metaColumn, theme.text.caption.height)
+
+		local rows = P.column(card, {
+			name = "Calls",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			-- One step, not the transcript's paragraph gap: these are lines of one
+			-- list, not separate events.
+			gap = theme.space.xxs,
+			layoutOrder = 2,
+		})
+
+		local handle = { root = holder, rows = rows, calls = 0, settled = 0 }
+		local started = clock.ms()
+		local open = true
+		local folded = false
+		local slot = 0
+
+		-- The next layout order inside the block. Everything that goes in here -- a
+		-- call, the thinking between two calls, a retry notice -- takes one, so the
+		-- block reads in the order it happened.
+		function handle.slot()
+			slot = slot + 1
+			return slot
+		end
+
+		local function paint()
+			local waited = handle.ms or clock.since(started)
+			timing.Text = waited >= 1000 and util.formatDuration(waited) or ""
+			summary.Text = string.format("%s%s",
+				util.pluralise(handle.calls, "tool"),
+				handle.settled < handle.calls
+					and string.format("  \194\183  %d done", handle.settled) or "")
+			-- The header earns its line once there is a run to fold. One call is a row,
+			-- and a fold control above a single line is furniture.
+			header.Visible = handle.calls > 1
+		end
+
+		local function setOpen(value)
+			open = value == true
+			rows.Visible = open
+			caret.Rotation = open and 90 or 0
+		end
+		setOpen(true)
+		header.Activated:Connect(function()
+			-- Once a person has an opinion about this run, the automatic fold stops
+			-- having one.
+			folded = true
+			setOpen(not open)
+		end)
+
+		-- Ticks only while something in the run is outstanding, and stops for good when
+		-- the last result lands.
+		local stop = clock.interval(0.5, function()
+			if handle.settled < handle.calls then paint() end
+		end)
+		holder.Destroying:Connect(function() pcall(stop) end)
+
+		-- Called by the view for each call it puts in here.
+		function handle.opened()
+			handle.calls = handle.calls + 1
+			paint()
+		end
+
+		function handle.closed()
+			handle.settled = handle.settled + 1
+			paint()
+			if handle.settled < handle.calls then return end
+			handle.ms = clock.since(started)
+			pcall(stop)
+			paint()
+			-- A finished run of more than a few calls folds itself away. The header
+			-- keeps the count and the duration, which is what anyone rereading a turn
+			-- wants from it; the rows are one click away.
+			if not folded and handle.calls > FOLD_RUN_AT then
+				folded = true
+				setOpen(false)
+			end
+		end
+
+		return handle
+	end
+
 	-- A tool call row: a disclosure caret, a risk dot, the tool's name, what it is
 	-- doing, how long it took -- and underneath, verbatim, the code it was given.
 	--
@@ -682,7 +854,7 @@ return function(env)
 	-- map it is about to apply -- was reachable only by opening a pane that defaulted
 	-- shut and gave no sign it existed, and what showed instead was ninety characters of
 	-- the JSON envelope. Arguments that are values still live behind the fold; arguments
-	-- that are code do not.
+	-- that are code do not, though they fold at a dozen lines rather than sixty.
 	function M.toolCall(parent, info, order)
 		local holder = wrapper(parent, { name = "Tool", layoutOrder = order })
 		local card = P.column(holder, {
@@ -699,7 +871,10 @@ return function(env)
 		header.Text = ""
 		header.AutoButtonColor = false
 		header.BackgroundTransparency = 1
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row - theme.space.xxs,
+		-- One line of a list rather than a row of its own. At `row` these stacked into
+		-- eight paragraph-height bands per turn; the touch floor still applies, because
+		-- the whole row is the disclosure control.
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.rowTight,
 			responsive.minTarget() - theme.space.sm))
 		header.LayoutOrder = 1
 		header.Selectable = true
@@ -781,6 +956,7 @@ return function(env)
 				M.codeBlock(codeColumn, {
 					text = part.text,
 					lang = part.lang or part.key,
+					maxLines = TOOL_CODE_LINES,
 					layoutOrder = index,
 				})
 			end
@@ -1174,6 +1350,7 @@ return function(env)
 					M.codeBlock(feed, {
 						text = part.text,
 						lang = part.lang or part.key,
+						maxLines = TOOL_CODE_LINES,
 						layoutOrder = nextSlot(),
 					})
 				end

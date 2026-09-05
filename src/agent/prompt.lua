@@ -185,7 +185,10 @@ Style:
 			parts[#parts + 1] = memory
 		end
 
-		local todos = state.todoBlock()
+		-- The plan belongs to the conversation being built for, not to the client. Two
+		-- sessions working at once each keep their own, so this has to be asked for by
+		-- session or the second one's steps arrive in the first one's prompt.
+		local todos = state.todoBlock(opts.session)
 		if todos then
 			parts[#parts + 1] = ""
 			parts[#parts + 1] = "Current task list:"

@@ -12,6 +12,7 @@ return function(env)
 	local config = env.require("runtime/config")
 	local clock = env.require("runtime/clock")
 	local log = env.require("runtime/log")
+	local signal = env.require("runtime/signal")
 	local prompt = env.require("agent/prompt")
 	local session = env.require("agent/session")
 
@@ -27,6 +28,115 @@ return function(env)
 		game = { instance = true, world = true, players = true, gui = true, remotes = true, meta = true },
 		full = nil,
 	}
+
+	-- The register.
+	--
+	-- `live` was a bare counter, which is enough to enforce a ceiling and nothing else:
+	-- there was no way to ask what is running, what it was asked to do, or to stop one
+	-- of them without stopping the whole turn. A dispatch is the longest-lived and least
+	-- visible thing this client does -- minutes of work, its own context, its own tool
+	-- calls, and a transcript card that scrolls away -- so each one gets a record here
+	-- that outlives its card, and the interface reads this rather than the log.
+	--
+	-- Bounded, because a long session dispatches a lot: running records are never
+	-- dropped, finished ones are kept newest-first up to the history limit.
+	local HISTORY = 24
+
+	M.records = {}
+	M.changed = signal.new("subagents")
+
+	local function announceChange()
+		M.changed:fire(M.records)
+	end
+
+	local function trimHistory()
+		local finished = 0
+		for index = #M.records, 1, -1 do
+			local record = M.records[index]
+			if record.status ~= "running" and record.status ~= "queued" then
+				finished = finished + 1
+				if finished > HISTORY then table.remove(M.records, index) end
+			end
+		end
+	end
+
+	local function track(record)
+		record.startedAt = clock.ms()
+		record.status = "queued"
+		record.calls = 0
+		record.finishedCalls = 0
+		record.tools = {}
+		table.insert(M.records, 1, record)
+		trimHistory()
+		announceChange()
+		return record
+	end
+
+	-- Newest first, running before finished: what a panel wants to draw in order.
+	function M.list()
+		local running, done = {}, {}
+		for _, record in ipairs(M.records) do
+			if record.status == "running" or record.status == "queued" then
+				running[#running + 1] = record
+			else
+				done[#done + 1] = record
+			end
+		end
+		local out = {}
+		for _, record in ipairs(running) do out[#out + 1] = record end
+		for _, record in ipairs(done) do out[#out + 1] = record end
+		return out
+	end
+
+	function M.running()
+		local out = {}
+		for _, record in ipairs(M.records) do
+			if record.status == "running" or record.status == "queued" then out[#out + 1] = record end
+		end
+		return out
+	end
+
+	function M.get(id)
+		for _, record in ipairs(M.records) do
+			if record.id == id then return record end
+		end
+		return nil
+	end
+
+	-- Stops one dispatch without stopping the turn that asked for it.
+	--
+	-- The child notices between steps, so this returns before it has actually stopped;
+	-- the record says so until its loop unwinds. There is no way to kill a Luau thread,
+	-- which is why the flag is the mechanism everywhere in this client.
+	function M.stop(id)
+		local record = M.get(id)
+		if not record or not record.session then return false end
+		if record.status ~= "running" and record.status ~= "queued" then return false end
+		record.session.abortFlag = true
+		record.stopping = true
+		announceChange()
+		log.info("subagent", "stop requested for " .. tostring(record.label))
+		return true
+	end
+
+	function M.stopAll()
+		local stopped = 0
+		for _, record in ipairs(M.running()) do
+			if M.stop(record.id) then stopped = stopped + 1 end
+		end
+		return stopped
+	end
+
+	-- Clears the finished ones. Running dispatches are left alone.
+	function M.clearHistory()
+		local kept = {}
+		for _, record in ipairs(M.records) do
+			if record.status == "running" or record.status == "queued" then kept[#kept + 1] = record end
+		end
+		M.records = kept
+		announceChange()
+		return true
+	end
 
 	function M.available(depth)
 		local limit = config.get("agent.subagentDepth", 2)
@@ -120,9 +230,28 @@ return function(env)
 		local label = labelFor(task_text)
 		local groups = M.PRESETS[opts.preset or "read"]
 
+		-- Registered before the queue wait, so a dispatch parked waiting for a slot is
+		-- visible as one rather than looking like nothing happened.
+		local record = track({
+			id = id,
+			label = label,
+			task = task_text,
+			preset = opts.preset or "read",
+			depth = depth,
+			parentId = parent and parent.id or nil,
+			parentTitle = parent and parent.title or nil,
+			turns = opts.turns or config.get("agent.subagentTurns", 14),
+		})
+
 		local budget = waitForSlot(opts.budgetSeconds or M.budgetSeconds(),
 			parent and parent.aborted or nil)
-		if not budget then return nil, "the turn was stopped before this subagent started" end
+		if not budget then
+			record.status = "stopped"
+			record.ms = clock.since(record.startedAt)
+			record.report = "Stopped before it started."
+			announceChange()
+			return nil, "the turn was stopped before this subagent started"
+		end
 
 		local child = session.create({
 			title = "subagent",
@@ -161,6 +290,15 @@ return function(env)
 			parent.emit(kind, payload)
 		end
 
+		-- The record is what the Subagents panel reads, so it is kept whether or not
+		-- there is a parent transcript to narrate into. The subscription below is
+		-- therefore unconditional; only the forwarding inside it is not.
+		record.session = child
+		record.budget = budget
+		record.status = "running"
+		record.startedAt = clock.ms()
+		announceChange()
+
 		if parent then
 			-- Stop has to reach the child. Without this, aborting the turn left every
 			-- dispatched subagent running out its full budget against a conversation
@@ -169,58 +307,72 @@ return function(env)
 			child.aborted = function()
 				return child.abortFlag == true or parentAborted() == true
 			end
-
-			local calls = 0
-			child.events:connect(function(event)
-				if event.kind == "tool:call" then
-					calls = calls + 1
-					announce("subagent:tool", {
-						callId = event.id,
-						name = event.name,
-						risk = event.risk,
-						-- Forwarded whole, and summarised by the view instead.
-						--
-						-- A child session is headless and therefore keeps no log of its own, so
-						-- this event is the only record that the call ever happened. At 160
-						-- characters, whitespace-collapsed, the Luau a subagent executed was
-						-- unrecoverable -- and a subagent is exactly where the long-running code
-						-- in this client gets run. The parent's log is bounded at 400 events,
-						-- which is what caps the cost of keeping it.
-						arguments = tostring(event.arguments or ""),
-						index = calls,
-					})
-				elseif event.kind == "tool:result" or event.kind == "tool:error" then
-					announce("subagent:tool:done", {
-						callId = event.id,
-						name = event.name,
-						ok = event.kind == "tool:result",
-						ms = event.ms,
-						summary = util.ellipsis(tostring(event.text or ""):gsub("%s+", " "), 140),
-						-- The full result as well, for the row that can open. `summary` is what
-						-- the collapsed line shows and stays short.
-						text = tostring(event.text or ""),
-					})
-				elseif event.kind == "assistant:text" then
-					if util.trim(tostring(event.text or "")) ~= "" then
-						announce("subagent:text", { text = util.ellipsis(util.trim(event.text), 400) })
-					end
-				elseif event.kind == "status" then
-					-- "Ready" is the child's own idle text and means nothing on a card that
-					-- reports its finish separately. Dropping it here rather than in the
-					-- view keeps one entry per turn out of the parent's bounded log.
-					if tostring(event.text) ~= "Ready" then
-						announce("subagent:status", { text = tostring(event.text) })
-					end
-				elseif event.kind == "error" then
-					announce("subagent:status", { text = tostring(event.message), bad = true })
-				elseif event.kind == "permission:ask" then
-					-- Nothing is subscribed to a headless session, so a prompt raised
-					-- inside a subagent has to surface on the parent's stream or it
-					-- would sit unanswered until its own deadline.
-					parent.emit("permission:ask", event)
-				end
-			end)
 		end
+
+		local calls = 0
+		child.events:connect(function(event)
+			if event.kind == "tool:call" then
+				calls = calls + 1
+				record.calls = calls
+				record.currentTool = tostring(event.name)
+				-- Names only, and the last twelve of them: the register is read by a
+				-- panel that lists every dispatch in the session, so it cannot hold
+				-- their arguments as well.
+				record.tools[#record.tools + 1] = tostring(event.name)
+				if #record.tools > 12 then table.remove(record.tools, 1) end
+				announceChange()
+				announce("subagent:tool", {
+					callId = event.id,
+					name = event.name,
+					risk = event.risk,
+					-- Forwarded whole, and summarised by the view instead.
+					--
+					-- A child session is headless and therefore keeps no log of its own, so
+					-- this event is the only record that the call ever happened. At 160
+					-- characters, whitespace-collapsed, the Luau a subagent executed was
+					-- unrecoverable -- and a subagent is exactly where the long-running code
+					-- in this client gets run. The parent's log is bounded at 400 events,
+					-- which is what caps the cost of keeping it.
+					arguments = tostring(event.arguments or ""),
+					index = calls,
+				})
+			elseif event.kind == "tool:result" or event.kind == "tool:error" then
+				record.finishedCalls = (record.finishedCalls or 0) + 1
+				announceChange()
+				announce("subagent:tool:done", {
+					callId = event.id,
+					name = event.name,
+					ok = event.kind == "tool:result",
+					ms = event.ms,
+					summary = util.ellipsis(tostring(event.text or ""):gsub("%s+", " "), 140),
+					-- The full result as well, for the row that can open. `summary` is what
+					-- the collapsed line shows and stays short.
+					text = tostring(event.text or ""),
+				})
+			elseif event.kind == "assistant:text" then
+				if util.trim(tostring(event.text or "")) ~= "" then
+					announce("subagent:text", { text = util.ellipsis(util.trim(event.text), 400) })
+				end
+			elseif event.kind == "status" then
+				-- "Ready" is the child's own idle text and means nothing on a card that
+				-- reports its finish separately. Dropping it here rather than in the
+				-- view keeps one entry per turn out of the parent's bounded log.
+				if tostring(event.text) ~= "Ready" then
+					record.statusText = tostring(event.text)
+					announceChange()
+					announce("subagent:status", { text = tostring(event.text) })
+				end
+			elseif event.kind == "error" then
+				record.statusText = tostring(event.message)
+				announceChange()
+				announce("subagent:status", { text = tostring(event.message), bad = true })
+			elseif event.kind == "permission:ask" then
+				-- Nothing is subscribed to a headless session, so a prompt raised
+				-- inside a subagent has to surface on the parent's stream or it
+				-- would sit unanswered until its own deadline.
+				if parent then parent.emit("permission:ask", event) end
+			end
+		end)
 
 		local started = clock.ms()
 		local loop = env.require("agent/loop")
@@ -248,6 +400,11 @@ return function(env)
 		if not ok then
 			log.warn("subagent", "failed", reply)
 			local note = "the subagent failed: " .. util.ellipsis(tostring(reply), 200)
+			record.status = "failed"
+			record.ms = elapsed
+			record.report = note
+			record.currentTool = nil
+			announceChange()
 			announce("subagent:done", { ms = elapsed, ok = false, text = note })
 			return nil, note
 		end
@@ -256,6 +413,15 @@ return function(env)
 		local aborted = child.aborted() == true
 		log.info("subagent", string.format("finished in %s over %d messages%s",
 			util.formatDuration(elapsed), stats.messages, aborted and " (stopped)" or ""))
+
+		record.status = aborted and "stopped" or "done"
+		record.ms = elapsed
+		record.messages = stats.messages
+		record.turnsUsed = stats.turns
+		record.report = tostring(reply)
+		record.currentTool = nil
+		record.stopping = nil
+		announceChange()
 
 		announce("subagent:done", {
 			ms = elapsed,

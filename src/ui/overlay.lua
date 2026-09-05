@@ -242,7 +242,14 @@ return function(env)
 
 		M.open[#M.open + 1] = handle
 		env.tween:Create(scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
-		env.tween:Create(scale, theme.tween("enter"), { Scale = 1 }):Play()
+		-- Snapped on completion. A card left mid-tween sits at 0.98 for as long as it is
+		-- open, which re-lays-out every label inside it at 98% of its metrics -- the same
+		-- family of bug as the window's own scale, one step less visible.
+		local grow = env.tween:Create(scale, theme.tween("enter"), { Scale = 1 })
+		grow.Completed:Connect(function()
+			if not handle.closed then scale.Scale = 1 end
+		end)
+		grow:Play()
 		return handle
 	end
 
@@ -413,7 +420,11 @@ return function(env)
 
 		M.open[#M.open + 1] = handle
 		env.tween:Create(scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
-		env.tween:Create(scale, theme.tween("enter"), { Scale = 1 }):Play()
+		local grow = env.tween:Create(scale, theme.tween("enter"), { Scale = 1 })
+		grow.Completed:Connect(function()
+			if not handle.closed then scale.Scale = 1 end
+		end)
+		grow:Play()
 		return handle
 	end
 

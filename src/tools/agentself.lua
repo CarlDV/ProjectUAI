@@ -30,12 +30,15 @@ return function(env)
 				},
 				required = { "items" },
 			},
-			run = function(args)
-				local items = state.setTodos(args.items)
+			run = function(args, ctx)
+				-- Written to the conversation that asked, not to the client: two
+				-- conversations open at once each keep their own plan.
+				local session = ctx and ctx.session or nil
+				local items = state.setTodos(args.items, session)
 				if #items == 0 then return "Task list cleared." end
-				local counts = state.todoCounts()
+				local counts = state.todoCounts(session)
 				return string.format("Task list set: %d items (%d done, %d active, %d pending).\n%s",
-					counts.total, counts.done, counts.active, counts.pending, state.todoBlock())
+					counts.total, counts.done, counts.active, counts.pending, state.todoBlock(session))
 			end,
 		},
 		{
@@ -43,8 +46,8 @@ return function(env)
 			risk = "read",
 			description = "Read the current task list.",
 			parameters = { type = "object", properties = util.emptyObject(), required = {} },
-			run = function()
-				local block = state.todoBlock()
+			run = function(_, ctx)
+				local block = state.todoBlock(ctx and ctx.session or nil)
 				if not block then return "The task list is empty." end
 				return block
 			end,

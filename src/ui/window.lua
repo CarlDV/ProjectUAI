@@ -37,8 +37,18 @@ return function(env)
 		P.corner(root, theme.radius.xl)
 		local outline = P.stroke(root, theme.color.border)
 
-		local scale = Instance.new("UIScale", root)
-		scale.Scale = theme.scale.enter
+		-- No UIScale on this, deliberately.
+		--
+		-- A CanvasGroup renders every child into one offscreen texture and then draws
+		-- that texture. Drawing it at anything other than 1:1 resamples it -- so a
+		-- UIScale of 0.98 on the way in did not make the window 2% smaller, it made
+		-- every glyph in the entire interface soft for the length of the animation. And
+		-- the scale only returned to 1 when the tween finished: interrupt it by hiding,
+		-- rebuilding for a theme change, or opening twice inside a quarter of a second,
+		-- and the window stayed at 0.98 for the rest of the session, blurry, with
+		-- nothing on screen to explain why. A 2% zoom nobody can see is not worth that;
+		-- the fade below is what a CanvasGroup is actually good at, because it
+		-- composites the whole group at one alpha for free.
 
 		local handle = {
 			root = root,
@@ -71,6 +81,27 @@ return function(env)
 
 		local persistGeometry = clock.debounce(saveGeometry, 0.6)
 
+		-- A size that leaves the window on whole pixels when it is centred.
+		--
+		-- The same texture problem as the scale, from the other direction: this window is
+		-- centred with a 0.5 anchor, so its left edge lands at (available - width) / 2 --
+		-- a half pixel whenever that difference is odd. Roblox then draws the group's
+		-- texture at a half-pixel offset and resamples it, and the whole interface goes
+		-- soft. Nothing about the window changed to cause it, which is what makes it
+		-- baffling from the outside: one pixel of viewport, one drag of the resize grip
+		-- or a restored size with the wrong parity is enough, and it stays that way.
+		--
+		-- So a centred dimension is nudged by one pixel to keep the space around it even.
+		-- Nobody can see the pixel; everybody can see the blur.
+		local function centred(available, wanted, floor)
+			local value = math.floor(wanted)
+			if (math.floor(available) - value) % 2 ~= 0 then
+				if value - 1 >= (floor or 1) then value = value - 1 else value = value + 1 end
+			end
+			return value
+		end
+		handle.centred = centred
+
 		-- Applies the layout for the current mode. Called on open, on a mode change,
 		-- and when the on-screen keyboard appears.
 		function handle.layout(reason)
@@ -79,20 +110,28 @@ return function(env)
 			local viewport = responsive.viewport
 			local topInset = responsive.inset.Y
 			local keyboard = responsive.bottomObstruction()
+			-- The ScreenGui does not ignore the top inset, so the height the window is
+			-- centred inside is the viewport minus it.
+			local availableY = viewport.Y - topInset
 
 			if mode == "sheet" then
 				local available = viewport.Y - topInset - keyboard - theme.space.sm
 				local height = math.min(geometry.height, math.max(available, 220))
 				root.AnchorPoint = Vector2.new(0.5, 1)
-				root.Size = UDim2.new(1, -theme.space.sm * 2, 0, height)
+				-- Width is the full measure less a fixed inset on both sides, so the space
+				-- around it is that inset doubled -- even by construction.
+				root.Size = UDim2.new(1, -theme.space.sm * 2, 0, math.floor(height))
 				root.Position = UDim2.new(0.5, 0, 1, -(keyboard + theme.space.sm))
 			elseif mode == "panel" then
 				root.AnchorPoint = Vector2.new(1, 0)
-				root.Size = UDim2.new(0, geometry.width, 0, math.max(geometry.height - keyboard, 240))
+				root.Size = UDim2.new(0, math.floor(geometry.width),
+					0, math.floor(math.max(geometry.height - keyboard, 240)))
 				root.Position = UDim2.new(1, -theme.space.sm, 0, topInset + theme.space.sm)
 			elseif mode == "tv" then
 				root.AnchorPoint = Vector2.new(0.5, 0.5)
-				root.Size = UDim2.fromOffset(geometry.width, geometry.height)
+				root.Size = UDim2.fromOffset(
+					centred(viewport.X, geometry.width, minWidth),
+					centred(availableY, geometry.height, minHeight))
 				root.Position = UDim2.fromScale(0.5, 0.5)
 			elseif handle.maximised then
 				root.AnchorPoint = Vector2.new(0.5, 0)
@@ -104,7 +143,9 @@ return function(env)
 				if width < minWidth then width = geometry.width end
 				if height < minHeight then height = geometry.height end
 				root.AnchorPoint = Vector2.new(0.5, 0.5)
-				root.Size = UDim2.fromOffset(math.floor(width), math.floor(height))
+				root.Size = UDim2.fromOffset(
+					centred(viewport.X, width, minWidth),
+					centred(availableY, height, minHeight))
 				if config.get("ui.window.placed", false) then
 					root.Position = UDim2.new(0.5, config.get("ui.window.x", 0), 0.5, config.get("ui.window.y", 0))
 					handle.clampIntoView()
@@ -277,9 +318,15 @@ return function(env)
 			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
 			local delta = input.Position - resizeOrigin
 			local viewport = responsive.viewport
+			-- Through `centred` for the same reason the layout is: the window is centred
+			-- while it is being resized, so a width one pixel out of parity puts the
+			-- group's texture on a half pixel and softens every glyph in it. Dragging the
+			-- grip was the easiest way to land there.
 			root.Size = UDim2.fromOffset(
-				math.floor(util.clamp(startSize.X + delta.X * 2, minWidth, viewport.X - theme.space.md * 2)),
-				math.floor(util.clamp(startSize.Y + delta.Y * 2, minHeight, viewport.Y - theme.space.md * 2)))
+				centred(viewport.X,
+					util.clamp(startSize.X + delta.X * 2, minWidth, viewport.X - theme.space.md * 2), minWidth),
+				centred(viewport.Y - responsive.inset.Y,
+					util.clamp(startSize.Y + delta.Y * 2, minHeight, viewport.Y - theme.space.md * 2), minHeight))
 		end))
 
 		function handle.setMaximised(value)
@@ -304,8 +351,14 @@ return function(env)
 			handle.visible = true
 			handle.layout("show")
 			root.Visible = true
-			env.tween:Create(root, theme.tween("enter"), { GroupTransparency = 0 }):Play()
-			env.tween:Create(scale, theme.tween("enter"), { Scale = 1 }):Play()
+			-- Snapped to the goal on completion. An interrupted fade on a CanvasGroup
+			-- leaves the whole window part-transparent, and the group is the only thing
+			-- between the interface and the game behind it.
+			local fade = env.tween:Create(root, theme.tween("enter"), { GroupTransparency = 0 })
+			fade.Completed:Connect(function()
+				if handle.visible then root.GroupTransparency = 0 end
+			end)
+			fade:Play()
 			if handle.onShow then pcall(handle.onShow) end
 		end
 
@@ -313,7 +366,6 @@ return function(env)
 			if not handle.visible then return end
 			handle.visible = false
 			local fade = env.tween:Create(root, theme.tween("exit"), { GroupTransparency = 1 })
-			env.tween:Create(scale, theme.tween("exit"), { Scale = theme.scale.enter }):Play()
 			fade.Completed:Connect(function()
 				if not handle.visible then root.Visible = false end
 			end)

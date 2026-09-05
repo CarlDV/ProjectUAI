@@ -200,6 +200,9 @@ return function(env)
 				systemText = prompt.build({
 					model = record and record.model or nil,
 					provider = record and record.label or nil,
+					-- Which conversation this is for. The task list rides on the session,
+					-- so a prompt built without it is built without the plan.
+					session = session,
 				})
 			end
 

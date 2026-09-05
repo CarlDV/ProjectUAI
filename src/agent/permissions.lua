@@ -126,6 +126,10 @@ return function(env)
 
 		local id = util.uid("perm")
 		local answered, allowed, remembered = false, false, false
+		-- Which conversation is waiting. A prompt is per-session state -- the thread
+		-- parked on it belongs to one turn -- and sweeping the whole table when any
+		-- turn ended is what made a second conversation unusable.
+		local session = ctx and ctx.session or nil
 
 		local function resolve(decision, remember)
 			if answered then return end
@@ -138,7 +142,13 @@ return function(env)
 			end
 		end
 
-		M.pending[id] = { tool = tool, args = args, at = clock.ms(), resolve = resolve }
+		M.pending[id] = {
+			tool = tool,
+			args = args,
+			at = clock.ms(),
+			session = session,
+			resolve = resolve,
+		}
 
 		if ctx and ctx.emit then
 			ctx.emit("permission:ask", {
@@ -170,18 +180,36 @@ return function(env)
 		return allowed, remembered and "remembered" or "asked"
 	end
 
-	-- Called when a session is torn down mid-prompt: an unanswered request must not
-	-- leave a thread parked forever.
-	function M.denyAll(reason)
-		for _, entry in pairs(M.pending) do
-			entry.resolve(false, false)
+	-- Called when a turn ends mid-prompt: an unanswered request must not leave a
+	-- thread parked forever.
+	--
+	-- Scoped to one conversation when it is given one. Without that, every turn that
+	-- finished anywhere in the client refused whatever another conversation was
+	-- waiting on -- and the model on the other end is told the user said no, so it
+	-- stops asking and works around a refusal that never happened. A nil session
+	-- still clears everything, which is what an unload wants.
+	function M.denyAll(reason, session)
+		local swept = 0
+		for id, entry in pairs(M.pending) do
+			if session == nil or entry.session == session then
+				M.pending[id] = nil
+				entry.resolve(false, false)
+				swept = swept + 1
+			end
 		end
-		M.pending = {}
-		if reason then log.info("permissions", "cleared pending prompts: " .. reason) end
+		if reason and swept > 0 then
+			log.info("permissions", "cleared " .. tostring(swept) .. " pending prompt(s): " .. reason)
+		end
+		return swept
 	end
 
-	function M.pendingCount()
-		return util.count(M.pending)
+	function M.pendingCount(session)
+		if session == nil then return util.count(M.pending) end
+		local total = 0
+		for _, entry in pairs(M.pending) do
+			if entry.session == session then total = total + 1 end
+		end
+		return total
 	end
 
 	return M

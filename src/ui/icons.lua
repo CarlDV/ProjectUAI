@@ -294,29 +294,171 @@ return function(env)
 		return frame
 	end
 
-	-- Claude Code Retro Mascot: pixel-art crab/robot character
+	-- Claude Code Retro Mascot: pixel-art crab/robot character.
+	--
+	-- It marches. A static sprite perched on the composer is a sticker, and a sprite
+	-- that only breathes two pixels is a sticker somebody nudged -- at twenty pixels
+	-- nobody notices it. So this is the arcade animation the shape is quoting: a
+	-- two-frame invader. The whole body hops and rocks, the feet alternate, the arms
+	-- pull in and push out on the same beat, the antennae swing against it, and the
+	-- eyes glance and blink.
+	--
+	-- It is the only decoration in this interface, so what it does is tied to something
+	-- true rather than invented: while a turn is running it marches at roughly twice the
+	-- speed with wider swings, which makes it a second, peripheral answer to "is it
+	-- still going?" for someone whose eyes are on the field they just typed in.
+	--
+	-- Returns the frame, and a handle for the state. Reduced motion gets the sprite and
+	-- nothing else: the handle is still there and still answers, it simply does not move.
+	local MARCH = { idle = 0.9, busy = 0.4 }
+	local HOP = { idle = 3, busy = 4 }
+	local ROCK = { idle = 5, busy = 9 }
+	local TILT = { idle = 16, busy = 30 }
+	local BLINK = { idle = 2.4, busy = 0.9 }
+
 	function M.mascot(parent, size, colour)
 		local frame = holder(parent, size, "IconMascot")
 		local tint = colour or theme.color.accent
 		local bg = theme.color.canvas
 
 		-- Antennae
-		bar(frame, { size = UDim2.fromScale(0.12, 0.16), color = tint, position = UDim2.fromScale(0.26, 0.16), radius = 0 })
-		bar(frame, { size = UDim2.fromScale(0.12, 0.16), color = tint, position = UDim2.fromScale(0.74, 0.16), radius = 0 })
+		local leftAntenna = bar(frame, { size = UDim2.fromScale(0.12, 0.16), color = tint, position = UDim2.fromScale(0.26, 0.16), radius = 0 })
+		local rightAntenna = bar(frame, { size = UDim2.fromScale(0.12, 0.16), color = tint, position = UDim2.fromScale(0.74, 0.16), radius = 0 })
 
 		-- Head / upper body
 		bar(frame, { size = UDim2.fromScale(0.68, 0.28), color = tint, position = UDim2.fromScale(0.5, 0.38), radius = 0 })
 		-- Inset eyes
-		bar(frame, { size = UDim2.fromScale(0.12, 0.12), color = bg, position = UDim2.fromScale(0.34, 0.38), radius = 0, zIndex = 3 })
-		bar(frame, { size = UDim2.fromScale(0.12, 0.12), color = bg, position = UDim2.fromScale(0.66, 0.38), radius = 0, zIndex = 3 })
+		local leftEye = bar(frame, { size = UDim2.fromScale(0.12, 0.12), color = bg, position = UDim2.fromScale(0.34, 0.38), radius = 0, zIndex = 3 })
+		local rightEye = bar(frame, { size = UDim2.fromScale(0.12, 0.12), color = bg, position = UDim2.fromScale(0.66, 0.38), radius = 0, zIndex = 3 })
 
 		-- Mid body & arms
-		bar(frame, { size = UDim2.fromScale(0.88, 0.22), color = tint, position = UDim2.fromScale(0.5, 0.6), radius = 0 })
+		local arms = bar(frame, { size = UDim2.fromScale(0.88, 0.22), color = tint, position = UDim2.fromScale(0.5, 0.6), radius = 0 })
 
 		-- Feet
-		bar(frame, { size = UDim2.fromScale(0.15, 0.16), color = tint, position = UDim2.fromScale(0.24, 0.8), radius = 0 })
-		bar(frame, { size = UDim2.fromScale(0.15, 0.16), color = tint, position = UDim2.fromScale(0.76, 0.8), radius = 0 })
-		return frame
+		local leftFoot = bar(frame, { size = UDim2.fromScale(0.15, 0.16), color = tint, position = UDim2.fromScale(0.24, 0.8), radius = 0 })
+		local rightFoot = bar(frame, { size = UDim2.fromScale(0.15, 0.16), color = tint, position = UDim2.fromScale(0.76, 0.8), radius = 0 })
+
+		local responsive = env.require("ui/responsive")
+		local clock = env.require("runtime/clock")
+		local handle = { instance = frame, busy = false }
+		local tweens, stopBlink = {}, nil
+
+		-- Where every moving part sits when nothing is playing. Kept rather than
+		-- recomputed, because reduced motion has to be able to put the sprite back
+		-- exactly, and a reversing tween that is cancelled mid-arc leaves it anywhere.
+		local rest = {
+			{ part = frame, key = "Position", value = UDim2.fromScale(0.5, 0.5) },
+			{ part = frame, key = "Rotation", value = 0 },
+			{ part = leftAntenna, key = "Rotation", value = 0 },
+			{ part = rightAntenna, key = "Rotation", value = 0 },
+			{ part = arms, key = "Size", value = UDim2.fromScale(0.88, 0.22) },
+			{ part = leftFoot, key = "Position", value = UDim2.fromScale(0.24, 0.8) },
+			{ part = rightFoot, key = "Position", value = UDim2.fromScale(0.76, 0.8) },
+			{ part = leftEye, key = "Position", value = UDim2.fromScale(0.34, 0.38) },
+			{ part = rightEye, key = "Position", value = UDim2.fromScale(0.66, 0.38) },
+			{ part = leftEye, key = "BackgroundTransparency", value = 0 },
+			{ part = rightEye, key = "BackgroundTransparency", value = 0 },
+		}
+
+		local function settle()
+			for _, entry in ipairs(rest) do entry.part[entry.key] = entry.value end
+		end
+
+		local function clearMotion()
+			for _, tween in ipairs(tweens) do pcall(function() tween:Cancel() end) end
+			tweens = {}
+			if stopBlink then
+				pcall(stopBlink)
+				stopBlink = nil
+			end
+		end
+
+		-- One repeating, reversing tween per part. Reversing is what makes two frames out
+		-- of one tween: the goal is the second frame, and the way back is the first.
+		local function play(part, info, goals)
+			local tween = env.tween:Create(part, info, goals)
+			tween:Play()
+			tweens[#tweens + 1] = tween
+			return tween
+		end
+
+		local function animate()
+			clearMotion()
+			settle()
+			if responsive.reduceMotion then return end
+
+			local key = handle.busy and "busy" or "idle"
+			local beat = MARCH[key]
+			local step = TweenInfo.new(beat, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+			-- The body's own beat is half the march, so it lands on both feet rather than
+			-- floating over the pair of them.
+			local hop = TweenInfo.new(beat / 2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, -1, true)
+
+			-- The hop, in offset rather than scale so it is the same movement at every
+			-- icon size, and the rock, which is what stops the hop reading as a lift.
+			frame.Rotation = -ROCK[key]
+			play(frame, hop, { Position = UDim2.new(0.5, 0, 0.5, -HOP[key]) })
+			play(frame, step, { Rotation = ROCK[key] })
+
+			-- The feet alternate: they start level and go to different heights, so one
+			-- reversing tween gives left-down-right-up and back again.
+			play(leftFoot, step, { Position = UDim2.fromScale(0.2, 0.88) })
+			play(rightFoot, step, { Position = UDim2.fromScale(0.8, 0.71) })
+
+			-- Arms in and out on the same beat. The widest thing on the sprite changing
+			-- width by a quarter is the part that carries at this size.
+			play(arms, step, { Size = UDim2.fromScale(0.62, 0.22) })
+
+			-- The antennae swing against the rock, on a beat of their own so the whole
+			-- thing does not read as one rigid object being waggled.
+			local sway = TweenInfo.new(beat * 1.35, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+			leftAntenna.Rotation = TILT[key] * 0.5
+			rightAntenna.Rotation = -TILT[key] * 0.5
+			play(leftAntenna, sway, { Rotation = -TILT[key] })
+			play(rightAntenna, sway, { Rotation = TILT[key] })
+
+			-- A slow glance, which is the one thing that makes it read as looking at you
+			-- rather than vibrating.
+			local glance = TweenInfo.new(beat * 3.1, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, -1, true)
+			play(leftEye, glance, { Position = UDim2.fromScale(0.38, 0.38) })
+			play(rightEye, glance, { Position = UDim2.fromScale(0.7, 0.38) })
+
+			-- Blinking is a timer rather than a tween: an eye is two frames of the body
+			-- colour showing through, and that is a step, not a fade. Twice, quickly,
+			-- because one four-pixel square going dark for a moment is easy to miss.
+			stopBlink = clock.interval(BLINK[key], function()
+				if not frame.Parent then return end
+				local function shut(closed)
+					leftEye.BackgroundTransparency = closed and 1 or 0
+					rightEye.BackgroundTransparency = closed and 1 or 0
+				end
+				shut(true)
+				clock.delay(0.09, function()
+					shut(false)
+					clock.delay(0.09, function()
+						shut(true)
+						clock.delay(0.09, function() shut(false) end)
+					end)
+				end)
+			end)
+		end
+
+		function handle.setBusy(value)
+			local wanted = value == true
+			if wanted == handle.busy then return handle end
+			handle.busy = wanted
+			animate()
+			return handle
+		end
+
+		function handle.stop()
+			clearMotion()
+			settle()
+		end
+
+		animate()
+		frame.Destroying:Connect(clearMotion)
+		return frame, handle
 	end
 
 	function M.enter(parent, size, colour)

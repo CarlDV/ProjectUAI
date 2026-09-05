@@ -95,6 +95,15 @@ return function(env)
 		threads = {},
 		activeId = nil,
 		listChanged = signal.new("threads"),
+		-- Every event from every session, with the session it came from.
+		--
+		-- A per-session stream is what a panel showing one conversation wants, and it is
+		-- what the transcript uses. It is the wrong shape for anything that has to answer
+		-- a conversation nobody is looking at -- and the permission prompt is exactly
+		-- that: it subscribed to the active session only, so a second conversation left
+		-- running in the background raised a prompt into a stream with no listener and sat
+		-- there until its own deadline denied every call it had asked for.
+		anyEvent = signal.new("session:any"),
 	}
 
 	function M.create(opts)
@@ -126,6 +135,9 @@ return function(env)
 			turns = 0,
 			abortFlag = false,
 			log = {},
+			-- The plan for this conversation's job. agent/state owns the shape of it;
+			-- the list lives here so two conversations cannot overwrite each other's.
+			todos = {},
 		}
 
 		-- Every event is mirrored into a bounded per-session log so a panel opened
@@ -143,6 +155,7 @@ return function(env)
 			end
 			hooks.run("onEvent", { session = session, event = payload })
 			session.events:fire(payload)
+			M.anyEvent:fire(session, payload)
 		end
 
 		function session.aborted()
@@ -167,6 +180,9 @@ return function(env)
 		-- Runs on its own thread so the interface stays responsive, and guards
 		-- against re-entry: two prompts in flight would interleave tool results
 		-- into one transcript.
+		--
+		-- Two conversations may run at once, though -- that is the point of threads --
+		-- so everything in here that reaches outside the session has to name it.
 		function session.send(text, onDone)
 			local clean = util.trim(text)
 			if clean == "" then return false, "nothing to send" end
@@ -177,15 +193,21 @@ return function(env)
 			session.turns = session.turns + 1
 			if session.title == "New chat" and not session.named then
 				session.title = util.ellipsis(clean, 42)
-				M.listChanged:fire()
 			end
 			session.emit("user", { text = clean })
+			-- The list is where "this one is still working" is visible while you are
+			-- reading another conversation, so a busy flag that moves is a list change.
+			M.listChanged:fire()
 
 			task.spawn(function()
 				local loop = env.require("agent/loop")
 				local ok, reply = pcall(loop.run, session, clean)
 				session.busy = false
-				permissions.denyAll()
+				-- Only this conversation's prompts. It used to clear every pending
+				-- request in the client, so one conversation finishing a turn silently
+				-- denied whatever another was waiting on -- and a denied write is
+				-- reported to that model as the user refusing it.
+				permissions.denyAll(nil, session)
 				if not ok then
 					log.error("session", "loop crashed", reply)
 					session.emit("error", { message = "Internal error: " .. tostring(reply), fatal = true })
@@ -193,6 +215,7 @@ return function(env)
 					reply = "Something went wrong inside the agent: " .. tostring(reply)
 				end
 				M.persist(session)
+				M.listChanged:fire()
 				if onDone then pcall(onDone, reply) end
 			end)
 			return true
@@ -202,7 +225,7 @@ return function(env)
 			if not session.busy then return false end
 			session.abortFlag = true
 			session.emit("status", { text = "Stopping" })
-			permissions.denyAll("aborted")
+			permissions.denyAll("aborted", session)
 			return true
 		end
 
@@ -211,6 +234,8 @@ return function(env)
 			session.log = {}
 			session.turns = 0
 			session.title = "New chat"
+			-- The plan goes with the conversation it belonged to.
+			state.clearTodos(session)
 			session.emit("cleared", {})
 			session.emit("status", { text = "Ready" })
 			M.persist(session)
@@ -247,7 +272,7 @@ return function(env)
 			local stats = session.ctx.stats()
 			stats.busy = session.busy
 			stats.turns = session.turns
-			stats.todos = state.todoCounts()
+			stats.todos = state.todoCounts(session)
 			return stats
 		end
 
@@ -282,6 +307,24 @@ return function(env)
 		for _, session in pairs(M.threads) do out[#out + 1] = session end
 		table.sort(out, function(a, b) return (a.updatedAt or 0) > (b.updatedAt or 0) end)
 		return out
+	end
+
+	-- The conversations currently running a turn, newest activity first.
+	--
+	-- Switching conversation does not stop the one you left -- its loop is on its own
+	-- thread and keeps going -- so more than one can be working at a time, and the
+	-- interface needs to be able to say which. Anything that reads "is the agent
+	-- busy" from the active session alone is asking the wrong question.
+	function M.busy()
+		local out = {}
+		for _, session in ipairs(M.list()) do
+			if session.busy then out[#out + 1] = session end
+		end
+		return out
+	end
+
+	function M.busyCount()
+		return #M.busy()
 	end
 
 	-- Conversations grouped by the place they happened in, most recently used group

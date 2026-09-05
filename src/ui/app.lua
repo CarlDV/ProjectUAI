@@ -29,6 +29,7 @@ return function(env)
 	local PANELS = {
 		{ id = "chat", label = "Chat", icon = "code" },
 		{ id = "cowork", label = "Cowork", icon = "terminal" },
+		{ id = "agents", label = "Subagents", icon = "spark" },
 		{ id = "providers", label = "Providers", icon = "sliders" },
 		{ id = "tools", label = "Tools", icon = "worktree" },
 		{ id = "settings", label = "Settings", icon = "gear" },
@@ -141,6 +142,23 @@ return function(env)
 			if not ok or not held then return end
 			M.showSettingsDialog("general")
 		end), "app.settingsShortcut")
+
+		-- Any conversation working is worth the launcher's dot, not just the open one:
+		-- switching conversation does not stop the one you left. The list fires on every
+		-- busy transition, which is what makes this cheap. Turning the dot off is
+		-- `show`'s job, so a turn that finished while the window was closed still says so.
+		dispose.add(sessions.listChanged:connect(function()
+			if not M.window then return end
+			if sessions.busyCount() > 0 and not M.window.visible then
+				M.setLauncherBusy(true)
+			end
+			M.syncNav()
+		end), "app.busyPulse")
+
+		-- The prompt watch is client-wide and starts with the interface, so a
+		-- conversation that asks for permission before anything has been opened is still
+		-- answered.
+		env.require("ui/panels/permission").watch()
 
 		log.info("app", "interface mounted in " .. tostring(container.Name) .. " as " .. responsive.mode)
 		return M
@@ -496,7 +514,10 @@ return function(env)
 			gap = 0,
 		})
 
-		panel.todos = env.require("ui/chat/todo").new(column, { layoutOrder = 1 })
+		panel.todos = env.require("ui/chat/todo").new(column, {
+			layoutOrder = 1,
+			session = sessions.current(),
+		})
 
 		local middle = P.frame(column, {
 			name = "TranscriptHolder",
@@ -540,6 +561,7 @@ return function(env)
 	local BUILDERS = {
 		chat = buildChatPanel,
 		cowork = function(parent) return env.require("ui/panels/cowork").new(parent) end,
+		agents = function(parent) return env.require("ui/panels/agents").new(parent) end,
 		providers = function(parent) return env.require("ui/panels/providers").new(parent) end,
 		tools = function(parent) return env.require("ui/panels/tools").new(parent) end,
 		settings = function(parent) return env.require("ui/panels/settings").new(parent) end,
@@ -687,6 +709,13 @@ return function(env)
 				parts[#parts + 1] = model ~= "" and (record.label .. "  " .. model) or record.label
 			else
 				parts[#parts + 1] = "no provider"
+			end
+			-- More than one conversation running is the fact this header was missing:
+			-- with the transcript showing one of them, nothing else on screen said the
+			-- others were still going.
+			local working = sessions.busyCount()
+			if working > 1 or (working == 1 and not session.busy) then
+				parts[#parts + 1] = util.pluralise(working, "conversation") .. " working"
 			end
 			M.subtitleLabel.Text = table.concat(parts, "  \194\183  ")
 		end
@@ -972,7 +1001,11 @@ return function(env)
 	function M.attachSession()
 		local session = sessions.current()
 		if M.chatPanel and M.chatPanel.view then M.chatPanel.view.attach(session) end
-		env.require("ui/panels/permission").attach(session)
+		-- The plan the strip shows belongs to this conversation, so it moves with it.
+		if M.chatPanel and M.chatPanel.todos then M.chatPanel.todos.attach(session) end
+		-- Starts the client-wide prompt watch. It is not per-session any more: a
+		-- conversation left running in the background still has to be able to ask.
+		env.require("ui/panels/permission").watch()
 
 		if M.sessionUnsubscribe then M.sessionUnsubscribe() end
 		M.sessionUnsubscribe = session.events:connect(function(event)

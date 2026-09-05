@@ -165,9 +165,16 @@ local function start()
 		destroy = function()
 			if not handle.alive then return 0 end
 			handle.alive = false
-			-- A turn in flight is stopped first, so no reply arrives to a transcript
-			-- that has already gone.
-			pcall(function() sessions.current().abort() end)
+			-- Every turn in flight is stopped, not just the one on screen: conversations
+			-- run on their own threads and more than one can be working, so aborting the
+			-- active session alone left the others to finish into a transcript that had
+			-- already been destroyed.
+			for _, session in ipairs(sessions.list()) do
+				pcall(session.abort)
+			end
+			-- Anything delegated is stopped with them. A subagent outlives the step that
+			-- dispatched it by design, and its budget is measured in minutes.
+			pcall(function() env.require("agent/subagent").stopAll() end)
 			local ran, failed = env.require("runtime/dispose").drain()
 			pcall(function() app.screen:Destroy() end)
 			pcall(function() config.saveNow() end)

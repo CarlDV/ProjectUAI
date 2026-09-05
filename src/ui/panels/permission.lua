@@ -3,6 +3,13 @@
 -- The loop blocks on a thread while this is open, so it has to be reliable: one
 -- prompt at a time, queued, and always resolved -- closing it counts as a refusal.
 -- An unresolved prompt would park the agent until its own timeout.
+--
+-- It listens to every conversation rather than to the open one. It used to attach to
+-- whichever session the transcript was showing, which meant a second conversation
+-- left running in the background asked for permission into a stream nobody was
+-- subscribed to: no prompt appeared, its three-minute deadline expired, and every
+-- write it had planned came back to the model as a refusal. Since a prompt can now
+-- arrive from a conversation that is not on screen, the modal says which one.
 return function(env)
 	local util = env.require("runtime/util")
 	local theme = env.require("ui/theme")
@@ -49,11 +56,33 @@ return function(env)
 			return
 		end
 
-		P.badge(modal.content, {
+		local badgeRow = P.row(modal.content, {
+			name = "Asking",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.xs,
+			layoutOrder = 1,
+		})
+		P.badge(badgeRow, {
 			text = tostring(request.risk or "write"),
 			tone = RISK_TONE[request.risk or "write"] or "warn",
 			layoutOrder = 1,
 		})
+		-- Which conversation is asking. With one prompt queue serving every open
+		-- conversation, "Allow run_luau?" on its own does not say whose turn it
+		-- belongs to -- and answering the wrong one is not recoverable.
+		if request.sessionTitle then
+			P.text(badgeRow, {
+				name = "AskingIn",
+				text = "in " .. tostring(request.sessionTitle),
+				role = "caption",
+				color = theme.color.textTertiary,
+				truncate = true,
+				size = UDim2.new(0, 0, 0, theme.text.caption.height),
+				flex = "Fill",
+				layoutOrder = 2,
+			})
+		end
 
 		if request.description then
 			local description = P.text(modal.content, {
@@ -119,7 +148,12 @@ return function(env)
 		})
 		switch.instance.LayoutOrder = 2
 
+		-- Named, like every other control that decides something. Two buttons both
+		-- called "Button" is unreadable from a dump and unreachable from a test, and
+		-- this is the one dialog in the client where pressing the wrong one is not
+		-- recoverable.
 		P.button(modal.footer, {
+			name = "PermissionDeny",
 			text = "Deny",
 			variant = "ghost",
 			size = "sm",
@@ -129,6 +163,7 @@ return function(env)
 			end,
 		})
 		P.button(modal.footer, {
+			name = "PermissionAllow",
 			text = "Allow",
 			variant = request.risk == "danger" and "danger" or "primary",
 			size = "sm",
@@ -141,22 +176,46 @@ return function(env)
 		})
 	end
 
-	-- Subscribes to a session. Safe to call again on a new session; the old
-	-- subscription is dropped.
-	function M.attach(session)
-		if M.unsubscribe then
-			M.unsubscribe()
-			M.unsubscribe = nil
+	-- Watches every conversation in the client.
+	--
+	-- `attach` is kept because the app calls it whenever the open conversation changes,
+	-- but it no longer decides what is heard: the subscription is to the session
+	-- module's own fan-out, made once and never dropped, so a prompt from a
+	-- conversation nobody is looking at still reaches the screen.
+	local function onEvent(session, event)
+		if event.kind ~= "permission:ask" then return end
+		-- A subagent is headless and its prompts are forwarded onto its parent's
+		-- stream by agent/subagent, so the child's own copy would be a second modal
+		-- for one decision.
+		if session and session.headless then return end
+		local request = {
+			id = event.id,
+			name = event.name,
+			risk = event.risk,
+			description = event.description,
+			args = event.args,
+			resolve = event.resolve,
+			sessionTitle = session and session.title or nil,
+		}
+		if M.showing then
+			M.queue[#M.queue + 1] = request
+		else
+			present(request)
 		end
-		if not session then return end
-		M.unsubscribe = session.events:connect(function(event)
-			if event.kind ~= "permission:ask" then return end
-			if M.showing then
-				M.queue[#M.queue + 1] = event
-			else
-				present(event)
-			end
-		end)
+	end
+
+	function M.watch()
+		if M.watching then return M end
+		local sessions = env.require("agent/session")
+		M.watching = env.require("runtime/dispose").add(
+			sessions.anyEvent:connect(onEvent), "permission.watch")
+		return M
+	end
+
+	-- Kept for the app, which calls it on every conversation switch. Starting the
+	-- global watch is all it has left to do.
+	function M.attach()
+		return M.watch()
 	end
 
 	return M

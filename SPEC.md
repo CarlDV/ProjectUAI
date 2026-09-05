@@ -171,8 +171,33 @@ stamped by `session.emit`.
 | `abort` | `{}` |
 
 The task list does not travel on this stream: `agent/state` owns it and publishes
-`todosChanged`, because the list outlives a turn and a panel opened later has to
-be able to read it rather than replay it.
+`todosChanged(items, session)`, because the list outlives a turn and a panel opened
+later has to be able to read it rather than replay it. The list itself lives on the
+session (`session.todos`), so `setTodos`, `todoCounts`, `todoBlock` and `todoList`
+all take the session they are about and the subscriber filters on the second
+argument. A client-wide list is not an option: two conversations can run at once,
+and one plan for both means a running turn resumes against somebody else's steps.
+
+`agent/session.anyEvent` fires `(session, payload)` for every event of every
+session. A surface that must answer a conversation nobody is looking at subscribes
+there rather than to `session.events`; `ui/panels/permission` is the case that
+requires it, since a prompt raised by a background conversation has to reach the
+screen or its own deadline denies every call behind it. Subscribers must skip
+`session.headless` -- a subagent's prompts are forwarded onto its parent's stream,
+so the child's own copy is a duplicate.
+
+Pending permission requests are per-session too. `permissions.request` records the
+asking session on the entry, `denyAll(reason, session)` sweeps only that
+conversation's prompts, and `pendingCount(session)` counts them. `denyAll()` with
+no session still clears everything, which is what an unload wants.
+
+Every dispatch is registered in `agent/subagent`: `records` (running first, finished
+history capped at 24), the `changed` signal, `list`, `running`, `get`, `stop(id)`,
+`stopAll` and `clearHistory`. A record carries `id, label, task, preset, depth,
+parentId, parentTitle, startedAt, status, calls, finishedCalls, tools, currentTool,
+statusText, ms, messages, report` and the child `session` that `stop` sets
+`abortFlag` on. `status` is one of `queued`, `running`, `done`, `stopped`, `failed`.
+A stop is noticed between steps, not on the instant -- Luau cannot kill a thread.
 
 Each session mirrors the stream into a bounded `session.log` (400 events), and the
 transcript is a pure function of that log — `view.attach` replays it, which is what
@@ -261,6 +286,26 @@ A clickable row uses `P.rowButton`: the button *is* the row and the layout goes
 inside it. A transparent full-size button dropped in beside a row's contents does
 not layer over them -- a `UIListLayout` gives it a slot of its own and pushes them
 past the row's edge, where they are still drawn because nothing clips them.
+
+The window root is a `CanvasGroup`, which brings one rule with it: **it is never drawn
+at anything other than 1:1.** The group renders every child into an offscreen texture
+and then draws that texture, so any scale or fractional offset resamples it and the
+whole interface -- every glyph in it -- goes soft at once, with nothing on screen to
+explain why. Two consequences, both asserted in `test/run.lua`:
+
+* No `UIScale` on the group. The 0.98-to-1 entrance blurred the window for the length
+  of the animation and left it blurry permanently if the tween was interrupted by a
+  hide, a rebuild or a second open. `GroupTransparency` is the entrance instead, which
+  is the one thing a CanvasGroup composites for free.
+* A centred dimension keeps the space around it even. With a 0.5 anchor, an odd
+  difference between the viewport and the window puts the left edge on a half pixel, so
+  `handle.centred` nudges the size by one pixel -- in the layout and in the resize grip.
+  Nobody can see the pixel; everybody can see the blur.
+
+Entrance scales on plain frames (the modal card, the settings dialog, quick chat) are
+allowed -- a `UIScale` there re-lays-out rather than resampling -- but each one snaps to
+exactly 1 on `Completed`, because an interrupted tween otherwise leaves the surface
+laid out at 98% of its own metrics for as long as it is open.
 
 Breakpoints: `xs < 520`, `sm < 900`, `md < 1280`, `lg < 1700`, `xl`. Layout modes:
 `sheet` (xs), `panel` (sm, and any portrait orientation), `window` (md+), plus `tv`

@@ -3,6 +3,11 @@
 -- The model keeps a plan; this is where the user can see it. It collapses to a
 -- single line when there is nothing active, because a permanent panel for a
 -- three-item list wastes the height a phone does not have.
+--
+-- It shows one conversation's plan: the strip is attached to a session, and a change
+-- announced for a different one is ignored. Before, the store held a single list for
+-- the whole client, so opening a second conversation replaced what this was showing
+-- with that conversation's steps.
 return function(env)
 	local util = env.require("runtime/util")
 	local theme = env.require("ui/theme")
@@ -90,6 +95,8 @@ return function(env)
 			caret.Rotation = open and 90 or 0
 		end)
 
+		local handle = { shell = shell, session = nil }
+
 		local function rebuild(items)
 			for _, child in ipairs(list:GetChildren()) do
 				if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then child:Destroy() end
@@ -101,7 +108,7 @@ return function(env)
 			end
 			shell.Visible = true
 
-			local counts = state.todoCounts()
+			local counts = state.todoCounts(handle.session)
 			local activeText
 			for _, item in ipairs(items) do
 				if item.status == "active" then activeText = item.text end
@@ -152,16 +159,29 @@ return function(env)
 			end
 		end
 
-		local unsubscribe = state.todosChanged:connect(rebuild)
-		rebuild(state.todos)
+		-- A change announced for another conversation is somebody else's plan.
+		local unsubscribe = state.todosChanged:connect(function(items, session)
+			if session ~= nil and session ~= handle.session then return end
+			rebuild(items)
+		end)
 
-		return {
-			shell = shell,
-			destroy = function()
-				unsubscribe()
-				pcall(function() shell:Destroy() end)
-			end,
-		}
+		-- Points the strip at a conversation and paints its plan. Called on every
+		-- switch, so folding state resets with the list it belonged to.
+		function handle.attach(session)
+			handle.session = session
+			open = false
+			list.Visible = false
+			caret.Rotation = 0
+			rebuild(state.todoList(session))
+		end
+
+		function handle.destroy()
+			unsubscribe()
+			pcall(function() shell:Destroy() end)
+		end
+
+		handle.attach(props.session)
+		return handle
 	end
 
 	return M

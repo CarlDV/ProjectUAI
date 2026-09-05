@@ -66,11 +66,35 @@ cannot quietly make something unreadable.
 **Every listing the model produced, in the transcript.** A tool call that carries
 code -- the Luau it is about to execute, the body it is about to write to a file, the
 property map it is about to apply -- draws it under the row as numbered, horizontally
-scrolled, copyable monospace, outside the fold and on by default. Long blocks fold
-with a control that opens them rather than a sentence saying how much was hidden. The
+scrolled, copyable monospace, outside the fold and on by default. A call's listing
+folds at a dozen lines rather than sixty, because a turn produces several of them and
+the answer they were working towards has to stay on screen. Long blocks fold with a
+control that opens them rather than a sentence saying how much was hidden. The
 remaining arguments and the result sit behind the row's own caret, and a failure opens
 its own. Subagents forward their calls whole, so work delegated to a child is as
 readable as work done in the main conversation.
+
+**A turn's machinery is one block, not a wall.** The calls, the thinking between them
+and any retry notice go into a single activity block with tight lines inside it and a
+paragraph of air around it -- so a turn that called eight tools reads as one thing
+that happened rather than as eight events with the reply lost at the bottom. The
+header counts the run and its duration, and a finished run of more than four folds
+itself away behind that line; anything still outstanding keeps it open.
+
+**Conversations run at the same time.** Switching conversation does not stop the one
+you left: its loop is on its own thread, the sidebar spins on it while it works, the
+header says how many are going, and the launcher's dot pulses with the window closed.
+Each conversation keeps its own task list, and a permission prompt raised by one that
+is not on screen still appears -- named with the conversation that is asking, rather
+than timing out three minutes later and reporting to that model that you refused.
+
+**Subagents are managed, not just watched.** The Subagents panel is the register: every
+dispatch this session made, running ones first, with the task, which conversation asked,
+what it is allowed to touch, the tools it has called, how long it has been going, and a
+stop for each one that does not stop the turn that dispatched it. Finished dispatches
+stay with their report. The four ceilings -- budget, how many run at once, steps per
+subagent, and how deep delegation may go -- are on the same panel, and the last two had
+no control anywhere before it.
 
 A sidebar holds the conversations, grouped by the place each happened in, with
 search across their transcripts and two arrows that walk where you have been. It

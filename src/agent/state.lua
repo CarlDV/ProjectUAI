@@ -4,6 +4,14 @@
 -- Both are model-writable, which is the point -- a long task survives context
 -- compaction because the plan is not in the transcript -- and both are bounded,
 -- because a model given an unbounded store will fill it.
+--
+-- Memory is the client's, deliberately: a fact about the person using it is not a
+-- fact about one conversation. A task list is the opposite -- it is the plan for
+-- the job in front of it -- so it lives on the session, which is what lets two
+-- conversations work at once. It did not, and one global list was the whole bug:
+-- starting a second conversation replaced the first one's plan in the strip *and*
+-- in the system prompt it was about to be sent, so a running turn resumed against
+-- somebody else's steps.
 return function(env)
 	local util = env.require("runtime/util")
 	local config = env.require("runtime/config")
@@ -15,7 +23,6 @@ return function(env)
 	local MEMORY_VALUE_CAP = 600
 
 	local M = {
-		todos = {},
 		todosChanged = signal.new("todos"),
 		memoryChanged = signal.new("memory"),
 	}
@@ -24,10 +31,26 @@ return function(env)
 
 	local STATUS = { pending = true, active = true, done = true, dropped = true }
 
+	-- Where a list lives when there is no session in scope. Nothing in the client
+	-- reaches this any more; it exists so a caller that loses its session writes
+	-- somewhere harmless rather than raising, and so a test can drive the store
+	-- without building a session.
+	local orphan = { todos = {} }
+
+	local function holderFor(session)
+		if type(session) ~= "table" then return orphan end
+		session.todos = session.todos or {}
+		return session
+	end
+
+	function M.todoList(session)
+		return holderFor(session).todos
+	end
+
 	-- The whole list is replaced rather than patched. A model that edits one item
 	-- at a time drifts out of sync with its own plan; handing back the full list
 	-- every time keeps the transcript and the panel identical.
-	function M.setTodos(items)
+	function M.setTodos(items, session)
 		local out = {}
 		for index, item in ipairs(items or {}) do
 			if index > TODO_LIMIT then break end
@@ -43,31 +66,37 @@ return function(env)
 				}
 			end
 		end
-		M.todos = out
-		M.todosChanged:fire(out)
+		local holder = holderFor(session)
+		holder.todos = out
+		-- The session goes with the list, so a strip showing one conversation can
+		-- ignore another conversation's plan instead of painting it.
+		M.todosChanged:fire(out, holder ~= orphan and holder or nil)
 		return out
 	end
 
-	function M.todoCounts()
-		local counts = { pending = 0, active = 0, done = 0, dropped = 0, total = #M.todos }
-		for _, item in ipairs(M.todos) do
+	function M.todoCounts(session)
+		local list = M.todoList(session)
+		local counts = { pending = 0, active = 0, done = 0, dropped = 0, total = #list }
+		for _, item in ipairs(list) do
 			counts[item.status] = (counts[item.status] or 0) + 1
 		end
 		return counts
 	end
 
-	function M.clearTodos()
-		M.todos = {}
-		M.todosChanged:fire({})
+	function M.clearTodos(session)
+		local holder = holderFor(session)
+		holder.todos = {}
+		M.todosChanged:fire({}, holder ~= orphan and holder or nil)
 	end
 
 	-- Rendered into the system prompt each turn so the plan cannot be forgotten,
 	-- and into the transcript panel for the user.
-	function M.todoBlock()
-		if #M.todos == 0 then return nil end
+	function M.todoBlock(session)
+		local list = M.todoList(session)
+		if #list == 0 then return nil end
 		local marks = { pending = "[ ]", active = "[>]", done = "[x]", dropped = "[-]" }
 		local lines = {}
-		for _, item in ipairs(M.todos) do
+		for _, item in ipairs(list) do
 			lines[#lines + 1] = string.format("%s %s", marks[item.status] or "[ ]", item.text)
 		end
 		return table.concat(lines, "\n")

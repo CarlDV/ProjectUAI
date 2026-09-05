@@ -1016,6 +1016,15 @@ return function(env)
 		R.number(agent, "Parallel subagents",
 			"Subagents alive at once across the whole tree. Several dispatched in one step run together; this is the ceiling on how many, including the ones a subagent starts itself. Anything over it waits for a slot.",
 			"agent.subagentConcurrency", 1, 12, 1)
+		-- Two ceilings that had no control anywhere: the only way to change either was
+		-- to edit config.json, which for the depth cap means the only switch that can
+		-- turn delegation off entirely was unreachable.
+		R.number(agent, "Subagent steps",
+			"Tool rounds one subagent may take before it has to answer the parent with what it has.",
+			"agent.subagentTurns", 1, 30, 1)
+		R.number(agent, "Delegation depth",
+			"How many levels of subagent are allowed. A subagent given the full tool set can dispatch its own; at 0 the agent cannot dispatch at all and does the work in the conversation instead. The Subagents panel lists what is running under these limits.",
+			"agent.subagentDepth", 0, 4, 1)
 		R.number(agent, "Context budget",
 			"Estimated tokens kept before older turns are summarised. Set it against the model's own window, not this client: a million-token model can hold the whole session.",
 			"agent.contextTokens", BUDGET_STOPS)

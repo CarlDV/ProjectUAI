@@ -38,6 +38,10 @@ return function(env)
 			tools = {},
 			agents = {},
 			working = nil,
+			-- The open activity block, if the transcript is mid-run. Tool calls, the
+			-- thinking between them and the notices they raise all go inside it; prose
+			-- from either side closes it.
+			run = nil,
 			agentHandle = nil,
 			session = nil,
 			unsubscribe = nil,
@@ -60,6 +64,37 @@ return function(env)
 		local function nextOrder()
 			view.order = view.order + 1
 			return view.order
+		end
+
+		-- The activity block.
+		--
+		-- A turn's machinery -- the calls, the thinking between them, a retry notice --
+		-- used to be a stack of top-level rows, and the transcript deliberately puts a
+		-- paragraph's worth of air between top-level rows. Eight calls therefore read as
+		-- eight separate events with the reply lost at the bottom, which is the "too much
+		-- tool call" this fixes: one block, one paragraph gap around it, tight lines
+		-- inside, and a header that folds the whole run once it has finished.
+		--
+		-- Only prose closes it, because prose is what a run is between. Closing on
+		-- reasoning instead would give a step-per-call turn one block per call and change
+		-- nothing, and putting a later row above an earlier one is not an option: the
+		-- block takes its layout order when it opens, so anything that has to sort after
+		-- the rows already in it has to go in it.
+		local function openRun()
+			if not view.run then
+				view.run = message.toolRun(scroll.instance, nextOrder())
+			end
+			return view.run
+		end
+
+		local function closeRun()
+			view.run = nil
+		end
+
+		-- Where a row belongs: inside the open block, or in the transcript itself.
+		local function target()
+			if view.run then return view.run.rows, view.run.slot() end
+			return scroll.instance, nextOrder()
 		end
 
 		local function clearWorking()
@@ -149,6 +184,7 @@ return function(env)
 			view.tools = {}
 			view.agents = {}
 			view.working = nil
+			view.run = nil
 			view.agentHandle = nil
 			view.pinned = true
 		end
@@ -183,6 +219,7 @@ return function(env)
 			if event.kind == "user" then
 				stopReveal(true)
 				clearWorking()
+				closeRun()
 				if view.welcomeCard then
 					pcall(function() view.welcomeCard:Destroy() end)
 					view.welcomeCard = nil
@@ -206,12 +243,14 @@ return function(env)
 				ensureWorking().set("Contacting " .. tostring(event.provider))
 				follow()
 			elseif event.kind == "assistant:reasoning" then
-				message.reasoning(scroll.instance, event.text, nextOrder())
+				local into, order = target()
+				message.reasoning(into, event.text, order)
 				follow()
 			elseif event.kind == "assistant:text" then
 				if util.trim(event.text) ~= "" then
 					stopReveal(true)
 					clearWorking()
+					closeRun()
 					revealAgent(event.text)
 					follow()
 				end
@@ -221,7 +260,10 @@ return function(env)
 				-- below the tool rows instead of being destroyed and rebuilt -- which
 				-- restarted the spinner's phase and left the following request with no
 				-- indicator at all.
-				local handle = message.toolCall(scroll.instance, event, nextOrder())
+				local run = openRun()
+				local handle = message.toolCall(run.rows, event, run.slot())
+				handle.run = run
+				run.opened()
 				view.tools[event.id or util.uid("tool")] = handle
 				follow()
 			elseif event.kind == "tool:progress" then
@@ -233,12 +275,14 @@ return function(env)
 				local handle = view.tools[event.id]
 				if handle then
 					handle.finish(event)
+					if handle.run then handle.run.closed() end
 					view.tools[event.id] = nil
 				else
-					message.notice(scroll.instance, {
+					local into, order = target()
+					message.notice(into, {
 						tone = event.kind == "tool:error" and "bad" or "info",
 						text = string.format("%s: %s", tostring(event.name), util.ellipsis(event.text, 200)),
-					}, nextOrder())
+					}, order)
 				end
 				follow()
 			elseif event.kind == "subagent:start" then
@@ -247,9 +291,12 @@ return function(env)
 				-- next to its own tool row. Standalone if the row is gone, which happens
 				-- when the log has been trimmed past it.
 				local host = event.call and view.tools[event.call] or nil
-				local into = (host and host.nest) and host.nest() or scroll.instance
-				view.agents[event.id] = message.subagent(into, event,
-					host and 1 or nextOrder(), { nested = host ~= nil })
+				if host and host.nest then
+					view.agents[event.id] = message.subagent(host.nest(), event, 1, { nested = true })
+				else
+					local into, order = target()
+					view.agents[event.id] = message.subagent(into, event, order, {})
+				end
 				follow()
 			elseif event.kind == "subagent:status" then
 				local handle = view.agents[event.id]
@@ -277,28 +324,32 @@ return function(env)
 					follow()
 				end
 			elseif event.kind == "request:retry" then
-				message.notice(scroll.instance, {
+				local into, order = target()
+				message.notice(into, {
 					tone = "warn",
 					text = string.format("%s: %s, retrying in %.1fs (attempt %d of %d)",
 						tostring(event.provider), tostring(event.reason), event.wait or 0,
 						event.attempt or 1, event.attempts or 1),
-				}, nextOrder())
+				}, order)
 				follow()
 			elseif event.kind == "provider:switch" then
-				message.notice(scroll.instance, {
+				local into, order = target()
+				message.notice(into, {
 					tone = "warn",
 					text = string.format("%s failed, trying %s", tostring(event.from), tostring(event.to)),
-				}, nextOrder())
+				}, order)
 				follow()
 			elseif event.kind == "compact" then
-				message.notice(scroll.instance, {
+				local into, order = target()
+				message.notice(into, {
 					tone = "info",
 					text = "Older turns were summarised to stay inside the context budget.",
-				}, nextOrder())
+				}, order)
 				follow()
 			elseif event.kind == "error" then
 				stopReveal(true)
 				clearWorking()
+				closeRun()
 				message.notice(scroll.instance, {
 					tone = "bad",
 					text = tostring(event.message),
@@ -307,6 +358,7 @@ return function(env)
 			elseif event.kind == "abort" then
 				stopReveal(true)
 				clearWorking()
+				closeRun()
 				message.notice(scroll.instance, { tone = "warn", text = "Stopped." }, nextOrder())
 				follow()
 			elseif event.kind == "cleared" then
@@ -343,8 +395,12 @@ return function(env)
 			-- in flight, so only a settled one is swept.
 			if not session.busy then
 				clearWorking()
+				closeRun()
 				for id, handle in pairs(view.tools) do
 					if handle.stale then pcall(handle.stale) end
+					-- The block the row sits in is counting outstanding calls, and a row
+					-- swept as stale is one it will never see a result for.
+					if handle.run then pcall(handle.run.closed) end
 					view.tools[id] = nil
 				end
 				for id, handle in pairs(view.agents) do

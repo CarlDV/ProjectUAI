@@ -1713,6 +1713,13 @@ scenario("the new agent switches are reachable from Settings", function()
 	contains("and the subagent ceiling has a row", shown, "Parallel subagents")
 	truthy("the ceiling is on a named track",
 		harness.byName("Slider_agent.subagentConcurrency") ~= nil)
+	-- The two that had no control at all: a config key nothing can write is a setting
+	-- only the file has.
+	contains("the per-subagent step limit has one now", shown, "Subagent steps")
+	truthy("on its own track", harness.byName("Slider_agent.subagentTurns") ~= nil)
+	contains("and so does the depth cap", shown, "Delegation depth")
+	truthy("which is the switch that can turn delegation off",
+		harness.byName("Slider_agent.subagentDepth") ~= nil)
 
 	local config = handle.config
 	check("the switch starts off", config.get("agent.unlimitedTurns"), false)
@@ -1944,7 +1951,7 @@ scenario("every panel builds cleanly", function()
 	-- Visiting all five panels exercises most of the component set. The mock
 	-- type-checks every property assignment, so this is where a wrong value type --
 	-- a number handed to Size because a prop table overloaded the name -- surfaces.
-	for _, panel in ipairs({ "providers", "tools", "settings", "logs", "cowork", "chat" }) do
+	for _, panel in ipairs({ "providers", "tools", "settings", "logs", "cowork", "agents", "chat" }) do
 		handle.app.show(panel)
 		harness.settle(1)
 		truthy(panel .. " panel built", handle.app.panels[panel] ~= nil)
@@ -2055,7 +2062,7 @@ scenario("the built interface holds its layout invariants", function()
 	-- unconfigured one renders the empty states, and they share almost no labels.
 	for _, configured in ipairs({ true, false }) do
 		local harness, handle = bootWith({ provider = configured })
-		for _, panel in ipairs({ "providers", "tools", "settings", "logs", "cowork", "chat" }) do
+		for _, panel in ipairs({ "providers", "tools", "settings", "logs", "cowork", "agents", "chat" }) do
 			handle.app.show(panel)
 			harness.settle(1)
 			sweep(harness)
@@ -3747,10 +3754,424 @@ scenario("orphaned tool calls and results are repaired before they go out", func
 	check("the wire payload has no orphans", unmatched, 0)
 end)
 
+-- 41. Two conversations at once --------------------------------------------
+
+-- What this locks in: opening a second conversation does not break the first one.
+-- Three things were client-wide that are not: the task list the model keeps, the
+-- pending permission prompts, and which conversation the prompt dialog listens to.
+-- The consequences were, in order: a running turn resumed against somebody else's
+-- plan; a turn finishing anywhere refused whatever another was waiting on; and a
+-- prompt raised by a conversation that was not on screen was never shown at all, so
+-- after three minutes every call it had planned came back as a refusal.
+scenario("two conversations work at the same time", function()
+	-- Counted per conversation rather than matched on tool names: every tool the
+	-- client has is listed in the definitions on every request, so a body always
+	-- contains "todo_write".
+	local steps = { alpha = 0, bravo = 0 }
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			local body = tostring(entry.body)
+			local who = body:find("the alpha job", 1, true) and "alpha" or "bravo"
+			steps[who] = steps[who] + 1
+			local step = steps[who]
+			if step == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall(who .. "1", "todo_write", {
+						items = { { text = who .. " step one", status = "active" } },
+					}) },
+				}) }
+			end
+			if who == "alpha" and step == 2 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("a2", "instance_create", {
+						class = "Folder", name = "AlphaMade", parent = "Workspace",
+					}) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({
+				content = who == "alpha" and "Alpha is done." or "Bravo is done.",
+			}) }
+		end,
+	})
+	handle.config.set("permissions.mode", "ask")
+
+	local state = handle.env.require("agent/state")
+	local permissions = handle.env.require("agent/permissions")
+
+	local alpha = handle.sessions.current()
+	alpha.rename("Alpha")
+	alpha.send("the alpha job")
+	harness.settle(8)
+
+	truthy("the first conversation is parked on a prompt", permissions.pendingCount(alpha) == 1)
+	truthy("and is still busy while it waits", alpha.busy == true)
+
+	-- The second conversation, opened and run while the first waits.
+	local bravo = handle.sessions.newThread()
+	bravo.rename("Bravo")
+	handle.app.openSession(bravo.id)
+	harness.settle(1)
+	bravo.send("the bravo job")
+	harness.settle(10)
+
+	check("the second conversation answered", bravo.busy, false)
+	contains("with its own reply", bravo.ctx.messages[#bravo.ctx.messages].content, "Bravo is done")
+
+	-- One: the plans did not overwrite each other.
+	local alphaTodos = state.todoList(alpha)
+	local bravoTodos = state.todoList(bravo)
+	check("each conversation kept one task", #alphaTodos, 1)
+	check("its own", #bravoTodos, 1)
+	contains("the first one's plan survived the second", alphaTodos[1].text, "alpha step one")
+	contains("and the second has its own", bravoTodos[1].text, "bravo step one")
+
+	-- Two: finishing a turn did not sweep the other conversation's prompt.
+	check("the first conversation is still waiting to be asked", permissions.pendingCount(alpha), 1)
+	truthy("and still running", alpha.busy == true)
+
+	-- Three: the prompt is on screen even though the other conversation is open.
+	local shown = harness.textOf()
+	contains("the prompt names the tool", shown, "Allow instance_create?")
+	contains("and says which conversation is asking", shown, "in Alpha")
+
+	local allow = harness.byName("PermissionAllow")
+	truthy("with an allow control", allow ~= nil)
+	harness.click(allow)
+	harness.settle(10)
+
+	truthy("answering it lets the first conversation finish",
+		harness.workspace:FindFirstChild("AlphaMade") ~= nil, harness.dump(harness.workspace))
+	check("and it is no longer busy", alpha.busy, false)
+	contains("with its own reply", alpha.ctx.messages[#alpha.ctx.messages].content, "Alpha is done")
+	check("nothing is left pending", permissions.pendingCount(), 0)
+
+	-- The strip shows the conversation on screen, not the last plan written anywhere.
+	handle.app.openSession(alpha.id)
+	harness.settle(2)
+	contains("the task strip follows the conversation", harness.textOf(harness.byName("Todos")),
+		"alpha step one")
+	handle.app.openSession(bravo.id)
+	harness.settle(2)
+	contains("both ways", harness.textOf(harness.byName("Todos")), "bravo step one")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 42. Managing subagents ---------------------------------------------------
+
+-- A dispatch is the longest-lived and least visible thing this client does: minutes of
+-- work on its own context, its own tool calls, and -- until this -- one card in one
+-- conversation's transcript. There was no register, so nothing could answer "what is
+-- running", and no way to stop one child short of stopping the whole turn.
+scenario("a dispatch is registered, watched and stopped", function()
+	local parentStep = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			local body = tostring(entry.body)
+			if body:find("You are a subagent", 1, true) then
+				-- Keeps working until something stops it, which is what makes it
+				-- observable in the register and worth having a stop for.
+				return { StatusCode = 200, delay = 1, Body = chatBody({
+					toolCalls = { toolCall("c" .. tostring(math.random(1, 1000000)), "players_list", {}) },
+				}) }
+			end
+			parentStep = parentStep + 1
+			if parentStep == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("d1", "dispatch_agent", {
+						task = "sweep the place for doors", preset = "read",
+					}) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "It was stopped before it answered." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	local subagent = handle.env.require("agent/subagent")
+	local session = handle.sessions.current()
+	session.send("find every door")
+	harness.settle(6)
+
+	local running = subagent.running()
+	check("the dispatch is in the register", #running, 1)
+	local record = running[1]
+	contains("labelled with its task", record.label, "sweep the place")
+	check("marked as running", record.status, "running")
+	check("attributed to the conversation that asked", record.parentTitle, session.title)
+	truthy("with the tools it has called", #record.tools > 0, tostring(#record.tools))
+
+	-- The panel is the register, drawn.
+	handle.app.show("agents")
+	harness.settle(2)
+	local panel = harness.byName("Agents")
+	truthy("the panel is built", panel ~= nil)
+	local shown = harness.textOf(panel)
+	contains("the task is on screen", shown, "sweep the place")
+	contains("with the capacity in use", shown, "1 of ")
+	contains("and what it is allowed to touch", shown, "read tools")
+	-- The ceilings are stated where the dispatches are, and changed in one place: two
+	-- sets of sliders for one key can disagree, and one of them is always stale.
+	contains("the limits in force are stated", shown, "of delegation")
+	truthy("with a way to change them", harness.byName("OpenAgentSettings", panel) ~= nil)
+
+	local stop = harness.byName("Stop", panel)
+	truthy("a stop control is offered", stop ~= nil)
+	harness.click(stop)
+	harness.settle(1)
+	-- The flag is the mechanism: Luau cannot kill a thread, so the child notices
+	-- between steps and this is what it notices.
+	truthy("the stop reached the child", record.session ~= nil and record.session.abortFlag == true)
+	harness.settle(20)
+
+	check("nothing is left running", #subagent.running(), 0)
+	check("the record says it was stopped", record.status, "stopped")
+	truthy("and how long it ran for", (record.ms or 0) > 0)
+
+	-- The turn that dispatched it was not stopped with it: that is the whole point of
+	-- a per-dispatch control.
+	check("the conversation finished on its own", session.busy, false)
+	local reports = {}
+	for _, message in ipairs(session.ctx.messages) do
+		if message.role == "tool" then reports[#reports + 1] = message end
+	end
+	check("the parent was handed a report", #reports, 1)
+	contains("saying it stopped early", reports[1].content, "stopped early")
+	contains("and the conversation answered", session.ctx.messages[#session.ctx.messages].content,
+		"stopped before it answered")
+
+	handle.app.show("agents")
+	harness.settle(2)
+	contains("the panel keeps it afterwards", harness.textOf(harness.byName("Agents")), "stopped")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 43. Transcript density ---------------------------------------------------
+
+-- Every tool call used to be a top-level row, and the transcript puts a paragraph of
+-- air between top-level rows because that gap is what separates a question from its
+-- answer. A turn that called eight tools therefore arrived as eight paragraph-spaced
+-- lines with eight listings hanging off them: the machinery was louder than anything
+-- the agent said, which is what "too bloated with a lot of tool calls" looks like.
+scenario("a turn's tool calls arrive as one foldable block", function()
+	local step = 0
+	-- Five different lookups rather than the same one five times: identical calls are
+	-- what the repeat breaker exists to stop, and it would end the run at three.
+	local paths = { "Workspace", "Players", "Lighting", "ReplicatedStorage", "SoundService" }
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			step = step + 1
+			if step <= #paths then
+				return { StatusCode = 200, Body = chatBody({
+					reasoning = "Checking " .. paths[step] .. ".",
+					toolCalls = { toolCall("t" .. tostring(step), "instance_get",
+						{ path = paths[step] }) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Five looks at the tree." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+	handle.sessions.current().send("look at the tree five times")
+	harness.settle(20)
+
+	local runs = harness.allByName("ToolRun")
+	check("the whole run is one block", #runs, 1)
+	local rows = harness.allByName("Tool", runs[1])
+	check("holding every call", #rows, 5)
+	check("and nothing is left at the top level", #harness.allByName("Tool", harness.byName("Transcript"))
+		- #rows, 0)
+
+	-- The thinking between calls goes in with them, in order: a row that sorted after
+	-- the block would read as though it happened after the work it came before.
+	truthy("the thinking between calls is inside it too",
+		#harness.allByName("Reasoning", runs[1]) > 0)
+
+	local header = harness.byName("RunHeader", runs[1])
+	truthy("the block has a header", header ~= nil)
+	contains("counting the run", harness.textOf(header), "5 tools")
+
+	local calls = harness.byName("Calls", runs[1])
+	check("a finished run of this size folds itself away", calls.Visible, false)
+	harness.click(header)
+	check("and the header opens it again", calls.Visible, true)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 44. The mascot -----------------------------------------------------------
+
+-- The one piece of decoration in this interface, and the only place something is
+-- alive. It was a static sprite; a static sprite perched on the composer is a
+-- sticker. What it does is tied to the turn rather than invented, which is the only
+-- honest thing a mascot can do here -- and reduced motion gets the sprite and
+-- nothing else, like every other animation in the client.
+scenario("the mascot is alive and answers reduced motion", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			return { StatusCode = 200, delay = 4, Body = chatBody({ content = "Done." }) }
+		end,
+	})
+	harness.settle(2)
+
+	local sprite = harness.byName("IconMascot")
+	truthy("the mascot is on the composer", sprite ~= nil)
+	-- The mock applies a tween's goal immediately, so a sprite that is marching sits at
+	-- the top of its hop, rocked over, with its feet apart and its arms pulled in.
+	truthy("it is off the ground", sprite.Position.Y.Offset < 0, tostring(sprite.Position.Y.Offset))
+	truthy("and rocking", sprite.Rotation ~= 0, tostring(sprite.Rotation))
+
+	local mascot = handle.app.chatPanel.composer.mascot
+	truthy("the composer holds its handle", mascot ~= nil)
+	check("resting while nothing is happening", mascot.busy, false)
+
+	handle.sessions.current().send("take your time")
+	harness.settle(1)
+	check("working while the turn is", mascot.busy, true)
+	harness.settle(12)
+	check("and resting again afterwards", mascot.busy, false)
+
+	-- Reduced motion: the sprite stays, the motion goes -- and it goes back to the
+	-- frame it was drawn in rather than wherever a cancelled tween left it.
+	handle.config.set("ui.reduceMotion", "on")
+	harness.setViewport(1280, 820)
+	harness.settle(2)
+	handle.app.rebuild("test")
+	harness.settle(2)
+	check("reduced motion is in force", handle.env.require("ui/responsive").reduceMotion, true)
+	local still = harness.byName("IconMascot")
+	truthy("the mascot is still drawn", still ~= nil)
+	check("and does not move", still.Position.Y.Offset, 0)
+	check("or rock", still.Rotation, 0)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 45. The window is a CanvasGroup, and that has rules ----------------------
+
+-- Why this exists: the window is a CanvasGroup, which renders every child into one
+-- offscreen texture and then draws that texture. Draw it at anything other than 1:1 and
+-- the texture is resampled -- so the whole interface, every glyph in it, goes soft at
+-- once with nothing on screen to explain why. There were two ways in. A UIScale tweened
+-- from 0.98 to 1 on the way in, which blurred the window for the length of the
+-- animation and left it blurry for good if the tween was interrupted; and a 0.5 anchor
+-- with an odd amount of space around it, which puts the group on a half pixel -- one
+-- pixel of viewport or one drag of the resize grip was enough.
+scenario("the window never draws itself between pixels", function()
+	local harness, handle = bootWith({})
+	handle.app.show("chat")
+	harness.settle(2)
+
+	local window = harness.byName("UAI_Window")
+	truthy("the window is there", window ~= nil)
+	check("and it is a CanvasGroup", window.ClassName, "CanvasGroup")
+	check("with nothing scaling it", window:FindFirstChildOfClass("UIScale"), nil)
+
+	-- An odd viewport is the case that used to soften it.
+	local responsive = handle.env.require("ui/responsive")
+	for _, size in ipairs({ { 1281, 805 }, { 1280, 800 }, { 1440, 901 } }) do
+		harness.setViewport(size[1], size[2])
+		harness.settle(2)
+		local root = harness.byName("UAI_Window")
+		local spareX = size[1] - root.Size.X.Offset
+		local spareY = (size[2] - responsive.inset.Y) - root.Size.Y.Offset
+		-- Only the offset-sized modes centre on their own measurements; a scale-sized
+		-- one is inset by a fixed amount on both sides and is even by construction.
+		if root.Size.X.Scale == 0 then
+			check(string.format("%dx%d leaves whole pixels across", size[1], size[2]),
+				spareX % 2, 0)
+		end
+		if root.Size.Y.Scale == 0 then
+			check(string.format("%dx%d leaves whole pixels down", size[1], size[2]),
+				spareY % 2, 0)
+		end
+	end
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 46. Transcript typography ------------------------------------------------
+
+-- Two things the mock cannot see, because it has no layout solver: whether a bullet
+-- lines up with its text, and whether a block of output has room between its lines.
+-- Both are decided by props, so that is where this looks -- the same reasoning as the
+-- layout-invariant sweep.
+--
+-- The bullet was a 4px frame centred inside a 23px slot, next to a label centred inside
+-- its own measured bounds. Two heights computed separately agree only by luck, and they
+-- did not: every bullet in every reply sat low, down by the descender of its line. Now
+-- the marker is text in the same role, on the same line height, top-aligned in a box of
+-- that height -- one baseline by construction.
+scenario("a bullet sits on the line it belongs to, and output has room", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			return { StatusCode = 200, Body = chatBody({
+				content = "Here is what I can do:\n- read the tree\n- write a file\n\n"
+					.. "```\nPath: Workspace\nHealth: 100 / 100\nParts: 21\n```",
+			}) }
+		end,
+	})
+	handle.sessions.current().send("what can you do")
+	harness.settle(12)
+
+	local function nameOf(value)
+		if type(value) == "table" and value.Name then return tostring(value.Name) end
+		return tostring(value)
+	end
+
+	local theme = handle.env.require("ui/theme")
+	local list = harness.byName("List")
+	truthy("the bullets rendered as a list", list ~= nil)
+	local markers = harness.allByName("Marker", list)
+	check("one marker per item", #markers, 2)
+
+	local marker = markers[1]
+	check("the marker is text, not a dot in a box", marker.ClassName, "TextLabel")
+	check("in the same line height as the item", marker.LineHeight, theme.text.body.line)
+	check("top-aligned", nameOf(marker.TextYAlignment), "Top")
+	check("inside a box one line tall", marker.Size.Y.Offset, theme.text.body.height)
+	check("and it is the middle dot, which every family has", marker.Text, "\194\183")
+
+	-- The item's own label has to match on all three or the construction means nothing.
+	local item = nil
+	for _, node in ipairs(list:GetDescendants()) do
+		if node.ClassName == "TextLabel" and node.__props.Name ~= "Marker"
+			and tostring(node.Text):find("read the tree", 1, true) then
+			item = node
+		end
+	end
+	truthy("the item text is there", item ~= nil)
+	check("on the marker's line height", item and item.LineHeight, theme.text.body.line)
+	check("and top-aligned with it", nameOf(item and item.TextYAlignment), "Top")
+
+	-- Output. The gutter and the code are separate labels, so a line height they do not
+	-- share puts number 11 beside line 9.
+	local source = harness.byName("Source")
+	truthy("the block rendered", source ~= nil)
+	check("the code is on the code line height", source.LineHeight, theme.line.code)
+	truthy("which is looser than the rest of the mono text",
+		theme.line.code > theme.text.mono.line)
+	local numbers = harness.byName("Numbers")
+	truthy("with a gutter", numbers ~= nil)
+	check("on exactly the same one", numbers.LineHeight, source.LineHeight)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 print(("="):rep(72))
 print(string.format("%d scenarios, %d checks passed, %d failed",
-	suite.scenarios, suite.passed, suite.failed))
-if suite.failed > 0 then
+	suite.scenarios, suite.passed, suite.failed))if suite.failed > 0 then
 	print("")
 	for _, failure in ipairs(suite.failures) do print("  - " .. failure) end
 end
