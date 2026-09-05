@@ -109,7 +109,7 @@ return function(env)
 		{
 			name = "dispatch_agent",
 			risk = "write",
-			description = "Hand a self-contained investigation to a subagent with its own context, and get back a written report. Use for wide searches, repetitive inspection, or anything that would otherwise fill this conversation with tool output. Call it several times in one step to run that many subagents at once: they work in parallel and you wait once, not once each. A subagent cannot ask questions, so state the task completely. The call blocks until its report is ready.",
+			description = "Hand a self-contained investigation to a subagent with its own context, and get back a written report. Use for wide searches, repetitive inspection, or anything that would otherwise fill this conversation with tool output. Call it several times in one step to run that many subagents at once: they work in parallel and you wait once, not once each. A subagent cannot ask questions, so state the task completely. The call blocks until its report is ready. The report carries an id you can send follow-ups to with agent_followup, so ask for the first slice of a big job rather than describing all of it.",
 			-- Not the generic tool timeout. A subagent runs for minutes by design, and a
 			-- caller that gives up first throws away work the user has paid for: the
 			-- child cannot be killed, so it finishes into a void.
@@ -141,12 +141,64 @@ return function(env)
 					turns = args.turns,
 				})
 				if not result then return H.fail(err) end
+				-- The id, in both branches. Without it the report is a dead end: a child
+				-- that stopped at its step limit says so in its own words and the parent
+				-- had no way to say "carry on" -- the only move left was to describe the
+				-- whole job again to a fresh subagent that knew none of it.
 				if result.aborted then
-					return string.format("Subagent stopped early (%s, %d messages). What it had:\n\n%s",
-						util.formatDuration(result.ms), result.messages, result.text)
+					return string.format("Subagent %s stopped early (%s, %d messages). What it had:\n\n%s",
+						result.id, util.formatDuration(result.ms), result.messages, result.text)
 				end
-				return string.format("Subagent report (%s, %d messages):\n\n%s",
-					util.formatDuration(result.ms), result.messages, result.text)
+				return string.format(
+					"Subagent report from %s (%s, %d messages).%s\n\n%s",
+					result.id, util.formatDuration(result.ms), result.messages,
+					result.resumable and string.format(
+						" It kept its context: send it more with agent_followup, agent \"%s\".", result.id) or "",
+					result.text)
+			end,
+		},
+		{
+			name = "agent_followup",
+			risk = "write",
+			description = "Send another message to a subagent that has already reported, keeping everything it found. Use this instead of dispatching a fresh one whenever you want more from the same investigation: 'you stopped at the step limit, carry on', 'now check X as well', 'quote that line verbatim'. It is far cheaper than a new dispatch, which would have to rediscover what this one already knows. Takes the id from the report. Blocks until it answers again.",
+			timeout = function() return subagent.toolTimeout() end,
+			parameters = {
+				type = "object",
+				properties = {
+					agent = {
+						type = "string",
+						description = "The subagent's id, as printed in its report.",
+					},
+					message = {
+						type = "string",
+						description = "What you want from it now. It still cannot ask questions, so be complete.",
+					},
+					turns = {
+						type = "integer",
+						description = "Step limit for this follow-up, 1-30. Defaults to the configured one.",
+						minimum = 1,
+						maximum = 30,
+					},
+				},
+				required = { "agent", "message" },
+			},
+			run = function(args, ctx)
+				local result, err = subagent.followUp({
+					parent = ctx and ctx.session or nil,
+					callId = ctx and ctx.callId or nil,
+					id = args.agent,
+					task = args.message,
+					turns = args.turns,
+				})
+				if not result then return H.fail(err) end
+				if result.aborted then
+					return string.format("Subagent %s stopped early (%s). What it had:\n\n%s",
+						result.id, util.formatDuration(result.ms), result.text)
+				end
+				return string.format("Subagent %s answered (%s, %d messages).%s\n\n%s",
+					result.id, util.formatDuration(result.ms), result.messages,
+					result.resumable and " Still open for another follow-up." or "",
+					result.text)
 			end,
 		},
 		{

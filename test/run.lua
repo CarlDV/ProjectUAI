@@ -883,6 +883,163 @@ scenario("unlimited tool calls does not reach a subagent", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+-- The other half of that decision.
+--
+-- Holding the line at the watched conversation leaves the delegated half of a long job
+-- stopping mid-way and saying so -- the whole dispatch spent producing "I reached this
+-- session's step limit before finishing", which is the one outcome that answers nothing.
+-- `subagentUnlimited` is the switch that says otherwise, and it has to reach the child
+-- without the parent's switch being involved at all.
+scenario("the subagent switch lifts a child's own limits", function()
+	local parentStep, childStep = 0, 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			if tostring(entry.body):find("You are a subagent", 1, true) then
+				childStep = childStep + 1
+				if childStep <= 8 then
+					return { StatusCode = 200, Body = chatBody({
+						toolCalls = { toolCall("k" .. tostring(childStep),
+							(childStep % 2 == 0) and "players_list" or "game_info", {}) },
+					}) }
+				end
+				return { StatusCode = 200, Body = chatBody({ content = "Nine steps in, here is the answer." }) }
+			end
+			parentStep = parentStep + 1
+			if parentStep == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("d1", "dispatch_agent",
+						{ task = "dig for as long as it takes", preset = "read" }) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "The subagent got there." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+	handle.config.set("agent.subagentTurns", 3)
+	handle.config.set("agent.subagentUnlimited", true)
+
+	local session = handle.sessions.current()
+	session.send("delegate something long")
+	harness.settle(90)
+
+	check("the child ran past the step limit it was given", childStep, 9)
+
+	local report
+	for _, message in ipairs(session.ctx.messages) do
+		if message.role == "tool" then report = tostring(message.content) end
+	end
+	contains("and answered rather than reporting a limit", report or "", "Nine steps in")
+	truthy("no step limit was reported at all",
+		(report or ""):find("step limit", 1, true) == nil, report)
+
+	local record = handle.env.require("agent/subagent").list()[1]
+	truthy("the register kept the dispatch", record ~= nil)
+	check("marked as having run unlimited", record and record.unlimited, true)
+	check("and it finished rather than being cut off", record and record.status, "done")
+	-- The brief has to agree with the budget, or the model rations turns it does not
+	-- have to ration and stops reading early to save them.
+	local childBody
+	for _, entry in ipairs(chatRequests(harness)) do
+		if tostring(entry.body):find("You are a subagent", 1, true) then childBody = tostring(entry.body) end
+	end
+	contains("the child was told it has no step limit", childBody or "", "no step limit and no clock")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- A dispatch used to be one shot: the child answered, its context went on the floor,
+-- and a parent that wanted one more fact had to describe the whole job again to a fresh
+-- subagent that would go and rediscover it. This is the same subagent, asked a second
+-- question in the conversation it already had.
+scenario("a subagent takes a follow-up instead of being replaced", function()
+	local parentStep, childStep = 0, 0
+	local sawFirstTurn = false
+	-- Declared before the boot, because the handler reaches back for the register to
+	-- read the id the report gave it -- and a `local harness, handle = bootWith(...)`
+	-- leaves both nil inside the closure being passed in.
+	local harness, handle
+	harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			local body = tostring(entry.body)
+			if body:find("You are a subagent", 1, true) then
+				childStep = childStep + 1
+				if childStep == 1 then
+					return { StatusCode = 200, Body = chatBody({ content = "There is one player: TestPlayer." }) }
+				end
+				-- The point of the whole thing: the second turn can see the first. Without
+				-- that a follow-up is a fresh dispatch wearing a different name.
+				sawFirstTurn = body:find("TestPlayer", 1, true) ~= nil
+					and body:find("and their team", 1, true) ~= nil
+				return { StatusCode = 200, Body = chatBody({ content = "TestPlayer is on Neutral." }) }
+			end
+			parentStep = parentStep + 1
+			if parentStep == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("d1", "dispatch_agent",
+						{ task = "count the players", preset = "read" }) },
+				}) }
+			end
+			if parentStep == 2 then
+				-- Addressed by the id the report handed back, which is the only handle the
+				-- model has on a child.
+				local id = handle.env.require("agent/subagent").list()[1].id
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("f1", "agent_followup",
+						{ agent = id, message = "and their team" }) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "One player, on Neutral." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	local session = handle.sessions.current()
+	session.send("how many players are here")
+	harness.settle(60)
+
+	local subagents = handle.env.require("agent/subagent")
+	local record = subagents.list()[1]
+	check("the parent took three steps and no more", parentStep, 3)
+	check("one dispatch, not two", #subagents.list(), 1)
+	check("which ran twice", record and record.runs, 2)
+	check("the child kept one context across both", childStep, 2)
+	truthy("and could see its own first turn", sawFirstTurn)
+
+	local reports = {}
+	for _, message in ipairs(session.ctx.messages) do
+		if message.role == "tool" then reports[#reports + 1] = tostring(message.content) end
+	end
+	check("both turns came back as tool results", #reports, 2)
+	contains("the first names the id a follow-up needs", reports[1] or "", record.id)
+	contains("and the tool that takes it", reports[1] or "", "agent_followup")
+	contains("the second carries the answer to the follow-up", reports[2] or "", "Neutral")
+
+	-- Two cards, one subagent. A follow-up has to read as a second turn on the same
+	-- child rather than as a second dispatch doing the job again.
+	local starts = {}
+	for _, event in ipairs(session.log) do
+		if event.kind == "subagent:start" then starts[#starts + 1] = event end
+	end
+	check("two starts were announced", #starts, 2)
+	check("both for the same subagent", starts[2] and starts[2].id, starts[1] and starts[1].id)
+	check("the first is not a follow-up", starts[1] and starts[1].followUp, false)
+	check("the second is", starts[2] and starts[2].followUp, true)
+	check("and is addressed to the call that asked for it", starts[2] and starts[2].call, "f1")
+	contains("the card says which it is", harness.textOf(), "follow-up")
+	check("the parent answered with both halves",
+		session.ctx.messages[#session.ctx.messages].content, "One player, on Neutral.")
+
+	-- A follow-up to something that was never dispatched has to fail with the ids that
+	-- do exist, or the model spends a step guessing.
+	local failed, why = subagents.followUp({ id = "agent_nope", task = "hello" })
+	check("an unknown id is refused", failed, nil)
+	contains("and the open ones are named", why or "", record.id)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 -- 11. Context --------------------------------------------------------------
 
 scenario("context trimming never orphans a tool result", function()
@@ -1720,11 +1877,20 @@ scenario("the new agent switches are reachable from Settings", function()
 	contains("and so does the depth cap", shown, "Delegation depth")
 	truthy("which is the switch that can turn delegation off",
 		harness.byName("Slider_agent.subagentDepth") ~= nil)
+	-- The switch that answers the step-limit message a dispatch comes back with. It only
+	-- existed in config.json, which for a setting whose whole point is a stuck job is the
+	-- same as not existing.
+	contains("lifting a subagent's own limits is a switch too", shown, "Unlimited subagents")
+	contains("and it says what still stops one", shown, "Stop still apply")
 
 	local config = handle.config
 	check("the switch starts off", config.get("agent.unlimitedTurns"), false)
 	config.set("agent.unlimitedTurns", true)
 	check("and persists when turned on", config.get("agent.unlimitedTurns"), true)
+	check("the subagent switch starts off too", config.get("agent.subagentUnlimited"), false)
+	config.set("agent.subagentUnlimited", true)
+	check("and the dispatcher reads it",
+		handle.env.require("agent/subagent").unlimited(), true)
 	check("the ceiling has a default", config.get("agent.subagentConcurrency"), 8)
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
@@ -3655,6 +3821,75 @@ end)
 -- screen, and a health event does not tear the panel down. The old panel printed the
 -- whole API key into a field, showed none of the endpoint/protocol/latency facts, and
 -- rebuilt itself from scratch on every completion.
+-- Adding a provider has to be finishable in the editor it is done in.
+--
+-- `registry.validate` refuses a record with no model, and the picker lived only on the
+-- detail pane -- which is reached by selecting a provider that has already been saved.
+-- So the add path ended on an instruction, "fetch the model list or add a model id",
+-- that nothing on screen could carry out, and Test asked for a completion with no model
+-- named and reported back whatever the endpoint says to that.
+scenario("a provider can be added without leaving the editor", function()
+	local harness, handle = bootWith({
+		provider = false,
+		handler = function(entry)
+			if tostring(entry.url):find("/models") then
+				return { StatusCode = 200, Body = json.encode({
+					data = { { id = "beta-mini" }, { id = "alpha-large" } },
+				}) }
+			end
+			return { StatusCode = 404, Body = "{}" }
+		end,
+	})
+
+	local record = handle.providers.blank("openai")
+	record.label = "Editor test"
+	record.apiKey = "sk-editor-key-1234"
+	check("a new record starts with no model at all", record.model, "")
+
+	local savedId
+	handle.env.require("ui/panels/providers").editor(record, function(id) savedId = id end)
+	harness.settle(2)
+
+	local form = harness.byName("Form")
+	local picker = harness.byName("ActiveModel", form)
+	truthy("the editor has a model control", picker ~= nil, harness.dump())
+	contains("saying one is still needed", harness.textOf(picker), "Choose a model")
+
+	harness.click(picker)
+	truthy("which offers a fetch", harness.byName("Option_fetch") ~= nil, harness.dump())
+	harness.click(harness.byName("Option_fetch"))
+	harness.settle(4)
+
+	local asked
+	for _, entry in ipairs(harness.http.log) do
+		if tostring(entry.url):find("/models") then asked = entry end
+	end
+	truthy("the endpoint was asked for its list", asked ~= nil)
+	check("with a GET", asked and asked.method, "GET")
+	local note = harness.byName("ModelNote", form)
+	contains("and the row reports what came back", note and note.Text or "", "2 models")
+	-- Picking one is the reason to fetch, so the list comes back by itself rather than
+	-- leaving the same control to be pressed twice for one decision.
+	truthy("the list is on screen without pressing anything else",
+		harness.byName("Option_model:alpha-large") ~= nil, harness.dump())
+
+	harness.click(harness.byName("Option_model:alpha-large"))
+	harness.settle(1)
+	contains("the control names the chosen model", harness.textOf(picker), "alpha-large")
+
+	harness.click(harness.byName("SaveProvider"))
+	harness.settle(2)
+	truthy("the provider saved", savedId ~= nil,
+		harness.textOf(harness.byName("Problem")))
+	local stored = savedId and handle.providers.get(savedId)
+	check("with the model that was chosen", stored and stored.model, "alpha-large")
+	-- Only the chosen one is written to the record. The rest came off the wire and are
+	-- the endpoint's to answer for again next time; a record is not a cache.
+	check("and only that one on the record", #(stored and stored.models or {}), 1)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 scenario("the providers panel shows the record without showing the key", function()
 	local harness, handle = bootWith({})
 	local record = handle.providers.active()
@@ -4164,6 +4399,32 @@ scenario("a bullet sits on the line it belongs to, and output has room", functio
 	local numbers = harness.byName("Numbers")
 	truthy("with a gutter", numbers ~= nil)
 	check("on exactly the same one", numbers.LineHeight, source.LineHeight)
+
+	-- Air on the sides, and one number for both of them. The horizontal inset used to be
+	-- two other measurements in disguise -- part of the gutter's own width on the left,
+	-- padding on the scroll viewport on the right -- so the two edges of a block never
+	-- agreed with each other and the language bar above them agreed with neither.
+	local card = harness.byName("Code")
+	truthy("the block is a card of its own", card ~= nil)
+	local body = harness.byName("Body", card)
+	local bodyPad = body and body:FindFirstChildOfClass("UIPadding")
+	truthy("whose body is padded", bodyPad ~= nil)
+	check("on the left", bodyPad and bodyPad.PaddingLeft.Offset, theme.space.lg)
+	check("by the same amount on the right", bodyPad and bodyPad.PaddingRight.Offset, theme.space.lg)
+	local bar = harness.byName("Bar", card)
+	local barPad = bar and bar:FindFirstChildOfClass("UIPadding")
+	truthy("and the language bar shares its left edge",
+		barPad and barPad.PaddingLeft.Offset == theme.space.lg,
+		barPad and tostring(barPad.PaddingLeft.Offset) or "no padding")
+	local viewport = harness.byName("Viewport", card)
+	truthy("with nothing left on the scroll to disagree with it",
+		viewport and viewport:FindFirstChildOfClass("UIPadding") == nil)
+
+	-- And air around it. A fenced block sat exactly as far from the sentence introducing
+	-- it as from the next paragraph, which is what makes a reply read as one column with
+	-- a slab dropped into it.
+	truthy("the block is held off the prose either side of it",
+		harness.byName("CodeSlot") ~= nil)
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)

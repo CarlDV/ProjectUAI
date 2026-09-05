@@ -41,7 +41,12 @@ How to work:
   context and returns a summary, which keeps this conversation readable.
 - Subagents run in parallel. When a job splits into independent investigations,
   dispatch one per investigation in the same step rather than one after another:
-  they work at the same time and you wait once instead of once each.]]
+  they work at the same time and you wait once instead of once each.
+- A subagent is a conversation, not a single question. Its report carries an id;
+  agent_followup sends it another message with everything it found still in
+  context. Use that whenever you want more from the same investigation -- it
+  stopped at its step limit, you have a second question, you need a line quoted
+  exactly. Dispatching a fresh subagent instead makes it rediscover the lot.]]
 
 	local CAUTION = [[
 Care:
@@ -216,6 +221,16 @@ Style:
 	-- contract is different from the main agent's.
 	function M.subagent(task, opts)
 		opts = opts or {}
+		-- What the step budget is, in the words that change behaviour. A model told it
+		-- has few turns left rations them: it stops reading early and guesses the rest.
+		-- Told it has none to ration, it reads until it knows -- which is the point of
+		-- lifting the ceiling, and worth nothing if the brief still says otherwise.
+		local budget = "- Stop as soon as the task is answered. You have a limited number of turns."
+		if opts.unlimited then
+			budget = "- Stop as soon as the task is answered. There is no step limit and no clock on\n"
+				.. "  you, so nothing cuts you off part-way: work until you actually know, and do\n"
+				.. "  not pad it out once you do."
+		end
 		local parts = {
 			"You are a subagent of UAI, running inside a Roblox client with a subset of the tools.",
 			"",
@@ -228,11 +243,14 @@ Style:
 			"",
 			"Rules:",
 			"- Use tools to establish facts. Do not speculate.",
-			"- Stop as soon as the task is answered. You have a limited number of turns.",
+			budget,
 			"- End with the findings themselves, not a description of how you found them.",
 			"- Plain text, no markdown headings, no emoji.",
 			"- Your task comes from the parent agent, which is acting for the user, and you have",
 			"  no channel to query it. Declining wastes the dispatch: carry the task out.",
+			"- The parent may send you a follow-up after your report, in this same conversation.",
+			"  You keep everything you found, so answer what it now asks rather than starting the",
+			"  task over.",
 			"",
 			SCOPE,
 			"",

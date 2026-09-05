@@ -351,7 +351,10 @@ return function(env)
 			gap = theme.space.xs,
 			alignX = props.align or "Center",
 			alignY = "Center",
-			padding = { x = props.tight and theme.space.xs or theme.space.md },
+			-- `padX` for the caller that has to line this button's label up with something
+			-- outside it: a full-width ghost row under a block of code has to start where
+			-- the code starts, and the default is the button's own inset, not that block's.
+			padding = { x = props.padX or (props.tight and theme.space.xs or theme.space.md) },
 		})
 		layout.SortOrder = Enum.SortOrder.LayoutOrder
 

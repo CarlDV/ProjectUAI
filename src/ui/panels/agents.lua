@@ -127,32 +127,43 @@ return function(env)
 		local function reportModal(record)
 			local modal = overlay.modal({
 				title = record.label,
-				description = string.format("%s  \194\183  %s  \194\183  %s",
+				description = string.format("%s  \194\183  %s  \194\183  %s%s",
 					(STATUS[record.status] or STATUS.done).label,
 					record.ms and util.formatDuration(record.ms) or "",
-					util.pluralise(record.calls or 0, "tool call")),
+					util.pluralise(record.calls or 0, "tool call"),
+					(record.runs or 1) > 1
+						and ("  \194\183  " .. util.pluralise(record.runs, "turn")) or ""),
 				width = theme.size.modalWide,
 			})
 			if not modal then return end
-			C.keyValue(modal.content, { key = "Task", value = record.task, layoutOrder = 1 })
+			-- The id, because it is the handle the agent addresses a follow-up to. Reading
+			-- it here is how you can tell from the transcript which dispatch a follow-up
+			-- went to when three of them are open.
+			C.keyValue(modal.content, {
+				key = "Id",
+				value = tostring(record.id),
+				role = "monoSmall",
+				layoutOrder = 1,
+			})
+			C.keyValue(modal.content, { key = "Task", value = record.task, layoutOrder = 2 })
 			C.keyValue(modal.content, {
 				key = "Tools",
 				value = describePreset(record.preset),
-				layoutOrder = 2,
+				layoutOrder = 3,
 			})
 			if #(record.tools or {}) > 0 then
 				C.keyValue(modal.content, {
 					key = "Called",
 					value = table.concat(record.tools, ", "),
 					role = "monoSmall",
-					layoutOrder = 3,
+					layoutOrder = 4,
 				})
 			end
 			C.keyValue(modal.content, {
 				key = "Report",
 				value = util.trim(tostring(record.report or "")) ~= "" and record.report
 					or "Nothing was reported.",
-				layoutOrder = 4,
+				layoutOrder = 5,
 			})
 			P.button(modal.footer, {
 				text = "Close",
@@ -222,12 +233,22 @@ return function(env)
 				facts[#facts + 1] = "depth " .. tostring(record.depth)
 			end
 			if record.parentTitle then facts[#facts + 1] = "from " .. record.parentTitle end
+			if record.unlimited then facts[#facts + 1] = "unlimited" end
+			if (record.runs or 1) > 1 then
+				facts[#facts + 1] = util.pluralise(record.runs, "turn")
+			end
 			if (record.calls or 0) > 0 then
 				facts[#facts + 1] = string.format("%d of %s",
 					record.finishedCalls or 0, util.pluralise(record.calls, "call"))
 			end
 			if record.messages then
 				facts[#facts + 1] = util.pluralise(record.messages, "message")
+			end
+			-- Whether the agent can still talk to this one. A finished dispatch keeps its
+			-- context for a while, and a follow-up into it is the cheapest thing here --
+			-- so which ones are still open is worth a word.
+			if not live and record.session then
+				facts[#facts + 1] = "open for a follow-up"
 			end
 			local detail = P.text(card, {
 				name = "Facts",
@@ -308,12 +329,20 @@ return function(env)
 				and "Nothing is delegated right now."
 				or string.format("%d of %d slots in use", running, ceiling)
 			capacityBar.set(ceiling > 0 and (running / ceiling) or 0)
-			capacityHint.Text = string.format(
-				"Each one may work for %s and take up to %s. Anything over the ceiling waits for a slot; "
-				.. "a subagent may dispatch its own up to %s deep.",
-				util.formatDuration(subagent.budgetSeconds() * 1000),
-				util.pluralise(tonumber(config.get("agent.subagentTurns", 14)) or 14, "step"),
-				util.pluralise(tonumber(config.get("agent.subagentDepth", 2)) or 2, "level"))
+			if subagent.unlimited() then
+				capacityHint.Text = string.format(
+					"Subagents run unlimited: no step limit, no clock, and the call that dispatched one "
+					.. "waits as long as it takes. Anything over the ceiling waits for a slot; a subagent "
+					.. "may dispatch its own up to %s deep. Stop is the bound that still applies.",
+					util.pluralise(tonumber(config.get("agent.subagentDepth", 2)) or 2, "level"))
+			else
+				capacityHint.Text = string.format(
+					"Each one may work for %s and take up to %s. Anything over the ceiling waits for a slot; "
+					.. "a subagent may dispatch its own up to %s deep.",
+					util.formatDuration(subagent.budgetSeconds() * 1000),
+					util.pluralise(tonumber(config.get("agent.subagentTurns", 14)) or 14, "step"),
+					util.pluralise(tonumber(config.get("agent.subagentDepth", 2)) or 2, "level"))
+			end
 			stopAll.instance.Visible = running > 0
 
 			if #records == 0 then
@@ -370,11 +399,14 @@ return function(env)
 			end
 			-- The button's own layout order is stated above; a P.card is a column, so the
 			-- facts sit between the title and it.
+			local unlimited = subagent.unlimited()
 			local rows = {
 				{
 					key = "Budget",
-					value = util.formatDuration(subagent.budgetSeconds() * 1000)
-						.. " of work each, then it wraps up",
+					value = unlimited
+						and "no clock -- a subagent runs until it answers, and the call that started it waits"
+						or (util.formatDuration(subagent.budgetSeconds() * 1000)
+							.. " of work each, then it wraps up"),
 				},
 				{
 					key = "At once",
@@ -383,8 +415,10 @@ return function(env)
 				},
 				{
 					key = "Steps",
-					value = util.pluralise(tonumber(config.get("agent.subagentTurns", 14)) or 14, "tool round")
-						.. " before it has to answer with what it has",
+					value = unlimited
+						and "no limit -- only the repeat breaker and Stop end a run"
+						or (util.pluralise(tonumber(config.get("agent.subagentTurns", 14)) or 14, "tool round")
+							.. " before it has to answer with what it has"),
 				},
 				{
 					key = "Depth",
@@ -395,6 +429,11 @@ return function(env)
 						end
 						return util.pluralise(depth, "level") .. " of delegation"
 					end)(),
+				},
+				{
+					key = "Follow-ups",
+					value = "the agent can send a finished subagent another message with agent_followup; "
+						.. "the newest few keep their context for it",
 				},
 			}
 			for index, row in ipairs(rows) do

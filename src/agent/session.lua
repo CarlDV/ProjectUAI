@@ -121,6 +121,11 @@ return function(env)
 			toolFilter = opts.toolFilter,
 			toolGroups = opts.toolGroups,
 			budgetSeconds = opts.budgetSeconds,
+			-- Set by whoever created the session, and read by the loop in place of the
+			-- global switch: a subagent carries its own budget, so lifting it is a
+			-- decision the dispatcher takes per child rather than one a conversation
+			-- inherits from a setting.
+			unlimited = opts.unlimited == true,
 			stream = opts.stream,
 			headless = opts.headless == true,
 			-- Which place the conversation happened in. A client is loaded into one game

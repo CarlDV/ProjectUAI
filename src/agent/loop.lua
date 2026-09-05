@@ -140,12 +140,17 @@ return function(env)
 		local maxTurns = session.maxTurns or config.get("agent.maxTurns", 24)
 		local repeatLimit = config.get("agent.repeatLimit", 3)
 
-		-- Unlimited tool calling, for the conversation the user is watching and only
-		-- that one. A session carrying its own step budget -- every subagent does --
-		-- keeps it: the switch is for a turn someone can see and stop, not for a
-		-- delegated child running with nobody's attention on it.
-		local unlimited = session.maxTurns == nil
-			and config.get("agent.unlimitedTurns", false) == true
+		-- Unlimited tool calling. Two switches reach this and they are deliberately
+		-- separate.
+		--
+		-- `agent.unlimitedTurns` is for the conversation the user is watching, so a
+		-- session carrying its own step budget -- every subagent -- ignores it.
+		-- `session.unlimited` is set by whoever created the session, which is how the
+		-- dispatcher passes on `agent.subagentUnlimited`: a delegated child is lifted
+		-- only when someone has asked for that in those words, because a child is the
+		-- one session with nobody's attention on it.
+		local unlimited = session.unlimited == true
+			or (session.maxTurns == nil and config.get("agent.unlimitedTurns", false) == true)
 
 		-- The wall-clock bound goes with the step limit rather than outliving it. A
 		-- fifteen-minute ceiling left standing behind a switch labelled unlimited

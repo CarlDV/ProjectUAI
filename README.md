@@ -25,8 +25,11 @@ GUI.
 A turn stops after twenty-four tool rounds by default, which is there to catch a
 runaway rather than to end the work; **Unlimited tool calls** in Settings removes
 that ceiling and the fifteen-minute turn deadline with it, leaving the repeat
-breaker, each tool's own timeout and Stop as what bounds a turn. Subagents keep
-their own step and time budgets either way.
+breaker, each tool's own timeout and Stop as what bounds a turn. A subagent keeps its
+own step and time budget under that switch -- it is the one session nobody is
+watching -- and **Unlimited subagents** is the separate switch that lifts a child's
+too, so a delegated job runs until it answers instead of coming back with "I reached
+this session's step limit before finishing".
 
 **Any provider.** A provider is a base URL, an auth style, a key and a model.
 Presets exist for the common hosts, and "Custom endpoint" takes anything that
@@ -96,6 +99,13 @@ stay with their report. The four ceilings -- budget, how many run at once, steps
 subagent, and how deep delegation may go -- are on the same panel, and the last two had
 no control anywhere before it.
 
+**A dispatch is a conversation, not one question.** Every report carries the
+subagent's id, and `agent_followup` sends that same child another message with
+everything it found still in context: carry on where the step limit stopped you, now
+check this too, quote that line exactly. The transcript shows the second turn as a
+follow-up on the same subagent rather than as a new dispatch, and the newest few
+finished dispatches keep their context so there is something to follow up on.
+
 A sidebar holds the conversations, grouped by the place each happened in, with
 search across their transcripts and two arrows that walk where you have been. It
 collapses from the header and comes back the same way, and a conversation reopened
@@ -151,9 +161,9 @@ annotations, no backtick interpolation, no `continue` -- and `test/check.lua`
 fails the build on a violation.
 
 ```bash
-luajit test/check.lua      # lint, parse and link all 73 modules
+luajit test/check.lua      # lint, parse and link all 74 modules
 luajit tools/bundle.lua    # src/ + init.lua -> dist/uai.lua
-luajit test/run.lua        # 71 scenarios against the built bundle
+luajit test/run.lua        # 80 scenarios against the built bundle
 ```
 
 `test/run.lua` loads `dist/uai.lua` -- the actual artifact -- into a mocked
@@ -164,10 +174,12 @@ enum. The scenarios cover boot, capability degradation, the identity headers on
 the wire, model discovery, the tool loop, parallel calls, SSE assembly, retry,
 provider fallover, permissions, the repeat breaker, abort, context trimming,
 payload shape, argument repair, path traversal, viewport changes, theme changes,
-markdown, subagents and the parallel dispatch of several at once, the unlimited
-step budget, persistence, error surfaces, window drag and resize, overlay
-interaction, the layout invariants every surface has to hold, and the contrast of
-every colour pair the interface puts on screen. They also cover the two failure
+markdown, subagents and the parallel dispatch of several at once, a subagent
+resumed with a follow-up in the context it already had, the unlimited step budget
+for a turn and the separate one for a child, persistence, error surfaces, window
+drag and resize, overlay interaction, the layout invariants every surface has to
+hold, and the contrast of every colour pair the interface puts on screen. They
+also cover the two failure
 modes that are invisible from inside a single turn: that the sidebar's collapse
 control actually collapses it and offers a way back, and that no string leaves this
 client without being valid UTF-8 -- a scraped snippet with one Latin-1 byte in it

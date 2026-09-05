@@ -1011,8 +1011,18 @@ return function(env)
 			"Seconds before a tool is abandoned. Subagents are exempt: they run to their own budget below.",
 			"agent.toolTimeout", 5, 60, 1)
 		R.number(agent, "Subagent budget",
-			"Seconds one subagent may work for before it wraps up. The call that dispatched it waits this long plus a minute, so a finished report is never thrown away.",
+			"Seconds one subagent may work for before it wraps up. The call that dispatched it waits this long plus a minute, so a finished report is never thrown away. Ignored while the switch below is on.",
 			"agent.subagentBudget", 30, 900, 30)
+		-- The switch the step-limit message asks for. A subagent that stops mid-job and
+		-- says "I reached this session's step limit" has spent the whole dispatch and
+		-- answered nothing, and until this existed the only way past it was to edit
+		-- config.json -- `Unlimited tool calls` deliberately stops at the conversation the
+		-- user is watching.
+		R.toggle(agent, {
+			label = "Unlimited subagents",
+			hint = "Let a dispatched subagent run with no step limit and no clock, and make the call that dispatched it wait as long as the child takes. The repeat breaker, each tool's own timeout, the two ceilings below and Stop still apply -- and the Subagents panel can stop one on its own without ending the turn.",
+			path = "agent.subagentUnlimited",
+		})
 		R.number(agent, "Parallel subagents",
 			"Subagents alive at once across the whole tree. Several dispatched in one step run together; this is the ceiling on how many, including the ones a subagent starts itself. Anything over it waits for a slot.",
 			"agent.subagentConcurrency", 1, 12, 1)
@@ -1020,7 +1030,7 @@ return function(env)
 		-- to edit config.json, which for the depth cap means the only switch that can
 		-- turn delegation off entirely was unreachable.
 		R.number(agent, "Subagent steps",
-			"Tool rounds one subagent may take before it has to answer the parent with what it has.",
+			"Tool rounds one subagent may take before it has to answer the parent with what it has. Ignored while Unlimited subagents is on.",
 			"agent.subagentTurns", 1, 30, 1)
 		R.number(agent, "Delegation depth",
 			"How many levels of subagent are allowed. A subagent given the full tool set can dispatch its own; at 0 the agent cannot dispatch at all and does the work in the conversation instead. The Subagents panel lists what is running under these limits.",

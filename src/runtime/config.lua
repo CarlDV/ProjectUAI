@@ -93,6 +93,18 @@ return function(env)
 			-- generic 25s tool timeout fired first and every finished report was thrown
 			-- away by a caller that had already given up.
 			subagentBudget = 240,
+			-- Lifts every clock and counter on a dispatched subagent: no step limit, no
+			-- wall-clock budget, and the call that dispatched it waits as long as the
+			-- child takes rather than abandoning a report nobody is left to collect.
+			--
+			-- Separate from `unlimitedTurns` on purpose. That switch is for the turn
+			-- someone is watching and deliberately does not reach a child; this is the
+			-- decision to let a delegated job finish instead of stopping mid-way with "I
+			-- reached this session's step limit", which is the one outcome that wastes the
+			-- whole dispatch. What still bounds a child either way: the repeat breaker,
+			-- each tool's own timeout, the provider retry cap, the depth and parallel
+			-- ceilings, and Stop -- from the parent turn or from the Subagents panel.
+			subagentUnlimited = false,
 			retries = 5,
 			fallback = true,
 			-- Tool families the model is not told about at all, keyed by group id. A

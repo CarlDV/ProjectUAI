@@ -162,10 +162,10 @@ stamped by `session.emit`.
 | `permission:ask` | `{ id, name, group, risk, description, args, resolve }` |
 | `usage` | `{ session, turn }` — the two counter tables from `agent/usage` |
 | `compact` | `{ summary, before, after }` |
-| `subagent:start` | `{ id, call, label, task, preset, turns, budget, depth }` |
+| `subagent:start` | `{ id, call, label, task, preset, turns, budget, unlimited, depth, followUp }` |
 | `subagent:status` / `subagent:text` | `{ id, call, label, text, bad? }` |
 | `subagent:tool` / `subagent:tool:done` | `{ id, callId, name, risk, arguments, index }` / `{ …, ok, ms, summary }` |
-| `subagent:done` | `{ id, ms, ok, aborted, messages, turns, text }` |
+| `subagent:done` | `{ id, ms, ok, aborted, messages, turns, resumable, text }` |
 | `cleared` | `{}` |
 | `error` | `{ message, fatal }` |
 | `abort` | `{}` |
@@ -192,12 +192,32 @@ conversation's prompts, and `pendingCount(session)` counts them. `denyAll()` wit
 no session still clears everything, which is what an unload wants.
 
 Every dispatch is registered in `agent/subagent`: `records` (running first, finished
-history capped at 24), the `changed` signal, `list`, `running`, `get`, `stop(id)`,
-`stopAll` and `clearHistory`. A record carries `id, label, task, preset, depth,
-parentId, parentTitle, startedAt, status, calls, finishedCalls, tools, currentTool,
-statusText, ms, messages, report` and the child `session` that `stop` sets
-`abortFlag` on. `status` is one of `queued`, `running`, `done`, `stopped`, `failed`.
-A stop is noticed between steps, not on the instant -- Luau cannot kill a thread.
+history capped at 24), the `changed` signal, `list`, `running`, `resumable`, `get`,
+`find(reference)`, `stop(id)`, `stopAll` and `clearHistory`. A record carries `id,
+label, task, preset, depth, parentId, parentTitle, startedAt, status, calls,
+finishedCalls, tools, currentTool, statusText, ms, messages, runs, unlimited, report`,
+the `parent` session currently waiting on it and the `callId` inside that session, and
+the child `session` that `stop` sets `abortFlag` on. `status` is one of `queued`,
+`running`, `done`, `stopped`, `failed`. A stop is noticed between steps, not on the
+instant -- Luau cannot kill a thread.
+
+A dispatch is a conversation, not a single question. `dispatch_agent` creates the
+child and returns its id in the report; `agent_followup` runs the same session again
+against the context it already has, which is what `followUp(id, task)` does and what
+`runs` counts. `parent` and `callId` live on the record rather than in a closure
+because the turn asking a follow-up is a different tool call, possibly in a different
+conversation, and the live card has to appear under the row the user is looking at
+now. Only the newest `RESUMABLE` (6) finished records keep their `session`; past that
+the record keeps its report and the context behind it is released, so `followUp`
+refuses with a reason rather than resuming something that is no longer there.
+
+`agent.subagentUnlimited` lifts a child's step limit and wall-clock budget and makes
+the dispatching tool call wait as long as the child takes. It is separate from
+`agent.unlimitedTurns`, which the loop applies only to a session with no step budget
+of its own: the dispatcher passes its decision down as `session.unlimited`, so a
+delegated child is lifted only when that has been asked for in those words. What
+still bounds a child either way: the repeat breaker, each tool's own timeout, the
+provider retry cap, the depth and concurrency ceilings, and Stop.
 
 Each session mirrors the stream into a bounded `session.log` (400 events), and the
 transcript is a pure function of that log — `view.attach` replays it, which is what

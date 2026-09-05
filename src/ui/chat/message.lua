@@ -124,10 +124,19 @@ return function(env)
 		-- 9. Everything below reads `codeLine`; nothing recomputes it from the role.
 		local codeLine = theme.line.code
 		local lineHeight = math.ceil(role.size * codeLine)
-		-- Air inside the block. At sm the first line sat against the language bar and
-		-- the last against the bottom edge, which is what makes a block read as cramped
-		-- however much room there is between its lines.
+		-- Air inside the block, on all four sides, and one number per axis.
+		--
+		-- It used to be neither. The vertical inset was a token here and the horizontal
+		-- one was an accident of two other measurements: the left came out of the gutter's
+		-- own width, which baked twelve pixels of margin into a column sized for digits,
+		-- and the right came from padding on the scroll viewport. So the two edges never
+		-- agreed with each other, the language bar above them agreed with neither, and a
+		-- block with no gutter -- a result, a raw JSON envelope -- had its first character
+		-- sitting on the border. Both axes are one padding on the body row now, the bar
+		-- shares the horizontal one, and the gutter is only as wide as its digits plus the
+		-- gap to the code.
 		local padY = theme.space.md
+		local padX = theme.space.lg
 
 		local card = P.column(parent, {
 			name = "Code",
@@ -150,7 +159,11 @@ return function(env)
 			size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget())),
 			bg = theme.color.codeBar,
 			gap = theme.space.xs,
-			padding = { left = theme.space.md, right = theme.space.xxs },
+			-- The same left inset the gutter gets, so the language names the column of code
+			-- underneath it rather than floating four pixels to the left of it. The right is
+			-- tighter because what sits there is a round ghost button with its own padding,
+			-- and padX again would push it off the block's corner.
+			padding = { left = padX, right = theme.space.xs },
 			layoutOrder = 1,
 		})
 		P.text(bar, {
@@ -200,18 +213,18 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			gap = 0,
 			alignY = "Top",
-			padding = { top = padY, bottom = padY },
+			padding = { left = padX, right = padX, top = padY, bottom = padY },
 			layoutOrder = 2,
 		})
 
 		local gutter, gutterLabel
 		local gutterWidth = 0
 		if numbered then
-			-- Wide enough for the largest number in this block. It is the one width in
-			-- here that cannot come from a token, because it depends on how many lines
-			-- there are; the ratio is what keeps it in step with the text scale.
-			gutterWidth = math.ceil(#tostring(#lines) * role.size * MONO_RATIO)
-				+ theme.space.md + theme.space.sm
+			-- Wide enough for the largest number in this block, plus the gap to the code
+			-- beside it. It is the one width in here that cannot come from a token, because
+			-- it depends on how many lines there are; the ratio is what keeps it in step
+			-- with the text scale, and the gap is a token because it is a gap.
+			gutterWidth = math.ceil(#tostring(#lines) * role.size * MONO_RATIO) + theme.space.md
 			gutter = P.frame(bodyRow, {
 				name = "Gutter",
 				size = UDim2.fromOffset(gutterWidth, 0),
@@ -225,7 +238,7 @@ return function(env)
 				color = theme.color.codeGutter,
 				align = "Right",
 				alignY = "Top",
-				size = UDim2.new(1, -theme.space.sm, 1, 0),
+				size = UDim2.new(1, -theme.space.md, 1, 0),
 			})
 		end
 
@@ -235,10 +248,6 @@ return function(env)
 			size = UDim2.new(0, 0, 1, 0),
 			flex = "Fill",
 			gap = 0,
-			-- Air on both sides of the code rather than only on the right. Without a
-			-- gutter to hold it off the edge -- a result block, a raw JSON envelope --
-			-- the first character sat on the block's own border.
-			padding = { left = numbered and 0 or theme.space.md, right = theme.space.md },
 			bar = theme.size.scrollbar,
 		})
 		-- Not wrapped, and sized from the text: that is what makes the gutter line up
@@ -293,6 +302,10 @@ return function(env)
 				size = "sm",
 				fill = true,
 				align = "Left",
+				-- Starts where the code above it starts. On the button's own default inset
+				-- the control read as belonging to the card's edge rather than to the
+				-- listing it opens.
+				padX = padX,
 				radius = theme.radius.none,
 				layoutOrder = 3,
 				onClick = function()
@@ -322,11 +335,24 @@ return function(env)
 
 		for index, block in ipairs(blocks) do
 			if block.kind == "code" then
-				M.codeBlock(column, {
+				-- A fenced block is an object in the prose rather than another paragraph of
+				-- it, so it gets more air than the uniform paragraph gap -- above and below
+				-- both. At the bare gap the sentence introducing the code sat exactly as
+				-- close to it as the next paragraph did, which is what makes a reply read as
+				-- one column with a slab dropped into it.
+				local slot = P.column(column, {
+					name = "CodeSlot",
+					size = UDim2.new(1, 0, 0, 0),
+					auto = "Y",
+					gap = 0,
+					padding = { y = theme.space.xs },
+					layoutOrder = index,
+				})
+				M.codeBlock(slot, {
 					text = block.text,
 					lang = block.lang,
 					unterminated = block.unterminated,
-					layoutOrder = index,
+					layoutOrder = 1,
 				})
 			elseif block.kind == "heading" then
 				-- A heading belongs to what is under it, so it needs more air above than
@@ -1183,7 +1209,10 @@ return function(env)
 		})
 
 		local kindLabel = P.text(row, {
-			text = "agent",
+			-- A follow-up says so. It is the same subagent with the same context and the
+			-- same id, so two cards under one conversation would otherwise read as two
+			-- separate dispatches doing the same job twice.
+			text = info.followUp and "follow-up" or "agent",
 			role = "monoSmall",
 			color = theme.color.accent,
 			layoutOrder = 2,

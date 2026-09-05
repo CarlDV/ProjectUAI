@@ -141,6 +141,10 @@ return function(env)
 
 		local problemLabel
 		local presetButton, urlField, keyRow
+		-- Assigned with the model row below, called from applyPreset above it: a preset
+		-- change moves the endpoint, so anything a previous fetch turned up belongs to a
+		-- different server and must not still be on offer.
+		local forgetFetchedModels
 
 		local function showProblems()
 			local ok, problems = registry.validate(editing)
@@ -197,6 +201,7 @@ return function(env)
 			editing.requires = preset.requires
 			if presetButton then presetButton.setText(preset.label) end
 			if urlField then urlField.set(editing.baseUrl) end
+			if forgetFetchedModels then forgetFetchedModels() end
 			showProblems()
 		end
 
@@ -342,6 +347,170 @@ return function(env)
 			return keyLabel
 		end)
 
+		-- Model.
+		--
+		-- The one field a record cannot be saved without, and the editor had none. The
+		-- picker lives on the detail pane, which you reach by selecting a provider that has
+		-- already been saved -- and `registry.validate` refuses to save a record with no
+		-- model. So adding a provider ended at "fetch the model list or add a model id"
+		-- with nothing on screen that could do either, and Test asked the endpoint for a
+		-- completion with no model named, which comes back as the provider's own wording
+		-- for that and reads as a broken connection.
+		local modelButton, modelNote
+		local fetched = {}
+
+		-- What the picker offers: the ids already on the record, plus whatever this
+		-- editor's own fetch turned up. The session-wide discovery cache is deliberately
+		-- not read here -- it is keyed by provider id and a record being added has none,
+		-- so a second "Add a provider" would be offered the last endpoint's models.
+		local function knownModels()
+			local out, seen = {}, {}
+			for _, id in ipairs(editing.models or {}) do
+				if util.trim(id) ~= "" and not seen[id] then
+					seen[id] = true
+					out[#out + 1] = id
+				end
+			end
+			for _, id in ipairs(fetched) do
+				if not seen[id] then
+					seen[id] = true
+					out[#out + 1] = id
+				end
+			end
+			return out
+		end
+
+		local DEFAULT_MODEL_NOTE = "The endpoint is the only authority on this, so nothing here "
+			.. "guesses one. Fetch the list, or type the id exactly as the provider expects it."
+
+		local function setModelNote(text, bad)
+			if not modelNote then return end
+			modelNote.Text = tostring(text)
+			modelNote.TextColor3 = bad and theme.color.warn or theme.color.textTertiary
+		end
+
+		local function paintModel()
+			local current = util.trim(editing.model)
+			if modelButton then
+				modelButton.setText(current ~= "" and current or "Choose a model")
+			end
+		end
+
+		local openModelMenu
+
+		-- Fetches against the record as it would be saved, not as it is typed: the URL is
+		-- normalised the same way `save` normalises it, so what is asked for is the
+		-- endpoint the provider will actually use.
+		local function fetchModels(handle)
+			local target = util.deepCopy(editing)
+			target.baseUrl = registry.normaliseBaseUrl(target.baseUrl)
+			if target.baseUrl == "" then
+				setModelNote("Add the base URL first -- there is nothing to ask.", true)
+				return
+			end
+			handle.setEnabled(false)
+			setModelNote("Asking " .. registry.endpoint(target, "/models") .. "...", false)
+			task.spawn(function()
+				local found, note = models.discover(target, { force = true })
+				fetched = found
+				handle.setEnabled(true)
+				setModelNote(note, #found == 0)
+				-- Straight back into the list. Picking one is the reason to fetch, and a
+				-- notice that says "42 models" while the menu stays shut makes someone press
+				-- the same control twice for one decision.
+				if #found > 0 then openModelMenu(handle) end
+			end)
+		end
+
+		local function typeModel()
+			overlay.prompt({
+				title = "Model id",
+				description = "Type it exactly as the provider expects it. It is saved with this "
+					.. "provider and selected.",
+				placeholder = "model id",
+				confirmText = "Use it",
+				onConfirm = function(text)
+					-- Not persisted: the record is still being edited and may never be saved.
+					local ok, result = models.add(editing, text, { persist = false, select = true })
+					setModelNote(ok and ("Using " .. tostring(result)) or tostring(result), not ok)
+					paintModel()
+					showProblems()
+				end,
+			})
+		end
+
+		openModelMenu = function(handle)
+			local options = {}
+			local own = {}
+			for _, id in ipairs(editing.models or {}) do own[id] = true end
+			for _, id in ipairs(knownModels()) do
+				local badge = traits.badge(id)
+				local bits = {}
+				if badge then bits[#bits + 1] = badge end
+				if not own[id] then bits[#bits + 1] = "from /models" end
+				options[#options + 1] = {
+					label = id,
+					value = "model:" .. id,
+					detail = #bits > 0 and table.concat(bits, "  \194\183  ") or nil,
+					selected = id == editing.model,
+				}
+			end
+			if #options > 0 then options[#options + 1] = { divider = true } end
+			options[#options + 1] = {
+				label = "Fetch from /models",
+				value = "fetch",
+				detail = registry.endpoint(editing, "/models"),
+				tone = "info",
+			}
+			options[#options + 1] = { label = "Type an id", value = "add", tone = "info" }
+			overlay.menu({
+				target = handle.instance,
+				width = theme.size.menuWide,
+				options = options,
+				onSelect = function(value)
+					if value == "fetch" then
+						fetchModels(handle)
+					elseif value == "add" then
+						typeModel()
+					elseif util.startsWith(tostring(value), "model:") then
+						local id = tostring(value):sub(7)
+						models.add(editing, id, { persist = false, select = true })
+						editing.model = id
+						setModelNote(DEFAULT_MODEL_NOTE, false)
+						paintModel()
+						showProblems()
+					end
+				end,
+			})
+		end
+
+		row("Model", nil, function(column)
+			modelButton = P.button(column, {
+				name = "ActiveModel",
+				text = "Choose a model",
+				variant = "secondary",
+				fill = true,
+				align = "Left",
+				onClick = openModelMenu,
+			})
+			modelNote = P.text(column, {
+				name = "ModelNote",
+				text = DEFAULT_MODEL_NOTE,
+				role = "caption",
+				color = theme.color.textTertiary,
+				wrap = true,
+				auto = "Y",
+			})
+			modelNote.Size = UDim2.new(1, 0, 0, 0)
+			paintModel()
+			return modelButton
+		end)
+
+		forgetFetchedModels = function()
+			fetched = {}
+			setModelNote(DEFAULT_MODEL_NOTE, false)
+		end
+
 		-- Where the key comes from, when the preset knows. Thirteen of the seventeen
 		-- presets carry a docs URL and not one of them was ever rendered.
 		local presetRecord = catalog.get(editing.preset)
@@ -375,6 +544,15 @@ return function(env)
 			-- re-entry guard hangs off, and connecting to Activated directly meant a double
 			-- tap fired two concurrent completions.
 			onClick = function(handle)
+				-- A completion needs a model named, so testing without one asks the endpoint
+				-- a question it cannot answer -- and what comes back is that provider's own
+				-- wording for "no model", which reads as a broken connection rather than as
+				-- an empty field one row up.
+				if editing.preset ~= "azure" and util.trim(editing.model) == "" then
+					problemLabel.Text = "Choose a model first: fetch the list, or type the id."
+					problemLabel.Visible = true
+					return
+				end
 				handle.setEnabled(false)
 				handle.setText("Testing")
 				task.spawn(function()
