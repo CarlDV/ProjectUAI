@@ -323,6 +323,12 @@ function M.new(opts)
 		return input
 	end
 
+	-- Holds a modifier down for the duration of the next press, which is how a
+	-- shortcut that reads IsKeyDown can be exercised.
+	function harness.hold(keyName, down)
+		api.services.UserInputService.heldKeys[tostring(keyName)] = down ~= false
+	end
+
 	function harness.click(gui)
 		if not gui then return false, "no instance" end
 		if gui.__signals and gui.__signals.Activated then

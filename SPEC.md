@@ -75,7 +75,16 @@ it; `ui/*` must not require `agent/*` except through `agent/session`.
   jitter, `Retry-After` honoured, capped attempts, then the next provider in the
   fallback chain.
 * Secrets are redacted in the request log; only the last four characters of a
-  key are ever stored.
+  key are ever displayed, and the Providers panel never renders the key itself.
+* `util.encode` is the only path to `JSONEncode`, and it scrubs on the way through:
+  every string is repaired to valid UTF-8, NaN and the infinities become `0`, and a
+  function, userdata or thread becomes a marker rather than a raise. This is not
+  defensive coding for its own sake. `JSONEncode` refuses a string with one stray
+  Latin-1 byte in it and raises `Can't convert to JSON` with no position, because it
+  is a C function; a web search's scraped snippet is full of candidates; and the tool
+  result is already in the message history by then, so the failure repeats on every
+  following turn. `util.truncate` and `util.ellipsis` cut on character boundaries for
+  the same reason — both index in bytes and would otherwise bisect an em dash.
 
 ## 4. Provider records
 
@@ -133,42 +142,131 @@ error, not a crash.
 ## 6. Event stream
 
 `agent/loop` never touches the interface. It emits into `agent/session`, which
-fans out to subscribers:
+fans out to subscribers. Every payload also carries `kind` and `at` (epoch ms),
+stamped by `session.emit`.
 
 | kind | payload |
 | --- | --- |
+| `user` | `{ text }` |
 | `status` | `{ text }` |
-| `turn:start` / `turn:end` | `{ index }` / `{ index, reason }` |
-| `request:start` | `{ provider, model, attempt, messages }` |
-| `request:retry` | `{ provider, attempt, status, wait, reason }` |
-| `request:done` | `{ provider, model, ms, status }` |
+| `turn:start` / `turn:end` | `{ turns, unlimited }` / `{ text }` |
+| `request:start` | `{ provider, providerId, model, attempt, messages, stream }` |
+| `request:retry` | `{ provider, attempt, attempts, status, wait, reason }` |
+| `request:done` | `{ provider, model, ms, streamed, via }` or `{ provider, model, ms, error }` |
 | `provider:switch` | `{ from, to, reason }` |
-| `assistant:text` | `{ text, delta }` |
-| `assistant:reasoning` | `{ text, delta }` |
-| `tool:call` | `{ id, name, args, risk }` |
-| `tool:progress` | `{ id, text }` |
-| `tool:result` | `{ id, name, text, ms, truncated }` |
-| `tool:error` | `{ id, name, message }` |
-| `permission:ask` | `{ id, name, args, risk, resolve }` |
-| `usage` | `{ prompt, completion, total, cost }` |
-| `compact` | `{ removed, summary }` |
-| `todo` | `{ items }` |
+| `assistant:text` | `{ text, final }` |
+| `assistant:reasoning` | `{ text }` |
+| `tool:call` | `{ id, name, group, risk, arguments }` (arguments is the raw JSON string) |
+| `tool:progress` | `{ text }` |
+| `tool:result` / `tool:error` | the dispatch result: `{ id, name, ok, text, ms, risk, group, args, error, full, truncated, data }` |
+| `permission:ask` | `{ id, name, group, risk, description, args, resolve }` |
+| `usage` | `{ session, turn }` — the two counter tables from `agent/usage` |
+| `compact` | `{ summary, before, after }` |
+| `subagent:start` | `{ id, call, label, task, preset, turns, budget, depth }` |
+| `subagent:status` / `subagent:text` | `{ id, call, label, text, bad? }` |
+| `subagent:tool` / `subagent:tool:done` | `{ id, callId, name, risk, arguments, index }` / `{ …, ok, ms, summary }` |
+| `subagent:done` | `{ id, ms, ok, aborted, messages, turns, text }` |
+| `cleared` | `{}` |
 | `error` | `{ message, fatal }` |
 | `abort` | `{}` |
+
+The task list does not travel on this stream: `agent/state` owns it and publishes
+`todosChanged`, because the list outlives a turn and a panel opened later has to
+be able to read it rather than replay it.
+
+Each session mirrors the stream into a bounded `session.log` (400 events), and the
+transcript is a pure function of that log — `view.attach` replays it, which is what
+makes a rebuild on a mode or token change lossless. A subset of the kinds is also
+written to `sessions/<id>.json` and replayed on restore: `user`, `assistant:text`,
+`assistant:reasoning`, `tool:call`, `tool:result`, `tool:error`, the five
+`subagent:*` kinds, `request:retry`, `provider:switch`, `compact`, `error`, `abort`.
+The rest are deliberately excluded, and for two different reasons: `status`,
+`request:*`, `tool:progress`, `usage` and `turn:*` are meaningless once the turn
+they describe is over, and `permission:ask` carries the closure that answers it, so
+encoding it would fail the whole write. A call whose result is not in the restored
+log stops spinning and says the result was not kept, rather than inventing an
+outcome or spinning forever.
+
+## 6a. What is counted, and where
+
+`agent/stats` is the only place a figure the interface displays as a statistic
+comes from. It observes the stream through the `onEvent` hook and the
+`usage.recorded` signal, buckets everything by local day and local hour, and
+persists to `stats.json`.
+
+* A number is recorded or it is absent. Nothing is modelled, sampled or
+  interpolated, and no surface may compute a headline figure of its own.
+* Tokens are counted from the first request this store ever sees. There is no
+  history to recover -- `agent/usage` has always been in-memory -- and an
+  estimate would be a figure with no measurement behind it.
+* Messages and conversations *are* recovered once, on the first run, from the
+  real timestamps in the transcripts already on disk.
+* A subagent's requests and tokens count toward the conversation that dispatched
+  it; its messages do not, because nobody typed or read them.
+* Buckets are local, via `runtime/clock`: `dayKey`, `hourOf`, `dayNumber`. The
+  conversion is arithmetic on the epoch plus this host's UTC offset, probed once
+  from `DateTime`, because Roblox's pattern formatter is the only calendar API
+  and its pattern support differs between client versions.
+
+Persisted files, all under one folder (`env.info.folder`, default `UAI/`):
+
+| file | written by | holds |
+| --- | --- | --- |
+| `config.json` | `runtime/config` | every setting, the provider list, permission rules, memory |
+| `sessions/<id>.json` | `agent/session` | one conversation: the model's context, the transcript, its title, place and timestamps; capped at 20 |
+| `stats.json` | `agent/stats` | per-day and per-model counters; days capped at 400 |
+| `export/*.json` | the Import & export pane | a shareable copy of the settings, with keys reduced to four characters |
 
 ## 7. Design tokens
 
 No use site writes a raw colour or number. `ui/theme` exposes `theme.color.*`,
-`theme.text.*` (role -> size/font/lineHeight), `theme.space.*`, `theme.radius.*`,
-`theme.motion.*`, `theme.stroke.*`, `theme.z.*`. `ui/responsive` resolves the
-active breakpoint from the live viewport and republishes a scaled token set, so a
-window that opens on a phone and is then rotated re-lays-out rather than keeping
-whatever was true at boot.
+`theme.text.*` (role -> size/font/lineHeight/height), `theme.space.*`,
+`theme.size.*`, `theme.radius.*`, `theme.stroke.*`, `theme.opacity.*`,
+`theme.scale.*`, `theme.motion.*`, `theme.z.*`. `ui/responsive` reports the active
+breakpoint and layout mode from the live viewport, so a window that opens on a
+phone and is then rotated re-lays-out rather than keeping whatever was true at
+boot; it holds no metrics of its own.
 
-Breakpoints: `xs < 480`, `sm < 768`, `md < 1100`, `lg < 1600`, `xl`. Layout modes:
-`sheet` (xs), `panel` (sm), `window` (md+), plus `tv` when
-`GuiService:IsTenFootInterface()`. Minimum touch target is 44px on a touch
-device, 28px with a pointer.
+The palette is one warm neutral ramp of twelve steps plus one accent. Surfaces are
+separated by two or three steps of lightness and a hairline, never by a shadow or a
+heavy fill; the code surface sits *below* the canvas rather than above it -- except
+under the light code palette, which inverts that pair deliberately and separates the
+block from the page with its own border instead. The accent is reserved for meaning
+-- inline code, a running turn, a risk level -- and the single loud control per view
+is `color.solid`, a cream fill with dark text, which is deliberately not the accent.
+`test/run.lua` computes WCAG contrast over every pair the interface actually puts
+together, for every accent and every code palette, and fails the build under 4.5:1
+for text, so a token cannot be retuned into something unreadable.
+
+Four token groups are settings rather than constants, and each has to change what
+is on screen or it is decoration:
+
+| setting | token | effect |
+| --- | --- | --- |
+| `ui.interfaceFont` | every non-mono `theme.text.*.font` and `.face` | the family the interface is set in |
+| `ui.codeFont` | `theme.text.mono`, `theme.text.monoSmall`, `theme.codeFontEnumName` | the family code is set in, fenced and inline |
+| `ui.codeTheme` | `color.codeSurface`, `codeBar`, `codeText`, `codeGutter`, `codeAdd*`, `codeRemove*` | a light or dark code palette, in the transcript as well as the preview |
+| `ui.transcriptWidth` | `size.reading` | how wide the transcript and composer columns grow |
+
+Type resolves in two layers. `theme.text.<role>.font` is an `Enum.Font` and always
+takes; `.face` is a `FontFace` carrying the family plus an independent weight, and
+`P.text` layers it over the enum only when the client produced one -- so `strong` is a
+real SemiBold where the modern type stack exists and degrades to the family's legacy
+medium where it does not. The family list is *discovered*: each candidate is read back
+off the engine with `Font.fromEnum` and dropped when the member is absent, so a name
+this client cannot load can never be offered. A hardcoded `rbxasset://fonts/families`
+path has the opposite failure mode -- it constructs fine and renders nothing.
+
+A clickable row uses `P.rowButton`: the button *is* the row and the layout goes
+inside it. A transparent full-size button dropped in beside a row's contents does
+not layer over them -- a `UIListLayout` gives it a slot of its own and pushes them
+past the row's edge, where they are still drawn because nothing clips them.
+
+Breakpoints: `xs < 520`, `sm < 900`, `md < 1280`, `lg < 1700`, `xl`. Layout modes:
+`sheet` (xs), `panel` (sm, and any portrait orientation), `window` (md+), plus `tv`
+when `GuiService:IsTenFootInterface()`. Minimum touch target is 44px on a touch
+device, 28px with a pointer, 48px on a console. Navigation is reachable in every
+mode: the sidebar in `window`, the app menu in the header everywhere else.
 
 ## 8. Build and verification
 

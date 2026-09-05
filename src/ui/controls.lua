@@ -32,6 +32,10 @@ return function(env)
 		-- degrees, two of them part-transparent -- a smudge that was hard to tell from
 		-- a static one, which rather defeated the point of animating it.
 		local dotSize = math.max(math.floor(size / 3.2), 3)
+		-- One opacity ramp, used both for the resting state and for the chase. It was
+		-- two -- 0.3 at rest and 0.34 animated -- so the dots jumped a step the moment
+		-- the first tick landed.
+		local FADE_STEP = 0.34
 		local dots = {}
 		for index = 1, 3 do
 			local dot = P.frame(holder, {
@@ -42,7 +46,7 @@ return function(env)
 				anchor = Vector2.new(0.5, 0.5),
 			})
 			dots[index] = dot
-			dot.BackgroundTransparency = (index - 1) * 0.3
+			dot.BackgroundTransparency = (index - 1) * FADE_STEP
 			local angle = (index - 1) * 120
 			dot.Position = UDim2.fromScale(
 				0.5 + math.cos(math.rad(angle)) * 0.34,
@@ -56,10 +60,10 @@ return function(env)
 			-- ever declines to tween Rotation there is nothing left at all -- this does
 			-- not depend on the tween having taken.
 			local phase = 0
-			local stop = clock.interval(0.16, function()
+			local stop = clock.interval(theme.motion.fast, function()
 				phase = (phase + 1) % 3
 				for index = 1, 3 do
-					dots[index].BackgroundTransparency = ((index + phase) % 3) * 0.34
+					dots[index].BackgroundTransparency = ((index + phase) % 3) * FADE_STEP
 				end
 			end)
 			holder.Destroying:Connect(function()
@@ -72,8 +76,10 @@ return function(env)
 
 	function C.switch(parent, props)
 		props = props or {}
-		local width = 38
-		local height = 22
+		local width = theme.size.switchWide
+		local height = theme.size.switch
+		local inset = math.max(math.floor(height / 8), 2)
+		local knobSize = height - inset * 2
 		local button = Instance.new("TextButton", parent)
 		button.Text = ""
 		button.AutoButtonColor = false
@@ -87,26 +93,29 @@ return function(env)
 
 		local knob = P.frame(button, {
 			name = "Knob",
-			size = UDim2.fromOffset(height - 6, height - 6),
-			position = UDim2.new(0, 3, 0.5, 0),
+			size = UDim2.fromOffset(knobSize, knobSize),
+			position = UDim2.new(0, inset, 0.5, 0),
 			anchor = Vector2.new(0, 0.5),
-			bg = theme.color.textSecondary,
+			bg = theme.color.textTertiary,
 			radius = theme.radius.pill,
 		})
 
 		local handle = { value = props.value == true }
 
+		-- On is the full accent with a cream knob, not a muted wash: a switch is the
+		-- one control whose entire job is to be readable at a glance from across a
+		-- settings list, and the muted version could not be told from off.
 		local function paint(animate)
-			local info = animate and theme.tween("hover") or TweenInfo.new(0.01)
+			local info = animate and theme.tween("hover") or theme.tween("instant")
 			env.tween:Create(button, info, {
-				BackgroundColor3 = handle.value and theme.color.accentMuted or theme.color.surfaceActive,
+				BackgroundColor3 = handle.value and theme.color.accent or theme.color.surfaceActive,
 			}):Play()
 			env.tween:Create(stroke, info, {
-				Color = handle.value and theme.color.accentBorder or theme.color.border,
+				Color = handle.value and theme.color.accent or theme.color.border,
 			}):Play()
 			env.tween:Create(knob, info, {
-				Position = handle.value and UDim2.new(1, -3, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
-				BackgroundColor3 = handle.value and theme.color.accentHot or theme.color.textSecondary,
+				Position = handle.value and UDim2.new(1, -inset, 0.5, 0) or UDim2.new(0, inset, 0.5, 0),
+				BackgroundColor3 = handle.value and theme.color.solid or theme.color.textTertiary,
 			}):Play()
 			knob.AnchorPoint = handle.value and Vector2.new(1, 0.5) or Vector2.new(0, 0.5)
 		end
@@ -138,7 +147,7 @@ return function(env)
 		local min = props.min or (stops and stops[1]) or 0
 		local max = props.max or (stops and stops[#stops]) or 1
 		local step = props.step
-		local height = math.max(responsive.minTarget(), 24)
+		local height = math.max(responsive.minTarget(), theme.size.controlSmall)
 
 		local shell = P.frame(parent, {
 			name = props.name or "Slider",
@@ -147,7 +156,7 @@ return function(env)
 		})
 		local track = P.frame(shell, {
 			name = "Track",
-			size = UDim2.new(1, 0, 0, 4),
+			size = UDim2.new(1, 0, 0, theme.size.track),
 			position = UDim2.fromScale(0, 0.5),
 			anchor = Vector2.new(0, 0.5),
 			bg = theme.color.surfaceActive,
@@ -161,13 +170,12 @@ return function(env)
 		})
 		local knob = P.frame(shell, {
 			name = "Knob",
-			size = UDim2.fromOffset(14, 14),
+			size = UDim2.fromOffset(theme.size.knob, theme.size.knob),
 			anchor = Vector2.new(0.5, 0.5),
-			bg = theme.color.text,
+			bg = theme.color.solid,
 			radius = theme.radius.pill,
 			zIndex = 3,
 		})
-		P.stroke(knob, theme.color.borderStrong)
 
 		local handle = { value = util.clamp(props.value or min, min, max), instance = shell }
 
@@ -232,7 +240,9 @@ return function(env)
 			if kind ~= Enum.UserInputType.MouseButton1 and kind ~= Enum.UserInputType.Touch then return end
 			dragging = true
 			fromInput(input)
-			env.tween:Create(knob, theme.tween("press"), { Size = UDim2.fromOffset(18, 18) }):Play()
+			env.tween:Create(knob, theme.tween("press"), {
+				Size = UDim2.fromOffset(theme.size.knob + theme.space.xxs, theme.size.knob + theme.space.xxs),
+			}):Play()
 		end)
 
 		hit.InputEnded:Connect(function(input)
@@ -240,7 +250,9 @@ return function(env)
 			if kind ~= Enum.UserInputType.MouseButton1 and kind ~= Enum.UserInputType.Touch then return end
 			if not dragging then return end
 			dragging = false
-			env.tween:Create(knob, theme.tween("press"), { Size = UDim2.fromOffset(14, 14) }):Play()
+			env.tween:Create(knob, theme.tween("press"), {
+				Size = UDim2.fromOffset(theme.size.knob, theme.size.knob),
+			}):Play()
 			if props.onCommit then pcall(props.onCommit, handle.value) end
 		end)
 
@@ -267,21 +279,36 @@ return function(env)
 	local SEGMENT_MIN = 64
 	local SEGMENT_CAP = 860
 
+	-- Average glyph advance as a fraction of the font size, for this family at label
+	-- weight. Derived rather than hardcoded in pixels, so the measurement follows the
+	-- text scale instead of silently mis-measuring every label at 1.4.
+	local GLYPH_RATIO = 0.53
+
 	local function segmentedWidth(options)
+		local perCharacter = theme.text.label.size * GLYPH_RATIO
 		local total = 0
 		for _, option in ipairs(options or {}) do
 			local text = tostring(option.label or option.value or option)
-			-- ~6.4px per character at the label role, plus the button's own padding.
-			total = total + math.max(SEGMENT_MIN, math.floor(#text * 6.4) + theme.space.md * 2)
+			total = total + math.max(SEGMENT_MIN, math.floor(#text * perCharacter) + theme.space.md * 2)
 		end
-		total = total + 4 + math.max(#(options or {}) - 1, 0) * 2
+		total = total + theme.space.xxs + math.max(#(options or {}) - 1, 0) * theme.space.hair
 		return math.min(total, SEGMENT_CAP)
+	end
+
+	-- The width a segmented control wants, for a caller that has to state one because
+	-- its own row is sizing itself to its contents. Exposed rather than left private
+	-- so the header does not have to keep a remembered number in step with the labels.
+	function C.segmentedWidth(options)
+		return segmentedWidth(options)
 	end
 
 	function C.segmented(parent, props)
 		props = props or {}
 		local height = math.max(theme.size.tab, responsive.minTarget())
 		local cap = segmentedWidth(props.options)
+		-- An inset well: the container is a step *below* whatever it sits on and has
+		-- no outline of its own, so the selected segment reads as raised out of it
+		-- rather than as one bordered box inside another.
 		local row = P.row(parent, {
 			name = props.name or "Segmented",
 			-- An explicit width is an offset, because a scale width contributes
@@ -289,14 +316,13 @@ return function(env)
 			size = props.width and UDim2.fromOffset(props.width, height)
 				or UDim2.new(1, 0, 0, height),
 			maxSize = (not props.width) and Vector2.new(cap, math.huge) or nil,
-			bg = theme.color.surfaceRaised,
+			bg = theme.color.surface,
 			radius = theme.radius.md,
-			gap = 2,
-			padding = 2,
+			gap = theme.space.hair,
+			padding = theme.space.hair,
 			layoutOrder = props.layoutOrder,
 			stretch = true,
 		})
-		P.stroke(row, theme.color.borderSubtle)
 
 		local handle = { value = props.value, buttons = {} }
 
@@ -304,7 +330,7 @@ return function(env)
 			for value, entry in pairs(handle.buttons) do
 				local selected = value == handle.value
 				env.tween:Create(entry.button, theme.tween("hover"), {
-					BackgroundColor3 = selected and theme.color.surfaceActive or theme.color.surfaceRaised,
+					BackgroundColor3 = selected and theme.color.surfaceActive or theme.color.surface,
 					BackgroundTransparency = selected and 0 or 1,
 				}):Play()
 				env.tween:Create(entry.label, theme.tween("hover"), {
@@ -319,7 +345,7 @@ return function(env)
 			button.Name = "Segment_" .. tostring(value)
 			button.Text = ""
 			button.AutoButtonColor = false
-			button.BackgroundColor3 = theme.color.surfaceRaised
+			button.BackgroundColor3 = theme.color.surface
 			button.BackgroundTransparency = 1
 			button.BorderSizePixel = 0
 			button.Size = UDim2.new(0, 0, 1, 0)
@@ -359,7 +385,7 @@ return function(env)
 		props = props or {}
 		local track = P.frame(parent, {
 			name = "Progress",
-			size = UDim2.new(1, 0, 0, 3),
+			size = UDim2.new(1, 0, 0, theme.size.track),
 			bg = theme.color.surfaceActive,
 			radius = theme.radius.pill,
 			layoutOrder = props.layoutOrder,
@@ -382,6 +408,7 @@ return function(env)
 
 	function C.keyValue(parent, props)
 		props = props or {}
+		local keyWidth = props.keyWidth or theme.size.keyColumn
 		local row = P.row(parent, {
 			name = "KeyValue",
 			size = UDim2.new(1, 0, 0, 0),
@@ -398,7 +425,7 @@ return function(env)
 			layoutOrder = 1,
 			truncate = true,
 		})
-		key.Size = UDim2.new(0, props.keyWidth or 108, 0, theme.text.small.size + 4)
+		key.Size = UDim2.new(0, keyWidth, 0, theme.text.small.height)
 		local value = P.text(row, {
 			text = tostring(props.value or ""),
 			role = props.role or "small",
@@ -407,7 +434,7 @@ return function(env)
 			auto = "Y",
 			layoutOrder = 2,
 		})
-		value.Size = UDim2.new(1, -(props.keyWidth or 108) - theme.space.sm, 0, 0)
+		value.Size = UDim2.new(1, -(keyWidth + theme.space.sm), 0, 0)
 		return row, value
 	end
 

@@ -40,7 +40,7 @@ return function(env)
 		local modal = overlay.modal({
 			title = "Allow " .. tostring(request.name) .. "?",
 			description = RISK_TEXT[request.risk or "write"] or RISK_TEXT.write,
-			width = 400,
+			width = theme.size.modalWide,
 			dismissable = true,
 			onClose = function() answer(false) end,
 		})
@@ -99,8 +99,9 @@ return function(env)
 			layoutOrder = 4,
 		})
 		local rememberText = P.column(rememberRow, {
-			size = UDim2.new(1, -46, 0, 0),
+			size = UDim2.new(0, 0, 0, 0),
 			auto = "Y",
+			flex = "Fill",
 			gap = 0,
 			layoutOrder = 1,
 		})

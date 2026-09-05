@@ -178,7 +178,15 @@ return function(env)
 						callId = event.id,
 						name = event.name,
 						risk = event.risk,
-						arguments = util.ellipsis(tostring(event.arguments or ""):gsub("%s+", " "), 160),
+						-- Forwarded whole, and summarised by the view instead.
+						--
+						-- A child session is headless and therefore keeps no log of its own, so
+						-- this event is the only record that the call ever happened. At 160
+						-- characters, whitespace-collapsed, the Luau a subagent executed was
+						-- unrecoverable -- and a subagent is exactly where the long-running code
+						-- in this client gets run. The parent's log is bounded at 400 events,
+						-- which is what caps the cost of keeping it.
+						arguments = tostring(event.arguments or ""),
 						index = calls,
 					})
 				elseif event.kind == "tool:result" or event.kind == "tool:error" then
@@ -188,6 +196,9 @@ return function(env)
 						ok = event.kind == "tool:result",
 						ms = event.ms,
 						summary = util.ellipsis(tostring(event.text or ""):gsub("%s+", " "), 140),
+						-- The full result as well, for the row that can open. `summary` is what
+						-- the collapsed line shows and stays short.
+						text = tostring(event.text or ""),
 					})
 				elseif event.kind == "assistant:text" then
 					if util.trim(tostring(event.text or "")) ~= "" then

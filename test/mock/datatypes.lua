@@ -305,7 +305,19 @@ M.Random = {
 -- resolves (the client may legitimately touch enums this harness has never heard
 -- of) but is recorded in Enum.__unknown for the report.
 local KNOWN = {
-	Font = "Gotham GothamMedium GothamBold GothamSemibold GothamBlack Code RobotoMono SourceSans SourceSansBold SourceSansSemibold Arial ArialBold Legacy Nunito BuilderSans BuilderSansMedium BuilderSansBold BuilderSansExtraBold",
+	-- The real Enum.Font, in full. It was a fifteen-member subset, which made the
+	-- interface's font probe -- which asks the engine for a family and drops it when the
+	-- member is absent -- report every family outside that subset as an unrecognised
+	-- enum. The proxy resolves anything asked of it, so an incomplete list here turns a
+	-- correct probe into a test failure and would let a genuine typo through.
+	-- GothamSemibold is kept: it was removed from the engine but old code still names it.
+	Font = "Legacy Arial ArialBold SourceSans SourceSansBold SourceSansLight SourceSansItalic"
+		.. " Bodoni Garamond Cartoon Code Highway SciFi Arcade Fantasy Antique SourceSansSemibold"
+		.. " Gotham GothamMedium GothamBold GothamBlack GothamSemibold AmaticSC Bangers Creepster"
+		.. " DenkOne Fondamento FredokaOne GrenzeGotisch IndieFlower JosefinSans Jura Kalam"
+		.. " LuckiestGuy Merriweather Michroma Nunito Oswald PatrickHand PermanentMarker Roboto"
+		.. " RobotoCondensed RobotoMono Sarpanch SpecialElite TitilliumWeb Ubuntu BuilderSans"
+		.. " BuilderSansMedium BuilderSansBold BuilderSansExtraBold Arimo ArimoBold Unknown",
 	EasingStyle = "Linear Sine Back Quad Quart Quint Exponential Circular Elastic Bounce Cubic",
 	EasingDirection = "In Out InOut",
 	TextXAlignment = "Left Center Right",
@@ -329,7 +341,7 @@ local KNOWN = {
 	SelectionBehavior = "Escape Stop",
 	UserInputType = "MouseButton1 MouseButton2 MouseButton3 MouseWheel MouseMovement Touch Keyboard Gamepad1 Gamepad2 Focus Accelerometer Gyro TextInput InputMethod None",
 	UserInputState = "Begin Change End Cancel None",
-	KeyCode = "Unknown Return Escape Backspace Tab Space Slash A B C D E F G H I J K L M N O P Q R S T U V W X Y Z Zero One Two Three Four Five Six Seven Eight Nine Up Down Left Right LeftShift RightShift LeftControl RightControl LeftAlt RightAlt Delete Home End PageUp PageDown F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 ButtonA ButtonB ButtonX ButtonY ButtonL1 ButtonR1 ButtonSelect ButtonStart DPadUp DPadDown DPadLeft DPadRight Thumbstick1 Thumbstick2",
+	KeyCode = "Unknown Return Escape Backspace Tab Space Slash A B C D E F G H I J K L M N O P Q R S T U V W X Y Z Zero One Two Three Four Five Six Seven Eight Nine Up Down Left Right LeftShift RightShift LeftControl RightControl LeftAlt RightAlt Delete Home End PageUp PageDown F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 ButtonA ButtonB ButtonX ButtonY ButtonL1 ButtonR1 ButtonSelect ButtonStart DPadUp DPadDown DPadLeft DPadRight Thumbstick1 Thumbstick2 Semicolon Quote Comma Period Minus Equals LeftBracket RightBracket Backslash BackQuote Insert CapsLock Print Pause KeypadZero KeypadOne KeypadTwo KeypadThree KeypadFour KeypadFive KeypadSix KeypadSeven KeypadEight KeypadNine",
 	RaycastFilterType = "Include Exclude",
 	Material = "Plastic SmoothPlastic Neon Glass ForceField Metal Wood Concrete Air Water",
 	NormalId = "Top Bottom Left Right Front Back",

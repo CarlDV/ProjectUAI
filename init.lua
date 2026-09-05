@@ -104,11 +104,20 @@ local function start()
 	log.mirror = config.get("logs.mirror", false) == true
 	log.info("boot", string.format("UAI %s starting -- %s", VERSION, caps.summary()))
 
+	-- Asked for early and answered in the background: the place name is what the
+	-- conversation list groups by, and it is a web call.
+	env.require("runtime/place").resolve()
+
 	env.require("agent/hooks").adoptContext()
 	env.require("agent/registry").load()
 
 	local sessions = env.require("agent/session")
 	sessions.restore()
+
+	-- After the restore, because the first run recovers the real message history out
+	-- of whatever transcripts are already on disk, and before the interface, because
+	-- the home card reads it as soon as it builds.
+	env.require("agent/stats").init()
 
 	local app = env.require("ui/app")
 	app.mount()

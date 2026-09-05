@@ -41,6 +41,141 @@ return function(env)
 			math.floor(seconds / 3600) % 24, math.floor(seconds / 60) % 60, seconds % 60)
 	end
 
+	-- Calendar ---------------------------------------------------------------
+	--
+	-- Activity is counted per day and per hour of the day, so both have to mean the
+	-- same thing on every host: the day the person in front of the screen would
+	-- name. Roblox's only calendar API is DateTime's pattern formatter, and its
+	-- pattern support differs between client versions -- so the conversion is done
+	-- here in arithmetic, from the epoch millisecond count plus this host's offset
+	-- from UTC, and the formatter is asked for exactly one thing: that offset.
+	local MINUTE_MS = 60000
+	local DAY_MINUTES = 1440
+	-- The widest real offsets are -12:00 (Baker Island) and +14:00 (Kiritimati).
+	local OFFSET_LIMIT = 840
+	local offsetMinutes = nil
+
+	function M.offsetMinutes()
+		if offsetMinutes then return offsetMinutes end
+		offsetMinutes = 0
+		local seconds = math.floor(M.ms() / 1000)
+		local ok, text = pcall(function()
+			return DateTime.fromUnixTimestamp(seconds):FormatLocalTime("HH:mm", "en-us")
+		end)
+		if ok and type(text) == "string" then
+			local hour, minute = text:match("^(%d%d?):(%d%d)$")
+			if hour then
+				local delta = (tonumber(hour) * 60 + tonumber(minute))
+					- math.floor((seconds % 86400) / 60)
+				if delta > OFFSET_LIMIT then delta = delta - DAY_MINUTES end
+				if delta < -OFFSET_LIMIT then delta = delta + DAY_MINUTES end
+				-- Quarter-hour zones exist (Nepal is +05:45); minutes of drift between
+				-- the two reads do not.
+				offsetMinutes = math.floor(delta / 15 + 0.5) * 15
+			end
+		end
+		return offsetMinutes
+	end
+
+	-- Howard Hinnant's civil-from-days, which is exact for every date a client can
+	-- hold and needs no leap-year table. `days` is days since 1970-01-01.
+	function M.civilFromDays(days)
+		local shifted = math.floor(days) + 719468
+		local era = math.floor(shifted / 146097)
+		local dayOfEra = shifted - era * 146097
+		local yearOfEra = math.floor((dayOfEra - math.floor(dayOfEra / 1460)
+			+ math.floor(dayOfEra / 36524) - math.floor(dayOfEra / 146096)) / 365)
+		local year = yearOfEra + era * 400
+		local dayOfYear = dayOfEra - (365 * yearOfEra + math.floor(yearOfEra / 4)
+			- math.floor(yearOfEra / 100))
+		local monthPrime = math.floor((5 * dayOfYear + 2) / 153)
+		local day = dayOfYear - math.floor((153 * monthPrime + 2) / 5) + 1
+		local month = monthPrime + 3
+		if monthPrime >= 10 then month = monthPrime - 9 end
+		if month <= 2 then year = year + 1 end
+		return year, month, day
+	end
+
+	function M.daysFromCivil(year, month, day)
+		local y = year
+		if month <= 2 then y = y - 1 end
+		local era = math.floor(y / 400)
+		local yearOfEra = y - era * 400
+		local shift = 9
+		if month > 2 then shift = -3 end
+		local dayOfYear = math.floor((153 * (month + shift) + 2) / 5) + day - 1
+		local dayOfEra = yearOfEra * 365 + math.floor(yearOfEra / 4)
+			- math.floor(yearOfEra / 100) + dayOfYear
+		return era * 146097 + dayOfEra - 719468
+	end
+
+	-- Local days since the epoch. The unit every per-day bucket is keyed by.
+	function M.dayNumber(ms)
+		local shifted = (ms or M.ms()) + M.offsetMinutes() * MINUTE_MS
+		return math.floor(shifted / 86400000)
+	end
+
+	function M.keyFromDayNumber(days)
+		local year, month, day = M.civilFromDays(days)
+		return string.format("%04d-%02d-%02d", year, month, day)
+	end
+
+	function M.dayKey(ms)
+		return M.keyFromDayNumber(M.dayNumber(ms))
+	end
+
+	-- Nil rather than a guess for anything that is not a key: these come out of a
+	-- stored file, and a corrupt one must not be silently read as 1970.
+	function M.dayNumberOfKey(key)
+		local year, month, day = tostring(key or ""):match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+		if not year then return nil end
+		return M.daysFromCivil(tonumber(year), tonumber(month), tonumber(day))
+	end
+
+	function M.hourOf(ms)
+		local shifted = (ms or M.ms()) + M.offsetMinutes() * MINUTE_MS
+		return math.floor((shifted % 86400000) / 3600000)
+	end
+
+	-- Monday = 1. The epoch itself was a Thursday, which is where the 3 comes from.
+	function M.weekdayOfDayNumber(days)
+		return ((days + 3) % 7) + 1
+	end
+
+	local MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+	local WEEKDAYS = { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" }
+
+	function M.monthName(month)
+		return MONTHS[month] or "?"
+	end
+
+	function M.weekdayName(index)
+		return WEEKDAYS[index] or "?"
+	end
+
+	-- "Sat 5 Jul 2026", or without the year when it is the current one -- the form a
+	-- date is read in rather than the form it is stored in.
+	function M.describeDay(key, todayKey)
+		local days = M.dayNumberOfKey(key)
+		if not days then return tostring(key) end
+		local year, month, day = M.civilFromDays(days)
+		local thisYear = M.civilFromDays(M.dayNumberOfKey(todayKey or M.dayKey()) or days)
+		local head = string.format("%s %d %s", WEEKDAYS[M.weekdayOfDayNumber(days)], day, MONTHS[month])
+		if year == thisYear then return head end
+		return head .. " " .. tostring(year)
+	end
+
+	-- 12-hour clock with a meridiem, which is how a "peak hour" reads.
+	function M.describeHour(hour)
+		hour = math.floor(tonumber(hour) or 0) % 24
+		local suffix = "AM"
+		if hour >= 12 then suffix = "PM" end
+		local display = hour % 12
+		if display == 0 then display = 12 end
+		return string.format("%d %s", display, suffix)
+	end
+
 	function M.wait(seconds)
 		return task.wait(seconds)
 	end

@@ -104,7 +104,7 @@ return function(env)
 		[400] = "the provider rejected the request",
 		[401] = "the API key was rejected",
 		[402] = "the account is out of credit",
-		[403] = "the provider refused the request -- the key may lack access to it, or an edge filter blocked the call",
+		[403] = "the provider refused the request -- the key may lack access to it",
 		[404] = "endpoint or model not found -- check the base URL and model name",
 		[413] = "the request was too large",
 		[422] = "the provider could not process the request",
@@ -115,9 +115,47 @@ return function(env)
 		[529] = "the provider is overloaded",
 	}
 
+	-- An HTML body on a refusal is not the API talking.
+	--
+	-- A gateway answers in JSON. A whole HTML document -- especially one opening with
+	-- Cloudflare's `<!--[if lt IE 7]>` conditional-comment block -- means the request was
+	-- stopped in front of the API and never reached the account, the key or the model. So
+	-- naming any of those as a possible cause, which the 403 text did, sends the reader
+	-- off to check three things that are all fine. The response headers say which edge it
+	-- was: `server`, `cf-ray` and `cf-mitigated` are already kept for the Requests view.
+	local function edgeBlock(res)
+		if not res then return nil end
+		local body = util.trim(tostring(res.body or ""))
+		if body == "" then return nil end
+		local head = body:sub(1, 400):lower()
+		local looksHtml = body:sub(1, 1) == "<"
+			and (head:find("<!doctype", 1, true) or head:find("<html", 1, true)
+				or head:find("<!--[if", 1, true))
+		if not looksHtml then return nil end
+		local bits = {}
+		local server = util.trim(tostring(http.header(res, "server") or ""))
+		local mitigated = util.trim(tostring(http.header(res, "cf-mitigated") or ""))
+		local ray = util.trim(tostring(http.header(res, "cf-ray") or ""))
+		if server ~= "" then bits[#bits + 1] = server end
+		if mitigated ~= "" then bits[#bits + 1] = "cf-mitigated " .. mitigated end
+		if ray ~= "" then bits[#bits + 1] = ray end
+		return #bits > 0 and table.concat(bits, ", ") or "an edge in front of the API"
+	end
+
 	function M.errorText(res, err)
 		if err and not res then return tostring(err) end
 		local status = res and res.status or 0
+		-- Checked before the status table, because the status is the least informative
+		-- thing about this class of failure.
+		local edge = edgeBlock(res)
+		if edge then
+			return string.format(
+				"stopped before it reached the API (%d) by %s. It answered with an HTML page "
+				.. "rather than JSON, so the key, the model and the account are not implicated -- "
+				.. "the request itself was refused. Turning off the Claude Code identity for this "
+				.. "provider is the one thing this client can change about how it looks.",
+				status, edge)
+		end
 		local decoded = res and util.decode(res.body) or nil
 		local message
 		if type(decoded) == "table" then

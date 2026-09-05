@@ -66,7 +66,7 @@ return function(env)
 
 		local card = P.column(M.root, {
 			name = "QuickCard",
-			size = UDim2.new(0, math.min(math.max(responsive.viewport.X * 0.5, 360), 720), 0, 0),
+			size = UDim2.new(0, math.min(math.max(responsive.viewport.X * 0.5, theme.size.modal), theme.size.reading * 0.6), 0, 0),
 			auto = "Y",
 			anchor = Vector2.new(0.5, 0.5),
 			position = UDim2.fromScale(0.5, 0.42),
@@ -79,7 +79,7 @@ return function(env)
 		P.stroke(card, theme.color.accentBorder)
 		M.card = card
 		M.scale = Instance.new("UIScale", card)
-		M.scale.Scale = 0.96
+		M.scale.Scale = theme.scale.enter
 
 		M.field = P.field(card, {
 			name = "QuickPrompt",
@@ -117,16 +117,16 @@ return function(env)
 		M.root.Visible = true
 		if responsive.reduceMotion then
 			M.scale.Scale = 1
-			M.scrim.BackgroundTransparency = 0.5
+			M.scrim.BackgroundTransparency = theme.opacity.scrim
 		else
-			M.scale.Scale = 0.96
+			M.scale.Scale = theme.scale.enter
 			M.scrim.BackgroundTransparency = 1
 			env.tween:Create(M.scale, theme.tween("enter"), { Scale = 1 }):Play()
-			env.tween:Create(M.scrim, theme.tween("enter"), { BackgroundTransparency = 0.5 }):Play()
+			env.tween:Create(M.scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
 		end
 		-- One frame late: capturing focus in the same frame the surface becomes
 		-- visible is unreliable.
-		clock.delay(0.05, function()
+		clock.delay(theme.motion.fast, function()
 			if M.visible then M.field.focus() end
 		end)
 	end
@@ -139,7 +139,7 @@ return function(env)
 			M.root.Visible = false
 			return
 		end
-		env.tween:Create(M.scale, theme.tween("exit"), { Scale = 0.96 }):Play()
+		env.tween:Create(M.scale, theme.tween("exit"), { Scale = theme.scale.enter }):Play()
 		local out = env.tween:Create(M.scrim, theme.tween("exit"), { BackgroundTransparency = 1 })
 		out.Completed:Connect(function()
 			-- Only hide if nothing reopened it while the tween ran.

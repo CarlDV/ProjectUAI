@@ -34,11 +34,10 @@ return function(env)
 			layoutOrder = 1,
 		})
 
-		local tabs
 		local scroll
 		local function render() end
 
-		tabs = C.segmented(head, {
+		C.segmented(head, {
 			options = {
 				{ value = "requests", label = "Requests" },
 				{ value = "log", label = "Log" },
@@ -57,7 +56,7 @@ return function(env)
 			color = theme.color.textTertiary,
 			layoutOrder = 1,
 		})
-		countLabel.Size = UDim2.fromOffset(0, theme.text.caption.size + 6)
+		countLabel.Size = UDim2.fromOffset(0, theme.text.caption.height + theme.space.hair)
 		countLabel.AutomaticSize = Enum.AutomaticSize.X
 		-- A growing spacer rather than a hardcoded reserve on the label: the buttons
 		-- are auto-width and grow with the text scale, so any fixed number is either
@@ -94,8 +93,8 @@ return function(env)
 			size = UDim2.new(1, 0, 1, 0),
 			-- Tight, because the rows now carry their own banding and padding; a six
 			-- pixel gap between banded rows reads as a gap in the data.
-			gap = 2,
-			padding = { x = theme.space.md, bottom = theme.space.md },
+			gap = theme.space.hair,
+			padding = { x = theme.space.md, top = theme.space.xs, bottom = theme.space.lg },
 			layoutOrder = 2,
 		})
 		local flex = Instance.new("UIFlexItem", scroll.instance)
@@ -117,7 +116,7 @@ return function(env)
 				padding = theme.space.sm,
 			})
 			local top = P.row(card, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs })
-			P.statusDot(top, { color = theme.toneColor(tone), diameter = 7, layoutOrder = 1 })
+			P.statusDot(top, { color = theme.toneColor(tone), diameter = theme.size.dot, layoutOrder = 1 })
 			local title = P.text(top, {
 				text = string.format("%s %s", entry.method, entry.tag or ""),
 				role = "monoSmall",
@@ -135,7 +134,7 @@ return function(env)
 				align = "Right",
 				layoutOrder = 3,
 			})
-			meta.Size = UDim2.fromOffset(96, theme.text.caption.size + 4)
+			meta.Size = UDim2.fromOffset(theme.size.metaColumnWide + theme.space.sm, theme.text.caption.height)
 
 			local url = P.text(card, {
 				text = entry.url,
@@ -195,9 +194,19 @@ return function(env)
 		-- Column reserves, named once so the body's remainder cannot drift out of step
 		-- with them. They were 58 and 74 for an eight-character timestamp and a
 		-- four-letter source, which left about sixty pixels of nothing on every row.
-		local STAMP_WIDTH = 46
-		local SOURCE_WIDTH = 44
-		local DOT_WIDTH = 6
+		--
+		-- Both are derived from the type rather than measured in pixels: a timestamp is
+		-- eight monospaced-ish characters and a source is five, so at text scale 1.4 the
+		-- columns grow with the text instead of clipping it. The dot is the token that
+		-- already exists for a status dot; it was a third literal that happened to agree
+		-- with it.
+		local STAMP_WIDTH = math.ceil(theme.text.caption.size * 8 * 0.62)
+		local SOURCE_WIDTH = math.ceil(theme.text.caption.size * 5 * 0.62)
+		local DOT_WIDTH = theme.size.dot
+		-- One height for all three meta columns. They were caption.size + 4 (16) beside a
+		-- dot slot of caption.height (17) beside a monoSmall body (18), which is three box
+		-- heights in one top-aligned row.
+		local META_HEIGHT = theme.text.caption.height
 
 		local function logRow(entry, order)
 			local row = P.row(scroll.instance, {
@@ -208,7 +217,7 @@ return function(env)
 				-- apart read as one block of text rather than as a table.
 				bg = (order % 2 == 0) and theme.color.surfaceRaised or nil,
 				radius = theme.radius.sm,
-				padding = { x = theme.space.xs, y = 2 },
+				padding = { x = theme.space.xs, y = theme.space.hair },
 				-- Top-aligned put the 6px dot's centre four pixels above the text's,
 				-- so every dot in the list rode high. The message can wrap to a second
 				-- line, so the meta columns are given the row's height and centre their
@@ -222,7 +231,7 @@ return function(env)
 			-- against 14px labels rode four pixels high on every line in the list.
 			local dotSlot = P.frame(row, {
 				name = "Level",
-				size = UDim2.fromOffset(DOT_WIDTH, theme.text.caption.size + 4),
+				size = UDim2.fromOffset(DOT_WIDTH, META_HEIGHT),
 				layoutOrder = 1,
 			})
 			P.statusDot(dotSlot, {
@@ -237,7 +246,7 @@ return function(env)
 				color = theme.color.textTertiary,
 				layoutOrder = 2,
 			})
-			stamp.Size = UDim2.fromOffset(STAMP_WIDTH, theme.text.caption.size + 4)
+			stamp.Size = UDim2.fromOffset(STAMP_WIDTH, META_HEIGHT)
 			local source = P.text(row, {
 				text = entry.source,
 				role = "caption",
@@ -245,16 +254,20 @@ return function(env)
 				layoutOrder = 3,
 				truncate = true,
 			})
-			source.Size = UDim2.fromOffset(SOURCE_WIDTH, theme.text.caption.size + 4)
+			source.Size = UDim2.fromOffset(SOURCE_WIDTH, META_HEIGHT)
 			local body = P.text(row, {
 				text = entry.message .. (entry.detail and ("  " .. entry.detail) or ""),
 				role = "monoSmall",
 				color = entry.level == "error" and theme.color.danger or theme.color.textSecondary,
 				wrap = true,
 				auto = "Y",
+				-- Fills, rather than subtracting three reserves and three gaps by hand.
+				-- That remainder was correct only as long as nobody touched any of the six
+				-- numbers in it.
+				size = UDim2.new(0, 0, 0, 0),
+				flex = "Fill",
 				layoutOrder = 4,
 			})
-			body.Size = UDim2.new(1, -(STAMP_WIDTH + SOURCE_WIDTH + DOT_WIDTH + theme.space.xs * 3), 0, 0)
 			return row
 		end
 

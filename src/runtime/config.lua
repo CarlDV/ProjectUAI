@@ -17,18 +17,35 @@ return function(env)
 		version = 1,
 		ui = {
 			density = "comfortable",
-			accent = "aurora",
+			accent = "claude",
 			reduceMotion = "auto",
 			layout = "auto",
 			panel = "chat",
 			fontScale = 1,
 			showReasoning = true,
 			showToolDetail = false,
+			-- Whether the code a tool was handed is drawn under its row, outside the
+			-- fold. On by default: the listing is the single most useful thing in a
+			-- transcript of an agent that writes and executes code, and it used to be
+			-- reachable only by opening a pane that defaulted shut.
+			showToolCode = true,
 			-- The key that opens quick chat, stored as an Enum.KeyCode name because
 			-- that is what the capture in Settings produces and what survives a
 			-- keyboard layout the character would not.
 			quickKey = "Semicolon",
 			showUsage = true,
+			-- Appearance choices that name a family or a palette rather than a number.
+			-- All four are read by ui/theme, so each one changes what is on screen.
+			interfaceFont = "builder",
+			codeFont = "code",
+			codeTheme = "dark",
+			transcriptWidth = "wide",
+			-- The sidebar, the home card and the range the card opens on. Remembered
+			-- because each is a place the user put something.
+			sidebarCollapsed = false,
+			sidebarExpanded = false,
+			showActivity = true,
+			activityRange = "all",
 			window = { width = 0, height = 0, x = 0, y = 0, maximised = false, placed = false },
 			launcher = { x = 0, y = 0, placed = false },
 		},
@@ -78,6 +95,20 @@ return function(env)
 			subagentBudget = 240,
 			retries = 5,
 			fallback = true,
+			-- Tool families the model is not told about at all, keyed by group id. A
+			-- permission rule decides whether a call is allowed; this decides whether the
+			-- tool is offered, which is the coarser thing somebody who does not want the
+			-- agent near remotes in this game is asking for.
+			disabledGroups = {},
+			-- The language the agent is asked to answer in, when one has been named.
+			-- Empty means "whatever the conversation is in".
+			--
+			-- A plain string rather than a locale, because that is all the client can
+			-- honestly act on. There used to be a grid of eleven languages behind it
+			-- claiming to set the locale dates are formatted with as well; nothing read
+			-- that half -- runtime/clock formats with a hardcoded en-us and English month
+			-- names -- so ten of the eleven tiles did one thing and advertised two.
+			replyLanguage = "",
 		},
 		permissions = {
 			mode = "ask",

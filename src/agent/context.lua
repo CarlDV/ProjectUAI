@@ -188,9 +188,102 @@ return function(env)
 			return ctx.summary
 		end
 
+		-- Tool pairing, repaired in place.
+		--
+		-- Every provider rejects, hard, a tool result whose call is not in the message
+		-- immediately before it. Anthropic words it "unexpected tool_use_id found in
+		-- tool_result blocks"; OpenAI says a `tool` message must answer a preceding
+		-- `tool_calls`. Nothing here checked, and the consequence is not one failed turn:
+		-- a 400 is not retried, three of them bench the provider, the chain then walks the
+		-- same broken history to the next provider, and `ctx.serialise` keeps both halves
+		-- of the pairing -- so the conversation stays poisoned across a restart.
+		--
+		-- Trimming cannot produce this, because it removes whole blocks. What can: a turn
+		-- that dies between dispatching tools and recording their outcomes (leaving a call
+		-- with no result), and a gateway that translates between the two wire shapes and
+		-- drops an assistant turn whose content is the empty string -- which is exactly
+		-- what this client sends for a tool-only turn (leaving a result with no call).
+		--
+		-- Both directions are repaired, differently. An orphaned result is dropped: there
+		-- is nothing it can be attached to. An unanswered call is *answered*, because
+		-- dropping it instead would discard what the model actually did.
+		function ctx.repair()
+			local kept, dropped = {}, 0
+			for _, message in ipairs(ctx.messages) do
+				if message.role == "tool" then
+					-- The nearest assistant turn behind this one, looking past the sibling
+					-- results that arrived with it.
+					local owner = nil
+					for back = #kept, 1, -1 do
+						local candidate = kept[back]
+						if candidate.role == "assistant" then
+							owner = candidate
+							break
+						elseif candidate.role ~= "tool" then
+							break
+						end
+					end
+					local matched = false
+					for _, call in ipairs((owner and owner.toolCalls) or {}) do
+						if call.id ~= nil and tostring(call.id) == tostring(message.tool_call_id) then
+							matched = true
+						end
+					end
+					if matched then
+						kept[#kept + 1] = message
+					else
+						dropped = dropped + 1
+					end
+				else
+					kept[#kept + 1] = message
+				end
+			end
+
+			local out, index, filled = {}, 1, 0
+			while index <= #kept do
+				local message = kept[index]
+				out[#out + 1] = message
+				index = index + 1
+				if message.role == "assistant" and message.toolCalls and #message.toolCalls > 0 then
+					local answered = {}
+					while index <= #kept and kept[index].role == "tool" do
+						answered[tostring(kept[index].tool_call_id)] = true
+						out[#out + 1] = kept[index]
+						index = index + 1
+					end
+					for _, call in ipairs(message.toolCalls) do
+						if call.id ~= nil and not answered[tostring(call.id)] then
+							out[#out + 1] = {
+								role = "tool",
+								tool_call_id = call.id,
+								name = (call["function"] and call["function"].name) or call.name or "tool",
+								content = "This call did not complete: the turn ended before a result "
+									.. "was recorded.",
+								at = message.at,
+							}
+							filled = filled + 1
+						end
+					end
+				end
+			end
+
+			if dropped > 0 or filled > 0 then
+				ctx.messages = out
+				log.warn("context", string.format(
+					"repaired tool pairing: %s dropped, %s filled in",
+					util.pluralise(dropped, "orphaned result"),
+					util.pluralise(filled, "unanswered call")))
+			end
+			return dropped, filled
+		end
+
 		-- Wire form. The summary rides as a second system message so it cannot be
 		-- confused with the live instructions and is trivially droppable.
 		function ctx.wire(systemText)
+			-- Repaired here rather than at each adapter: this is the single funnel both of
+			-- them are fed from, and doing it to the store rather than to a copy means one
+			-- broken turn is fixed once instead of warned about on every request.
+			ctx.repair()
 			local out = {}
 			if systemText and util.trim(systemText) ~= "" then
 				out[#out + 1] = { role = "system", content = systemText }

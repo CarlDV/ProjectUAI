@@ -56,7 +56,12 @@ return function(env)
 
 		out = out:gsub("\1CODE(%d+)\1", function(index)
 			local inner = codeSpans[tonumber(index)] or ""
-			return string.format('<font color="%s"><font face="Code">%s</font></font>', codeColour, inner)
+			-- RichText's `face` attribute takes an Enum.Font name and knows nothing about
+			-- FontFace, so the theme publishes the legacy name of whichever code family is
+			-- selected. It said "Code" unconditionally before, which meant switching the
+			-- code font changed fenced blocks and left every inline span behind.
+			return string.format('<font color="%s"><font face="%s">%s</font></font>',
+				codeColour, theme.codeFontEnumName or "Code", inner)
 		end)
 
 		return out
@@ -65,14 +70,20 @@ return function(env)
 	-- Splits a reply into blocks the renderer can lay out:
 	--   { kind = "text",    text = "..." }             inline markdown, RichText-ready
 	--   { kind = "code",    text = "...", lang = "" }  verbatim, monospace
-	--   { kind = "bullets", items = { "...", ... } }
+	--   { kind = "bullets", items = { { text, marker, depth }, ... } }
+	--   { kind = "quote",   text = "..." }             an aside, inline markdown
 	--   { kind = "heading", text = "...", level = 1 }
 	--   { kind = "rule" }
+	--
+	-- A bullet item is a table rather than a string because a numbered list has to keep
+	-- its numbers. It used to drop them: `1.` and `-` both landed in the same array of
+	-- bare strings and both painted as a dot, so every ordered list in a reply came out
+	-- as an unordered one -- which is a real loss of meaning when the list is steps.
 	function M.blocks(source)
 		local blocks = {}
 		local lines = util.lines(tostring(source or ""):gsub("\r\n", "\n"):gsub("\r", "\n"))
 
-		local paragraph, bullets, code = {}, nil, nil
+		local paragraph, bullets, code, quote = {}, nil, nil, nil
 		local codeLang, codeFence = nil, nil
 
 		local function flushParagraph()
@@ -91,6 +102,23 @@ return function(env)
 			bullets = nil
 		end
 
+		local function flushQuote()
+			if not quote or #quote == 0 then
+				quote = nil
+				return
+			end
+			blocks[#blocks + 1] = { kind = "quote", text = util.trim(table.concat(quote, "\n")) }
+			quote = nil
+		end
+
+		-- Two spaces per level, which is what every generator emits and what the
+		-- renderer indents by.
+		local function depthOf(line)
+			local indent = line:match("^([ \t]*)") or ""
+			indent = indent:gsub("\t", "  ")
+			return math.min(math.floor(#indent / 2), 3)
+		end
+
 		for _, line in ipairs(lines) do
 			local fence, lang = line:match("^%s*(```+)%s*(%a*)")
 			if code then
@@ -103,28 +131,44 @@ return function(env)
 			elseif fence then
 				flushParagraph()
 				flushBullets()
+				flushQuote()
 				code, codeLang, codeFence = {}, (lang ~= "" and lang or nil), fence
 			else
 				local heading, headingText = line:match("^%s*(#+)%s+(.*)$")
+				local quoted = line:match("^%s*>%s?(.*)$")
 				local bullet = line:match("^%s*[%-%*%+]%s+(.*)$")
-				local ordered = line:match("^%s*%d+[%.%)]%s+(.*)$")
+				local number, ordered = line:match("^%s*(%d+)[%.%)]%s+(.*)$")
 				if heading then
 					flushParagraph()
 					flushBullets()
+					flushQuote()
 					blocks[#blocks + 1] = { kind = "heading", text = headingText, level = math.min(#heading, 3) }
 				elseif line:match("^%s*[%-%*_][%s%-%*_]*$") and #util.trim(line) >= 3 then
 					flushParagraph()
 					flushBullets()
+					flushQuote()
 					blocks[#blocks + 1] = { kind = "rule" }
+				elseif quoted then
+					flushParagraph()
+					flushBullets()
+					quote = quote or {}
+					quote[#quote + 1] = quoted
 				elseif bullet or ordered then
 					flushParagraph()
+					flushQuote()
 					bullets = bullets or {}
-					bullets[#bullets + 1] = bullet or ordered
+					bullets[#bullets + 1] = {
+						text = bullet or ordered,
+						marker = number and (number .. ".") or nil,
+						depth = depthOf(line),
+					}
 				elseif util.trim(line) == "" then
 					flushParagraph()
 					flushBullets()
+					flushQuote()
 				else
 					flushBullets()
+					flushQuote()
 					paragraph[#paragraph + 1] = line
 				end
 			end
@@ -137,6 +181,7 @@ return function(env)
 		end
 		flushParagraph()
 		flushBullets()
+		flushQuote()
 
 		return blocks
 	end
@@ -149,6 +194,8 @@ return function(env)
 			:gsub("%*%*", "")
 			:gsub("^#+%s*", "")
 			:gsub("\n#+%s*", "\n")
+			:gsub("^>%s?", "")
+			:gsub("\n>%s?", "\n")
 			:gsub("%[([^%]]+)%]%(%S-%)", "%1")
 		out = out:gsub("[ \t]+\n", "\n"):gsub("\n\n\n+", "\n\n")
 		return util.trim(out)

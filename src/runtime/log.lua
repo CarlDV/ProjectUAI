@@ -20,6 +20,15 @@ return function(env)
 
 	local LEVELS = { debug = 1, info = 2, warn = 3, error = 4 }
 
+	-- Published so a settings surface can set the floor by name rather than by
+	-- guessing which integer "warn" is.
+	M.LEVELS = LEVELS
+
+	function M.setLevel(level)
+		M.minLevel = LEVELS[tostring(level)] or 2
+		return M.minLevel
+	end
+
 	-- An API key must never reach the buffer in full: the panel is screenshot and
 	-- pasted into bug reports. Anything key-shaped keeps a four-character tail so
 	-- a user can still tell two keys apart.

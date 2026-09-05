@@ -21,8 +21,14 @@ return function(env)
 		local scroll = P.scroll(parent, {
 			name = "Transcript",
 			size = props.size or UDim2.new(1, 0, 1, 0),
-			gap = theme.space.lg,
-			padding = { x = theme.space.lg, top = theme.space.lg, bottom = theme.space.lg },
+			-- More air between turns than inside one. A turn's own paragraphs are md
+			-- apart, so the gap between turns has to be clearly larger or a reply and
+			-- the question after it read as one block of text. At xl the difference was
+			-- eight pixels, which is not a boundary anyone reads as one -- a turn, its
+			-- thinking, its tool calls and its answer are all siblings in this list, so
+			-- whatever separates them is the only thing giving the transcript structure.
+			gap = theme.space.xxl,
+			padding = { x = theme.space.xl, top = theme.space.lg, bottom = theme.space.xl },
 			fade = false,
 		})
 
@@ -48,7 +54,7 @@ return function(env)
 		end
 
 		scroll.instance:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
-			view.pinned = scroll.atBottom(56)
+			view.pinned = scroll.atBottom(theme.space.huge)
 		end)
 
 		local function nextOrder()
@@ -134,6 +140,10 @@ return function(env)
 
 		function view.empty()
 			stopReveal(false)
+			if view.welcomeCard then
+				pcall(function() view.welcomeCard:Destroy() end)
+				view.welcomeCard = nil
+			end
 			scroll.clear()
 			view.order = 0
 			view.tools = {}
@@ -143,9 +153,17 @@ return function(env)
 			view.pinned = true
 		end
 
+
+		-- What an empty conversation shows: the greeting, the activity card, and -- on a
+		-- client with nothing configured yet -- the one thing to do about that. The card
+		-- itself lives in ui/panels/home, which reads agent/stats.
 		function view.greeting()
 			local providers = env.require("provider/registry")
-			local caps = env.require("runtime/caps")
+			if view.welcomeCard then
+				pcall(function() view.welcomeCard:Destroy() end)
+				view.welcomeCard = nil
+			end
+			view.welcomeCard = env.require("ui/panels/home").card(scroll.instance, nextOrder())
 			if providers.count() == 0 then
 				C.emptyState(scroll.instance, {
 					title = "No provider configured",
@@ -156,13 +174,7 @@ return function(env)
 					end,
 					layoutOrder = nextOrder(),
 				})
-				return
 			end
-			local record = providers.active()
-			message.notice(scroll.instance, {
-				tone = "info",
-				text = string.format("Ready on %s. %s", providers.summary(record), caps.summary()),
-			}, nextOrder())
 		end
 
 		-- One event in, one row out. Anything not listed is deliberately ignored:
@@ -171,6 +183,10 @@ return function(env)
 			if event.kind == "user" then
 				stopReveal(true)
 				clearWorking()
+				if view.welcomeCard then
+					pcall(function() view.welcomeCard:Destroy() end)
+					view.welcomeCard = nil
+				end
 				view.agentHandle = nil
 				message.user(scroll.instance, event.text, nextOrder())
 				view.pinned = true
@@ -321,7 +337,21 @@ return function(env)
 					if not ok then env.require("runtime/log").warn("ui", "replay failed", err) end
 				end
 			end
-			if not session.busy then clearWorking() end
+			-- Anything still open after a replay is a call or a dispatch whose outcome is
+			-- not in the log: trimmed away by the stored transcript's own ceiling, or lost
+			-- because the turn died before it landed. On a live session those are genuinely
+			-- in flight, so only a settled one is swept.
+			if not session.busy then
+				clearWorking()
+				for id, handle in pairs(view.tools) do
+					if handle.stale then pcall(handle.stale) end
+					view.tools[id] = nil
+				end
+				for id, handle in pairs(view.agents) do
+					if handle.stale then pcall(handle.stale) end
+					view.agents[id] = nil
+				end
+			end
 
 			view.unsubscribe = session.events:connect(function(event)
 				local ok, err = pcall(view.render, event)

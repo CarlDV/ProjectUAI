@@ -28,7 +28,7 @@ return function(env)
 
 		local root = Instance.new("CanvasGroup", parent)
 		root.Name = props.name or "Window"
-		root.BackgroundColor3 = theme.color.surface
+		root.BackgroundColor3 = theme.color.canvas
 		root.BorderSizePixel = 0
 		root.GroupTransparency = 1
 		root.Visible = false
@@ -38,13 +38,25 @@ return function(env)
 		local outline = P.stroke(root, theme.color.border)
 
 		local scale = Instance.new("UIScale", root)
-		scale.Scale = 0.97
+		scale.Scale = theme.scale.enter
 
 		local handle = {
 			root = root,
 			visible = false,
 			maximised = config.get("ui.window.maximised", false) == true,
 		}
+
+		-- Everything this window leaves running outside its own instance tree, released
+		-- together by handle.destroy.
+		--
+		-- A rebuild destroys the window and builds another, and the app now rebuilds for a
+		-- sidebar toggle as well as for a mode or token change. Each of the three
+		-- subscriptions below used to outlive its window: two InputChanged handlers
+		-- registered with the global disposer and never unregistered, and a
+		-- responsive.changed handler whose unsubscribe was discarded outright -- so after
+		-- five rebuilds five dead handlers were still laying out five destroyed windows on
+		-- every viewport change.
+		local releases = {}
 
 		-- Geometry ------------------------------------------------------------
 
@@ -125,34 +137,28 @@ return function(env)
 
 		-- Chrome --------------------------------------------------------------
 
-		local headerHeight = math.max(theme.size.header, responsive.minTarget() + 8)
+		-- Tall enough for the controls it holds. The window buttons are sized to
+		-- max(control, minTarget()), which is 44 on a touch device, so a header fixed at
+		-- the 42px token clipped two pixels off every one of them there. Published so
+		-- the shell that fills the header uses the same number instead of the token.
+		local headerHeight = math.max(theme.size.header, responsive.minTarget() + theme.space.sm)
+		handle.headerHeight = headerHeight
 
+		-- The header is a transparent top bar across the active pane that provides
+		-- the drag handle and holds window controls.
 		handle.header = P.row(root, {
 			name = "Header",
 			size = UDim2.new(1, 0, 0, headerHeight),
-			bg = theme.color.surfaceRaised,
 			gap = theme.space.sm,
-			padding = { x = theme.space.md },
+			padding = { x = theme.space.sm },
 			zIndex = theme.z.header,
 		})
-		-- The hairline belongs to the header's bottom edge, but the header is a row,
-		-- and a UIListLayout lays out every GuiObject child it is given -- including a
-		-- decoration that only wanted to be anchored. A full-width rule left on the
-		-- default LayoutOrder of 0 sorts ahead of the title and the controls and takes
-		-- the entire line, putting all of them past the right edge. So it hangs off
-		-- the root, where nothing is being laid out, and pins itself to the seam.
-		P.frame(root, {
-			name = "HeaderRule",
-			size = UDim2.new(1, 0, 0, 1),
-			position = UDim2.new(0, 0, 0, headerHeight - 1),
-			bg = theme.color.borderSubtle,
-			zIndex = theme.z.header + 1,
-		})
+		handle.header.BackgroundTransparency = 1
 
 		handle.body = P.frame(root, {
 			name = "Body",
-			size = UDim2.new(1, 0, 1, -headerHeight),
-			position = UDim2.new(0, 0, 0, headerHeight),
+			size = UDim2.fromScale(1, 1),
+			position = UDim2.new(0, 0, 0, 0),
 		})
 
 		-- Drag ----------------------------------------------------------------
@@ -186,7 +192,7 @@ return function(env)
 			end)
 		end)
 
-		dispose.connection(env.uis.InputChanged:Connect(function(input)
+		releases[#releases + 1] = dispose.connection(env.uis.InputChanged:Connect(function(input)
 			if not dragging or not startPosition then return end
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
@@ -265,7 +271,7 @@ return function(env)
 			end)
 		end)
 
-		dispose.connection(env.uis.InputChanged:Connect(function(input)
+		releases[#releases + 1] = dispose.connection(env.uis.InputChanged:Connect(function(input)
 			if not resizing or not startSize then return end
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
@@ -307,7 +313,7 @@ return function(env)
 			if not handle.visible then return end
 			handle.visible = false
 			local fade = env.tween:Create(root, theme.tween("exit"), { GroupTransparency = 1 })
-			env.tween:Create(scale, theme.tween("exit"), { Scale = 0.97 }):Play()
+			env.tween:Create(scale, theme.tween("exit"), { Scale = theme.scale.enter }):Play()
 			fade.Completed:Connect(function()
 				if not handle.visible then root.Visible = false end
 			end)
@@ -319,14 +325,18 @@ return function(env)
 			if handle.visible then handle.hide() else handle.show() end
 		end
 
+		-- Everything this window leaves running outside its own tree, released together.
 		function handle.destroy()
+			for _, release in ipairs(releases) do pcall(release) end
+			releases = {}
+			handle.visible = false
 			pcall(function() root:Destroy() end)
 		end
 
 		-- Re-layout on every viewport change. Continuous changes only move and
 		-- resize; a mode change is what asks the contents to rebuild, and that is
 		-- signalled separately by responsive.modeChanged.
-		responsive.changed:connect(function(info)
+		releases[#releases + 1] = responsive.changed:connect(function(info)
 			if not handle.visible then return end
 			grip.Visible = draggableNow()
 			handle.layout(info and info.reason or "viewport")

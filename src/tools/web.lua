@@ -11,6 +11,13 @@ return function(env)
 
 	local PAGE_CAP = 4000
 
+	-- Sanitised at the end, not only at encode time.
+	--
+	-- A third-party page can be served as Latin-1, CP1252 or nothing at all, and
+	-- Roblox's HTTP client hands back the bytes as they arrived. Scrubbing here as well
+	-- as in util.encode is not belt-and-braces: this text is also what the transcript
+	-- paints, what the Logs panel keeps and what the bridge uploads, and a raw 0xA0 in
+	-- a TextLabel is a visible replacement glyph rather than an error anyone can trace.
 	local function toText(html)
 		local text = tostring(html)
 			:gsub("<!%-%-.-%-%->", " ")
@@ -25,7 +32,7 @@ return function(env)
 			:gsub("<[^>]+>", " ")
 		text = util.htmlEntities(text)
 		text = text:gsub("[ \t]+", " "):gsub(" ?\n ?", "\n"):gsub("\n\n\n+", "\n\n")
-		return util.trim(text)
+		return (util.sanitise(util.trim(text)))
 	end
 
 	return {
@@ -118,9 +125,10 @@ return function(env)
 
 				local body = tostring(res.body)
 				-- A JSON endpoint reached through this tool should not be run through
-				-- an HTML stripper.
+				-- an HTML stripper. Still sanitised: a JSON body is only UTF-8 by
+				-- convention, and this one came from a stranger.
 				local looksJson = util.trim(body):sub(1, 1) == "{" or util.trim(body):sub(1, 1) == "["
-				local text = looksJson and util.trim(body) or toText(body)
+				local text = looksJson and (util.sanitise(util.trim(body))) or toText(body)
 				if text == "" then return "The page returned no readable text." end
 
 				local title = body:match("<title[^>]*>(.-)</title>")

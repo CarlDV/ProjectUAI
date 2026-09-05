@@ -6,6 +6,7 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local caps = env.require("runtime/caps")
+	local config = env.require("runtime/config")
 	local state = env.require("agent/state")
 
 	local M = {}
@@ -167,6 +168,15 @@ Style:
 		parts[#parts + 1] = ""
 		parts[#parts + 1] = "Permission mode: " .. permissions.mode() .. " -- " ..
 			(permissions.MODE_HINTS[permissions.mode()] or "")
+
+		-- The language picked in Settings. One line, and only when one has been picked:
+		-- an instruction to answer in English is noise for a model that was going to.
+		local language = util.trim(tostring(config.get("agent.replyLanguage", "")))
+		if language ~= "" and language:lower() ~= "english" then
+			parts[#parts + 1] = ""
+			parts[#parts + 1] = "Write your replies to the user in " .. language ..
+				". Code, identifiers and tool arguments stay as they are."
+		end
 
 		local memory = state.memoryBlock()
 		if memory then

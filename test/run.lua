@@ -170,9 +170,18 @@ scenario("boot mounts the interface", function()
 		table.concat(harness.console.warnings, "\n"))
 
 	local text = harness.textOf(screen)
-	contains("the chat tab is present", text, "Chat")
-	contains("the providers tab is present", text, "Providers")
+	contains("the sidebar offers a new conversation", text, "+ New")
+	contains("and names the place the client is in", text, "Mock Place")
 	contains("the empty state explains what to do", text, "No provider configured")
+
+	-- Navigation is the sidebar's, and in a client whose panels are its surfaces the
+	-- panel list has to be reachable rather than hidden behind an invisible control.
+	truthy("the app menu is reachable", harness.byName("Nav_menu") ~= nil)
+	harness.click(harness.byName("More"))
+	truthy("the panel list opens", harness.byName("NavRow_providers") ~= nil,
+		harness.dump(harness.byName("Sidebar")))
+	harness.click(harness.byName("NavRow_providers"))
+	check("and switches panel", handle.app.panel, "providers")
 end)
 
 -- 2. Capabilities ----------------------------------------------------------
@@ -1131,6 +1140,18 @@ scenario("theme tokens react to settings", function()
 	harness.settle(1)
 	truthy("text scale grows the ramp", theme.text.body.size > before)
 
+	-- The size ramp is floored at one, not at eight. It used to be eight, which was
+	-- harmless while every token was larger than that and silently wrong the moment
+	-- the small ones arrived: a 3px slider track, a 4px scrollbar and a 6px status dot
+	-- all came out of the ramp as 8.
+	handle.config.set("ui.fontScale", 1)
+	harness.settle(1)
+	truthy("a small token survives the ramp", theme.size.dotSmall < theme.size.dot,
+		tostring(theme.size.dotSmall) .. " vs " .. tostring(theme.size.dot))
+	truthy("and is not clamped up to eight", theme.size.track < 8, tostring(theme.size.track))
+	truthy("the scrollbar is the width it says it is", theme.size.scrollbar < 8,
+		tostring(theme.size.scrollbar))
+
 	handle.config.set("ui.accent", "rose")
 	harness.settle(1)
 	check("the accent changed", theme.accentName, "rose")
@@ -1155,6 +1176,130 @@ scenario("theme tokens react to settings", function()
 	harness.settle(1)
 	truthy("but a token key still does", rebuilds >= 1, tostring(rebuilds))
 	pcall(unsubscribe)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- A design system whose text cannot be read on its own surface is a design system
+-- with a bug in it, and it is the one class of visual mistake that no amount of
+-- looking at the code will catch: every token here is a plausible dark grey. So the
+-- contrast is computed, in the same terms the accessibility guidelines use, over the
+-- pairs the interface actually puts together.
+scenario("the palette keeps text legible on the surface it sits on", function()
+	local harness, handle = bootWith({ provider = false })
+	local theme = handle.env.require("ui/theme")
+
+	-- WCAG relative luminance. The mock's Color3 keeps its channels as 0-1 floats,
+	-- same as the real one.
+	local function channel(value)
+		if value <= 0.03928 then return value / 12.92 end
+		return ((value + 0.055) / 1.055) ^ 2.4
+	end
+	local function luminance(colour)
+		return 0.2126 * channel(colour.R) + 0.7152 * channel(colour.G) + 0.0722 * channel(colour.B)
+	end
+	local function ratio(a, b)
+		local first, second = luminance(a), luminance(b)
+		if first < second then first, second = second, first end
+		return (first + 0.05) / (second + 0.05)
+	end
+
+	local colour = theme.color
+	-- 4.5 is the guideline for body text, 3.0 for large text and for a control's own
+	-- outline. Captions are held to 4.5 too: "it is only a caption" is how a caption
+	-- ends up unreadable.
+	local pairsToCheck = {
+		{ "body text on the canvas", colour.text, colour.canvas, 4.5 },
+		{ "body text on a card", colour.text, colour.surfaceRaised, 4.5 },
+		{ "secondary text on the canvas", colour.textSecondary, colour.canvas, 4.5 },
+		{ "tertiary text on the canvas", colour.textTertiary, colour.canvas, 4.5 },
+		{ "tertiary text on a card", colour.textTertiary, colour.surfaceRaised, 4.5 },
+		-- The overlay tone is the lightest surface in the set, so it is where a muted
+		-- caption comes closest to disappearing: a menu's detail line and a toast both
+		-- sit on it. This pair is what set the tertiary tone, not the other way round.
+		{ "tertiary text on an overlay", colour.textTertiary, colour.surfaceOverlay, 4.5 },
+		{ "text on the user's own turn", colour.text, colour.bubbleUser, 4.5 },
+		{ "code on the code surface", colour.codeText, colour.codeSurface, 4.5 },
+		{ "a code block's language on its bar", colour.codeGutter, colour.codeBar, 3 },
+		{ "an added line on its own fill", colour.codeAddText, colour.codeAddSurface, 4.5 },
+		{ "a removed line on its own fill", colour.codeRemoveText, colour.codeRemoveSurface, 4.5 },
+		{ "inline code on the canvas", colour.accentHot, colour.canvas, 4.5 },
+		{ "the accent on the canvas", colour.accent, colour.canvas, 3 },
+		{ "dark text on the solid action", colour.onSolid, colour.solid, 4.5 },
+		{ "dark text on the accent", colour.textOnAccent, colour.accent, 4.5 },
+		{ "danger text on its own surface", colour.danger, colour.dangerSurface, 3 },
+		{ "warn text on its own surface", colour.warn, colour.warnSurface, 3 },
+		{ "success text on its own surface", colour.success, colour.successSurface, 3 },
+		{ "info text on its own surface", colour.info, colour.infoSurface, 3 },
+		{ "a toast's text on a toast", colour.text, colour.surfaceOverlay, 4.5 },
+	}
+	for _, entry in ipairs(pairsToCheck) do
+		local label, fg, bg, want = entry[1], entry[2], entry[3], entry[4]
+		local got = ratio(fg, bg)
+		truthy(label .. " clears " .. tostring(want) .. ":1", got >= want,
+			string.format("%.2f:1", got))
+	end
+
+	-- Hairlines are not text and do not need 3:1, but they do have to be visible at
+	-- all: borderSubtle used to sit one step above the surface it was drawn on, which
+	-- is 1.05:1 and reads as no border.
+	for _, entry in ipairs({
+		{ "the hairline on the canvas", colour.borderSubtle, colour.canvas },
+		{ "the hairline on a card", colour.borderSubtle, colour.surfaceRaised },
+		{ "the window outline on the canvas", colour.border, colour.canvas },
+	}) do
+		local got = ratio(entry[2], entry[3])
+		truthy(entry[1] .. " is actually visible", got >= 1.25, string.format("%.2f:1", got))
+	end
+
+	-- And the surfaces have to be distinguishable from each other, or the hierarchy
+	-- the whole palette is built on is decoration.
+	local steps = {
+		{ "canvas", colour.canvas }, { "surface", colour.surface },
+		{ "raised", colour.surfaceRaised }, { "overlay", colour.surfaceOverlay },
+	}
+	for index = 2, #steps do
+		local previous, current = steps[index - 1], steps[index]
+		truthy(current[1] .. " is a step above " .. previous[1],
+			luminance(current[2]) > luminance(previous[2]))
+	end
+	check("the code surface is below the canvas",
+		luminance(colour.codeSurface) < luminance(colour.canvas), true)
+
+	-- Every accent has to clear the same bar, or switching one turns the interface
+	-- into a different quality of interface.
+	for name in pairs(theme.ACCENTS) do
+		handle.config.set("ui.accent", name)
+		harness.settle(1)
+		truthy(name .. " reads as inline code on the canvas",
+			ratio(theme.color.accentHot, theme.color.canvas) >= 4.5,
+			string.format("%.2f:1", ratio(theme.color.accentHot, theme.color.canvas)))
+		truthy(name .. " takes dark text when it is a fill",
+			ratio(theme.color.textOnAccent, theme.color.accent) >= 4.5,
+			string.format("%.2f:1", ratio(theme.color.textOnAccent, theme.color.accent)))
+	end
+
+	-- And so does every code palette. The light one inverts the whole set, so a pair
+	-- that was only ever checked against the dark tones is exactly where a code block
+	-- would come out as pale grey on cream.
+	for _, name in ipairs(theme.CODE_THEME_ORDER) do
+		handle.config.set("ui.codeTheme", name)
+		harness.settle(1)
+		local set = theme.color
+		for _, entry in ipairs({
+			{ "code", set.codeText, set.codeSurface, 4.5 },
+			{ "the language label", set.codeGutter, set.codeBar, 3 },
+			{ "an added line", set.codeAddText, set.codeAddSurface, 4.5 },
+			{ "a removed line", set.codeRemoveText, set.codeRemoveSurface, 4.5 },
+		}) do
+			local got = ratio(entry[2], entry[3])
+			truthy(name .. ": " .. entry[1] .. " clears " .. tostring(entry[4]) .. ":1",
+				got >= entry[4], string.format("%.2f:1", got))
+		end
+	end
+	handle.config.set("ui.codeTheme", "dark")
+	harness.settle(1)
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
@@ -1196,6 +1341,23 @@ scenario("markdown blocks are split correctly", function()
 	local unterminated = markdown.blocks("```lua\nlocal a = 1")
 	check("an unterminated fence still renders", unterminated[1].kind, "code")
 	check("and says so", unterminated[1].unterminated, true)
+
+	-- Ordered lists kept losing their numbers: `1.` and `-` both landed in the same
+	-- array of bare strings and both painted as a dot, so a list of steps read as a
+	-- list of unordered points.
+	local ordered = markdown.blocks("1. first\n2. second\n  - nested")
+	check("one list", #ordered, 1)
+	check("of three items", #ordered[1].items, 3)
+	check("the first keeps its number", ordered[1].items[1].marker, "1.")
+	check("and its text", ordered[1].items[1].text, "first")
+	check("the second too", ordered[1].items[2].marker, "2.")
+	check("a bullet has no marker", ordered[1].items[3].marker, nil)
+	check("but does have a depth", ordered[1].items[3].depth, 1)
+
+	local quoted = markdown.blocks("> an aside\n> over two lines\n\nback to prose")
+	check("a blockquote is its own block", quoted[1].kind, "quote")
+	check("joined", quoted[1].text, "an aside\nover two lines")
+	check("and prose follows it", quoted[2].kind, "text")
 end)
 
 -- 17. Subagent -------------------------------------------------------------
@@ -1566,10 +1728,19 @@ end)
 -- 18. Persistence ----------------------------------------------------------
 
 scenario("settings and conversations persist", function()
-	local harness, handle = bootWith({})
+	-- Sent through session.send rather than pushed straight into the context, because
+	-- the two halves of a stored conversation come from different places: the context
+	-- from ctx.serialise, and the transcript from the event log that only a real turn
+	-- produces. Writing to ctx alone is what let the transcript go unpersisted unnoticed.
+	local harness, handle = bootWith({
+		handler = function()
+			return { StatusCode = 200, Body = chatBody({ content = "I will." }) }
+		end,
+	})
 	handle.config.set("ui.accent", "amber")
 	handle.config.saveNow()
-	handle.sessions.current().ctx.pushUser("remember me")
+	handle.sessions.current().send("remember me")
+	harness.settle(12)
 	handle.sessions.persist(handle.sessions.current())
 	harness.settle(2)
 
@@ -1603,6 +1774,38 @@ scenario("settings and conversations persist", function()
 		end
 	end
 	truthy("the conversation came back", restored)
+
+	-- The context is what the model needs to continue; the log is what the transcript
+	-- is drawn from, and only the first of the two used to be written. So a restored
+	-- conversation was listed in the sidebar, switched to correctly, and then showed the
+	-- greeting card -- which is what "previous conversations will not load" looks like.
+	local target = nil
+	for _, session in ipairs(secondHandle.sessions.list()) do
+		for _, message in ipairs(session.ctx.messages) do
+			if tostring(message.content):find("remember me") then target = session end
+		end
+	end
+	truthy("the restored conversation has a transcript", target and #target.log > 0,
+		target and tostring(#target.log) or "no session")
+	local sawUser = false
+	for _, event in ipairs(target and target.log or {}) do
+		if event.kind == "user" and tostring(event.text):find("remember me") then sawUser = true end
+	end
+	truthy("with the question in it", sawUser)
+
+	-- And it renders, rather than only existing in the table.
+	secondHandle.app.openSession(target.id)
+	second.settle(2)
+	contains("which the transcript draws", second.textOf(), "remember me")
+
+	-- A status line, a token count and a permission prompt are not transcript: the
+	-- first two are meaningless after the fact and the third carries the closure that
+	-- answers it, which would fail the whole write.
+	for _, event in ipairs(target.log) do
+		truthy("no ephemeral event was stored: " .. tostring(event.kind),
+			event.kind ~= "status" and event.kind ~= "usage"
+				and event.kind ~= "permission:ask" and event.kind ~= "tool:progress")
+	end
 end)
 
 -- 19. Error surfaces -------------------------------------------------------
@@ -1741,7 +1944,7 @@ scenario("every panel builds cleanly", function()
 	-- Visiting all five panels exercises most of the component set. The mock
 	-- type-checks every property assignment, so this is where a wrong value type --
 	-- a number handed to Size because a prop table overloaded the name -- surfaces.
-	for _, panel in ipairs({ "providers", "tools", "settings", "logs", "chat" }) do
+	for _, panel in ipairs({ "providers", "tools", "settings", "logs", "cowork", "chat" }) do
 		handle.app.show(panel)
 		harness.settle(1)
 		truthy(panel .. " panel built", handle.app.panels[panel] ~= nil)
@@ -1804,6 +2007,18 @@ scenario("the built interface holds its layout invariants", function()
 				local auto = nameOf(node.AutomaticSize)
 				-- An auto width is the one case where the label sizes itself.
 				local ownsWidth = auto == "X" or auto == "XY"
+				-- A flex child inside a list layout is the other: the layout hands it
+				-- whatever is left on the line, which is exactly what a (0,0) width
+				-- plus FlexMode.Fill asks for. Several rows in here fill deliberately
+				-- rather than reserving a guessed number of pixels for their
+				-- neighbours -- that guess is what used to push the timing column of a
+				-- tool row past the card's own clip.
+				local flex = node:FindFirstChildOfClass("UIFlexItem")
+				local flexMode = flex and nameOf(flex.FlexMode) or nil
+				local parentList = node.Parent and node.Parent:FindFirstChildOfClass("UIListLayout")
+				if parentList and (flexMode == "Fill" or flexMode == "Grow") then
+					ownsWidth = true
+				end
 				if (node.TextWrapped == true or truncates) and not ownsWidth then
 					local size = node.Size
 					local width = type(size) == "table" and size.X or nil
@@ -1840,7 +2055,7 @@ scenario("the built interface holds its layout invariants", function()
 	-- unconfigured one renders the empty states, and they share almost no labels.
 	for _, configured in ipairs({ true, false }) do
 		local harness, handle = bootWith({ provider = configured })
-		for _, panel in ipairs({ "providers", "tools", "settings", "logs", "chat" }) do
+		for _, panel in ipairs({ "providers", "tools", "settings", "logs", "cowork", "chat" }) do
 			handle.app.show(panel)
 			harness.settle(1)
 			sweep(harness)
@@ -1859,6 +2074,38 @@ scenario("the built interface holds its layout invariants", function()
 		})
 		harness.settle(1)
 		sweep(harness)
+
+		-- The settings dialog is a surface of its own -- two panes and thirteen
+		-- categories, none of which go through a panel -- and it is where three
+		-- zero-width controls were hiding.
+		local dialog = handle.app.showSettingsDialog("general")
+		for _, entry in ipairs(handle.env.require("ui/settingspanes").PANES) do
+			local row = harness.byName("Category_" .. entry.id)
+			if row then harness.click(row) end
+			harness.settle(1)
+			sweep(harness)
+		end
+		if dialog then dialog.close() end
+		harness.settle(1)
+
+		-- The one remaining surface that builds its own chrome: the search results.
+		handle.app.showSearch()
+		harness.settle(1)
+		sweep(harness)
+		handle.env.require("ui/overlay").closeAll()
+		harness.settle(1)
+
+		handle.app.showSearch()
+		harness.settle(1)
+		sweep(harness)
+		handle.env.require("ui/overlay").closeAll()
+		harness.settle(1)
+
+		handle.app.showAbout()
+		harness.settle(1)
+		sweep(harness)
+		handle.env.require("ui/overlay").closeAll()
+		harness.settle(1)
 	end
 
 	-- `truthy` rather than `check`, because `check` builds its own got/want detail and
@@ -1882,11 +2129,21 @@ scenario("the window and its controls respond to input", function()
 	harness.click(harness.byName("Launcher"))
 	truthy("the launcher reopens it", window.visible)
 
-	-- Nav.
-	harness.click(harness.byName("Segment_tools"))
-	check("a nav segment switches panel", handle.app.panel, "tools")
-	harness.click(harness.byName("Segment_chat"))
+	-- Nav. The app menu is the path that exists in every layout mode, including the
+	-- ones with no sidebar, so it is the one worth testing.
+	harness.click(harness.byName("Nav_menu"))
+	harness.click(harness.byName("Option_tools"))
+	check("a menu option switches panel", handle.app.panel, "tools")
+	harness.click(harness.byName("Nav_menu"))
+	harness.click(harness.byName("Option_chat"))
 	check("and back", handle.app.panel, "chat")
+
+	-- Which is also what the two history arrows walk.
+	truthy("going back is offered", handle.app.canBack())
+	handle.app.back()
+	check("back returns to the previous panel", handle.app.panel, "tools")
+	handle.app.forward()
+	check("and forward returns", handle.app.panel, "chat")
 
 	-- Drag. The header is the handle; the body deliberately is not, so the
 	-- transcript can still be dragged to scroll.
@@ -1922,6 +2179,19 @@ scenario("the window and its controls respond to input", function()
 	contains("the transcript shows what was typed", harness.textOf(), "hello from the composer")
 	contains("and the reply", harness.textOf(), "Got it.")
 	check("the field was cleared", box.Text, "")
+
+	-- The send button is also the stop button, so it has to disarm when the turn
+	-- ends. It did not: the loop emits "Ready" one line after turn:end and from
+	-- inside the turn, so session.busy was still true when the status handler read
+	-- it, and the composer went straight back to Stop a frame after being cleared --
+	-- leaving no way to send a second message.
+	local composer = handle.app.chatPanel and handle.app.chatPanel.composer
+	truthy("the composer is reachable", composer ~= nil)
+	check("the session is idle", handle.sessions.current().busy, false)
+	check("and so is the composer", composer and composer.busy, false)
+	truthy("so the button offers send rather than stop",
+		harness.byName("IconSend", harness.byName("Send")) ~= nil,
+		harness.dump(harness.byName("Send")))
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
@@ -2304,7 +2574,8 @@ end)
 
 scenario("the token sliders span three orders of magnitude", function()
 	local harness, handle = bootWith({ provider = false })
-	harness.click(harness.byName("Segment_settings"))
+	harness.click(harness.byName("Nav_menu"))
+	harness.click(harness.byName("Option_settings"))
 	harness.settle(1)
 
 	-- Dragging well past either end, which clamps: the assertion is about what the
@@ -2339,7 +2610,8 @@ end)
 
 scenario("effort reads as a scale rather than a number", function()
 	local harness, handle = bootWith({ provider = false })
-	harness.click(harness.byName("Segment_settings"))
+	harness.click(harness.byName("Nav_menu"))
+	harness.click(harness.byName("Option_settings"))
 	harness.settle(1)
 
 	local slider = harness.byName("Slider_agent.effort")
@@ -2380,7 +2652,7 @@ scenario("reasoning arrives open, sized, and answers its switch", function()
 	harness.settle(10)
 
 	contains("the thinking is on screen", harness.textOf(), "weighing the options")
-	contains("under a header naming it", harness.textOf(), "reasoning")
+	contains("under a header naming it", harness.textOf(), "Thinking")
 	-- Reasoning is billed as output and never appears in the reply, so its size is a
 	-- number the reader cannot get from anywhere else on the row.
 	contains("with its size in tokens", harness.textOf(), "tokens")
@@ -2605,6 +2877,874 @@ scenario("unloading stops the bridge", function()
 	check("still nothing polling", inboxCalls, before)
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 45. Activity history ------------------------------------------------------
+
+-- Every figure the home card shows has to come from something the client saw. These
+-- scenarios are the contract: a number appears only after the event that produces it,
+-- it survives a restart, and nothing is counted twice.
+scenario("activity is counted from what actually happened", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Counted." }) }
+		end,
+	})
+	local stats = handle.env.require("agent/stats")
+
+	local before = stats.window("all")
+	check("nothing is counted before anything happens", before.messages, 0)
+	check("and no tokens", before.tokens, 0)
+	truthy("so there is no comparison to make", stats.comparison(before.tokens) == nil)
+
+	handle.sessions.current().send("count this")
+	harness.settle(8)
+
+	local after = stats.window("all")
+	check("the question was counted", after.userMessages, 1)
+	check("and the answer", after.replies, 1)
+	check("as two messages", after.messages, 2)
+	check("the conversation was counted once", after.sessions, 1)
+	check("one request", after.requests, 1)
+	-- 120 in and 40 out is what the fixture's usage block reports.
+	check("the tokens the provider reported went in", after.tokensIn, 120)
+	check("and the ones it sent back", after.tokensOut, 40)
+	check("totalled", after.tokens, 160)
+	check("today is the only active day", after.activeDays, 1)
+	check("which is a one day streak", after.currentStreak, 1)
+
+	-- The virtual clock starts at midnight on the first of January 2026, so the day
+	-- key is a fixed, readable date rather than whatever the test machine thinks.
+	local todayKey = handle.env.require("runtime/clock").dayKey()
+	check("bucketed under the local day", todayKey, "2026-01-01")
+	truthy("which has a record", stats.data.days[todayKey] ~= nil)
+
+	local model = after.topModel
+	truthy("the model that did the work is named", model ~= nil)
+	check("and it is the one that answered", model and model.id, "harness-model")
+	check("with all of the tokens", model and model.tokens, 160)
+
+	-- A second turn in the same conversation is more messages, not a second
+	-- conversation: the id has already been counted.
+	handle.sessions.current().send("and this")
+	harness.settle(8)
+	local second = stats.window("all")
+	check("a second turn adds messages", second.messages, 4)
+	check("but not a second conversation", second.sessions, 1)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("the activity history survives a restart", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Stored." }) }
+		end,
+	})
+	handle.sessions.current().send("remember this")
+	harness.settle(8)
+	handle.destroy()
+	harness.settle(2)
+
+	truthy("the history was written", harness.files["UAI/stats.json"] ~= nil)
+	contains("with the model in it", harness.files["UAI/stats.json"], "harness-model")
+
+	-- A fresh client on the same filesystem, which is what a second run is.
+	local revived = envMock.new({})
+	for path, body in pairs(harness.files) do revived.files[path] = body end
+	for path in pairs(harness.folders) do revived.folders[path] = true end
+	revived.http.handler = function() return { StatusCode = 404, Body = "{}" } end
+	local second = revived.boot()
+	truthy("the client came back", second ~= nil)
+	revived.settle(2)
+
+	local stats = second.env.require("agent/stats")
+	local window = stats.window("all")
+	check("the messages are still counted", window.messages, 2)
+	check("so is the conversation", window.sessions, 1)
+	check("and the tokens", window.tokens, 160)
+	check("no thread errors", #revived.errors(), 0,
+		revived.errors()[1] and revived.errors()[1].traceback or nil)
+end)
+
+scenario("a history that predates the counters is recovered from the transcripts", function()
+	-- The client kept conversations on disk long before it counted anything, so the
+	-- first run with a counter file reads the real timestamps out of those
+	-- transcripts. Tokens are deliberately not recovered: nothing on disk records
+	-- them, and an estimate would be a figure with no measurement behind it.
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Answered." }) }
+		end,
+	})
+	handle.sessions.current().send("an older conversation")
+	harness.settle(8)
+	handle.destroy()
+	harness.settle(2)
+
+	local revived = envMock.new({})
+	for path, body in pairs(harness.files) do
+		-- Everything except the counters, which is exactly the state an install from
+		-- before this feature is in.
+		if path ~= "UAI/stats.json" then revived.files[path] = body end
+	end
+	for path in pairs(harness.folders) do revived.folders[path] = true end
+	revived.http.handler = function() return { StatusCode = 404, Body = "{}" } end
+	local second = revived.boot()
+	revived.settle(2)
+
+	local stats = second.env.require("agent/stats")
+	local window = stats.window("all")
+	check("the messages came back", window.messages, 2)
+	check("and the conversation", window.sessions, 1)
+	check("without inventing tokens", window.tokens, 0)
+	truthy("and nothing claims to know when they were spent", window.tokensFrom == nil)
+
+	-- Seeding runs once. A third boot must not count the same transcripts again.
+	local third = envMock.new({})
+	for path, body in pairs(revived.files) do third.files[path] = body end
+	for path in pairs(revived.folders) do third.folders[path] = true end
+	third.http.handler = function() return { StatusCode = 404, Body = "{}" } end
+	local handle3 = third.boot()
+	third.settle(2)
+	check("a later boot does not count them again",
+		handle3.env.require("agent/stats").window("all").messages, 2)
+	check("no thread errors", #third.errors(), 0,
+		third.errors()[1] and third.errors()[1].traceback or nil)
+end)
+
+scenario("the activity windows and the heatmap agree with the record", function()
+	local harness, handle = bootWith({ provider = false })
+	local stats = handle.env.require("agent/stats")
+	local clock = handle.env.require("runtime/clock")
+
+	-- Written straight into the store rather than through a conversation, because
+	-- what is under test is the arithmetic over several days and the virtual clock
+	-- only ever advances by seconds.
+	local today = clock.dayNumber()
+	local function put(offset, tokens, messages)
+		local key = clock.keyFromDayNumber(today - offset)
+		stats.data.days[key] = {
+			sessions = 1, messages = messages, userMessages = messages, replies = 0,
+			tokensIn = tokens, tokensOut = 0, cost = 0, requests = 1,
+			toolCalls = 0, toolErrors = 0, errors = 0,
+			hours = { ["11"] = messages }, models = {},
+		}
+		return key
+	end
+	put(0, 1000, 2)
+	put(1, 500, 1)
+	put(2, 250, 1)
+	-- A gap at three days, then an older cluster, which is what makes the streaks
+	-- and the windows different from each other.
+	put(9, 100, 1)
+	put(40, 50, 1)
+
+	local all = stats.window("all")
+	check("every day counts in all", all.activeDays, 5)
+	check("with every token", all.tokens, 1900)
+	check("the streak ends at the gap", all.currentStreak, 3)
+	check("and the longest run is the same one", all.longestStreak, 3)
+	check("the busiest hour is the one with the messages", all.peakHour, 11)
+	check("read back as a time", clock.describeHour(all.peakHour), "11 AM")
+
+	local week = stats.window("7d")
+	check("a week excludes the older days", week.activeDays, 3)
+	check("and their tokens", week.tokens, 1750)
+
+	local month = stats.window("30d")
+	check("a month reaches the cluster", month.activeDays, 4)
+	check("but not the one before it", month.tokens, 1850)
+
+	local map = stats.heatmap(26)
+	check("the heatmap is the weeks it was asked for", #map.columns, 26)
+	check("each column is a week", #map.columns[1], 7)
+	check("and its peak is the busiest day", map.peak, 1000)
+
+	local todayKey = clock.keyFromDayNumber(today)
+	local found = nil
+	for _, column in ipairs(map.columns) do
+		for _, cell in ipairs(column) do
+			if cell.key == todayKey then found = cell end
+		end
+	end
+	truthy("today has a cell", found ~= nil)
+	check("at the top level", found and found.level, 4)
+	check("holding the day's real total", found and found.tokens, 1000)
+
+	-- One book is the floor, because "0.4 books" is not a sentence.
+	truthy("no comparison under a whole book", stats.comparison(90000) == nil)
+	contains("and the book is named above it", tostring(stats.comparison(1000000)),
+		"Harry Potter")
+	contains("with a multiple", tostring(stats.comparison(1000000)), "10")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 46. The reworked interface ------------------------------------------------
+
+-- The sidebar, the composer's chips and the settings dialog were the three surfaces
+-- that looked finished and were not: a hardcoded list of project names, a permission
+-- chip that announced the opposite of the mode in force, and a dialog whose panes
+-- were mostly placeholder text. These scenarios pin the replacements to real state.
+scenario("the conversation list is the real one", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Noted." }) }
+		end,
+	})
+
+	handle.sessions.current().send("the raft spawns in the wrong place")
+	harness.settle(8)
+	local first = handle.sessions.activeId
+	handle.app.openSession(handle.sessions.newThread().id)
+	handle.sessions.current().send("the camera clips through the wall")
+	harness.settle(8)
+	local second = handle.sessions.activeId
+
+	local sidebar = harness.byName("Sidebar")
+	truthy("the sidebar exists", sidebar ~= nil)
+	local text = harness.textOf(sidebar)
+	contains("the first conversation is listed", text, "the raft spawns")
+	contains("so is the second", text, "the camera clips")
+	contains("grouped under the place they happened in", text, "Mock Place")
+	-- The list used to be three invented project names with eleven invented titles
+	-- under them, copied out of a screenshot.
+	truthy("and nothing invented is listed",
+		not text:find("Project%-Gravity") and not text:find("rbxmptest"), text)
+
+	local rows = harness.allByName("SessionRow", sidebar)
+	check("one row per conversation", #rows, 2)
+
+	-- The most recent conversation sorts first, so the second row is the older one.
+	harness.click(rows[2])
+	check("clicking a row switches to it", handle.sessions.activeId, first)
+	contains("and the transcript follows", harness.textOf(harness.byName("Transcript")),
+		"the raft spawns")
+
+	local session = handle.sessions.threads[first]
+	session.rename("Raft spawn point")
+	harness.settle(1)
+	contains("a rename shows up in the list", harness.textOf(harness.byName("Sidebar")),
+		"Raft spawn point")
+
+	handle.sessions.remove(second)
+	harness.settle(1)
+	truthy("a deleted conversation leaves the list",
+		not harness.textOf(harness.byName("Sidebar")):find("the camera clips"))
+	truthy("and its file goes with it",
+		harness.files["UAI/sessions/" .. tostring(second) .. ".json"] == nil)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("the composer states what is actually in force", function()
+	local harness, handle = bootWith({
+		model = "claude-opus-5",
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Fine." }) }
+		end,
+	})
+
+	local runtime = harness.byName("Chip_runtime")
+	truthy("the runtime chip exists", runtime ~= nil)
+	contains("and names the host it is on", harness.textOf(runtime), "OfflineHarness")
+
+	-- The permission chip said "Bypass permissions" on a client whose mode was "ask",
+	-- which is the one place a fake label was also a safety problem.
+	local permissionLabel = harness.byName("PermissionLabel")
+	truthy("the permission chip exists", permissionLabel ~= nil)
+	check("and reads the mode in force", permissionLabel.Text, "Ask first")
+	handle.env.require("agent/permissions").setMode("full")
+	harness.settle(1)
+	check("changing the mode changes the label", permissionLabel.Text, "Allow everything")
+
+	local modelLabel = harness.byName("ModelLabel")
+	contains("the model is the one the provider is pointed at", modelLabel.Text, "claude-opus-5")
+	contains("with the window this client knows it has", modelLabel.Text, "1M")
+
+	-- Isolation is the worktree chip: a conversation marked that way is never written.
+	local session = handle.sessions.current()
+	session.send("write this down")
+	harness.settle(8)
+	local path = "UAI/sessions/" .. tostring(session.id) .. ".json"
+	truthy("an ordinary conversation is on disk", harness.files[path] ~= nil)
+	harness.click(harness.byName("Chip_isolate"))
+	truthy("isolating it takes it off disk", harness.files[path] == nil)
+	session.send("and this")
+	harness.settle(8)
+	truthy("and it stays off", harness.files[path] == nil)
+	harness.click(harness.byName("Chip_isolate"))
+	truthy("turning it back on saves it again", harness.files[path] ~= nil)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("an attached file travels with the message", function()
+	local sent = nil
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			sent = entry.body
+			return { StatusCode = 200, Body = chatBody({ content = "Read it." }) }
+		end,
+	})
+
+	local fsx = handle.env.require("runtime/fsx")
+	fsx.write("notes/plan.txt", "step one: fix the raft")
+
+	local composer = handle.app.chatPanel.composer
+	composer.attachments = { { label = "notes/plan.txt", text = "step one: fix the raft" } }
+	local box = harness.byName("Prompt"):FindFirstChildOfClass("TextBox")
+	box.Text = "what does the plan say"
+	harness.click(harness.byName("Send"))
+	harness.settle(8)
+
+	truthy("a request went out", sent ~= nil)
+	contains("with the file's contents in it", tostring(sent), "step one: fix the raft")
+	contains("named", tostring(sent), "notes/plan.txt")
+	contains("alongside the question", tostring(sent), "what does the plan say")
+	check("and the attachment is not resent", #composer.attachments, 0)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("every settings pane builds and is reachable", function()
+	local harness, handle = bootWith({})
+	local panes = handle.env.require("ui/settingspanes")
+
+	local dialog = handle.app.showSettingsDialog("usage")
+	harness.settle(1)
+	truthy("the dialog opened", dialog ~= nil)
+	truthy("with a category list", harness.byName("Category_usage") ~= nil)
+
+	-- Every pane, one at a time. The mock type-checks every property assignment, so
+	-- this is where a pane that only looked finished stops looking finished.
+	for _, entry in ipairs(panes.PANES) do
+		local row = harness.byName("Category_" .. entry.id)
+		truthy(entry.id .. " has a category row", row ~= nil)
+		if row then
+			harness.click(row)
+			harness.settle(1)
+			truthy(entry.id .. " renders", harness.byName("Pane_" .. entry.id) ~= nil)
+		end
+	end
+
+	-- The old dialog built its own scrim and registered with nothing, so Escape did
+	-- not close it and neither did clicking beside it.
+	harness.press("Escape")
+	harness.settle(1)
+	truthy("Escape closes it", harness.byName("SettingsDialog") == nil)
+
+	local typeErrors = handle.env and harness.instanceState.typeErrors or {}
+	check("no property was assigned the wrong type", #typeErrors, 0,
+		typeErrors[1] and tostring(typeErrors[1]) or nil)
+	local unknownReads = {}
+	for key in pairs(harness.instanceState.unknownReads) do unknownReads[#unknownReads + 1] = key end
+	table.sort(unknownReads)
+	check("no unknown property was read", #unknownReads, 0, table.concat(unknownReads, "\n"))
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+	check("nothing was warned", #harness.console.warnings, 0,
+		table.concat(harness.console.warnings, "\n"))
+end)
+
+scenario("a tool group can be withheld from the model", function()
+	local sent = nil
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			sent = entry.body
+			return { StatusCode = 200, Body = chatBody({ content = "Nothing to do." }) }
+		end,
+	})
+	local registry = handle.env.require("agent/registry")
+
+	local before = #registry.definitions({})
+	local groups = registry.groups()
+	truthy("the registry reports its groups", #groups > 0)
+
+	local target = nil
+	for _, group in ipairs(groups) do
+		if group.id == "remotes" then target = group end
+	end
+	truthy("including the remotes family", target ~= nil)
+
+	registry.setGroupEnabled("remotes", false)
+	local after = #registry.definitions({})
+	truthy("switching it off shortens the tool list", after < before,
+		tostring(before) .. " -> " .. tostring(after))
+	check("by exactly that family", before - after, target.total)
+
+	handle.sessions.current().send("look around")
+	harness.settle(8)
+	truthy("and the wire carries the shorter list", sent ~= nil)
+	truthy("with none of the withheld tools in it",
+		not tostring(sent):find("remote_fire", 1, true), tostring(sent):sub(1, 400))
+
+	registry.setGroupEnabled("remotes", true)
+	check("turning it back on restores them", #registry.definitions({}), before)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("search finds a conversation by what was said in it", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Understood." }) }
+		end,
+	})
+
+	handle.sessions.current().send("the lighting is too dark near the docks")
+	harness.settle(8)
+	local older = handle.sessions.activeId
+	handle.app.openSession(handle.sessions.newThread().id)
+	handle.sessions.current().send("something else entirely")
+	harness.settle(8)
+
+	handle.app.showSearch()
+	harness.settle(1)
+	local field = harness.byName("SearchField")
+	truthy("the search field is there", field ~= nil)
+	local box = field:FindFirstChildOfClass("TextBox")
+	box.Text = "docks"
+	harness.settle(1)
+
+	local result = harness.byName("Result_1")
+	truthy("a result appeared", result ~= nil, harness.dump(harness.byName("SearchResults")))
+	contains("naming the conversation it was found in", harness.textOf(result), "lighting is too dark")
+	harness.click(result)
+	harness.settle(1)
+	check("and opening it switches to that conversation", handle.sessions.activeId, older)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("cowork is the web bridge rather than a slogan", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			local url = tostring(entry.url)
+			if url:find("/api/agent/inbox") then
+				return { StatusCode = 200, Body = json.encode({ commands = {} }) }
+			end
+			if url:find("/api/agent/events") then return { StatusCode = 204, Body = "" } end
+			return { StatusCode = 404, Body = "{}" }
+		end,
+	})
+
+	handle.app.show("cowork")
+	harness.settle(1)
+	local panel = harness.byName("Cowork")
+	truthy("the cowork panel builds", panel ~= nil)
+	contains("and says the bridge is off", harness.textOf(panel), "Off.")
+
+	handle.config.set("bridge.token", ("c"):rep(64))
+	handle.config.set("bridge.enabled", true)
+	harness.settle(6)
+	local text = harness.textOf(harness.byName("Cowork"))
+	contains("turning it on reports the connection", text, "Connected")
+	contains("and which conversation is shared", text, "sharing:")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("the home card reports the record and nothing else", function()
+	local harness, handle = bootWith({ provider = false })
+	local stats = handle.env.require("agent/stats")
+	local clock = handle.env.require("runtime/clock")
+
+	local card = harness.byName("Home")
+	truthy("the card is on an empty conversation", card ~= nil)
+	local blank = harness.textOf(card)
+	contains("greeting the player by name", blank, "TestPlayer")
+	-- The card used to open with 11 sessions, 5,387 messages and 1.5B tokens on a
+	-- client that had never sent a request.
+	truthy("with no invented figures on it",
+		not blank:find("5,387") and not blank:find("1.5B"), blank)
+	contains("and says why it is empty", blank, "Nothing recorded in this window yet")
+
+	local today = clock.dayNumber()
+	stats.data.days[clock.keyFromDayNumber(today)] = {
+		sessions = 2, messages = 40, userMessages = 20, replies = 20,
+		tokensIn = 900000, tokensOut = 100000, cost = 1.5, requests = 20,
+		toolCalls = 6, toolErrors = 0, errors = 0,
+		hours = { ["9"] = 40 },
+		models = { ["claude-opus-5"] = { requests = 20, tokensIn = 900000, tokensOut = 100000, cost = 1.5 } },
+	}
+	stats.changed:fire(stats.data)
+	harness.settle(2)
+
+	local filled = harness.textOf(harness.byName("Home"))
+	contains("the message count is the recorded one", filled, "40")
+	contains("the tokens are the recorded ones", filled, "1M")
+	contains("the peak hour is the recorded one", filled, "9 AM")
+	contains("and the model is the one that answered", filled, "claude-opus-5")
+	contains("with the comparison the record supports", filled, "Harry Potter")
+
+	-- The range pills are a real window over the same record.
+	harness.click(harness.byName("Pill_7d"))
+	harness.settle(1)
+	contains("a week still contains today", harness.textOf(harness.byName("Home")), "40")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("the appearance settings change what is drawn", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({
+				content = "Try this:\n\n```lua\nlocal x = 1\n```\n",
+			}) }
+		end,
+	})
+	local theme = handle.env.require("ui/theme")
+
+	-- Ctrl-comma, which the profile menu advertises. A menu that names a key it has
+	-- not bound is decoration.
+	harness.hold("LeftControl", true)
+	harness.press("Comma")
+	harness.settle(1)
+	harness.hold("LeftControl", false)
+	truthy("the shortcut opens the settings", harness.byName("SettingsDialog") ~= nil)
+
+	harness.click(harness.byName("Category_claude_code"))
+	harness.settle(1)
+
+	local darkSurface = theme.color.codeSurface
+	truthy("both code palettes are previewed",
+		harness.byName("CodePreview_dark") ~= nil and harness.byName("CodePreview_light") ~= nil)
+	harness.click(harness.byName("CodePreview_light"))
+	harness.settle(2)
+	check("pressing one selects it", handle.config.get("ui.codeTheme"), "light")
+	truthy("and the code surface actually changes",
+		theme.color.codeSurface ~= darkSurface)
+
+	-- And it reaches the transcript, which is the only reason the setting exists.
+	handle.sessions.current().send("show me")
+	harness.settle(8)
+	local block = harness.byName("Code")
+	truthy("a code block was rendered", block ~= nil)
+	check("in the palette that was chosen", block.BackgroundColor3, theme.color.codeSurface)
+
+	local bodyFont = theme.text.body.font
+	handle.config.set("ui.interfaceFont", "gotham")
+	harness.settle(2)
+	truthy("the interface font is a real change", theme.text.body.font ~= bodyFont)
+
+	local wide = theme.size.reading
+	handle.config.set("ui.transcriptWidth", "narrow")
+	harness.settle(2)
+	truthy("so is the transcript width", theme.size.reading < wide,
+		tostring(wide) .. " -> " .. tostring(theme.size.reading))
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("a phone can still reach every panel and conversation", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Fine." }) }
+		end,
+	})
+	handle.sessions.current().send("the first one")
+	harness.settle(8)
+	local first = handle.sessions.activeId
+	handle.app.openSession(handle.sessions.newThread().id)
+	handle.sessions.current().send("the second one")
+	harness.settle(8)
+
+	-- A phone has no sidebar, so the app menu carries the whole of navigation. It used
+	-- to carry only the panels, and on a tablet in portrait or a console it carried
+	-- nothing at all -- the hamburger was gated on "sheet or narrower than 500".
+	harness.setViewport(390, 844)
+	harness.settle(2)
+	check("the layout is a sheet", handle.env.require("ui/responsive").mode, "sheet")
+	check("with no sidebar", handle.app.sidebarVisible(), false)
+
+	harness.click(harness.byName("Nav_menu"))
+	harness.settle(1)
+	local menu = harness.byName("MenuLayer")
+	truthy("the app menu opens", menu ~= nil)
+	local text = harness.textOf(menu)
+	contains("listing the panels", text, "Providers")
+	contains("a new conversation", text, "New conversation")
+	contains("and the conversations themselves", text, "the first one")
+
+	harness.click(harness.byName("Option_session:" .. tostring(first)))
+	harness.settle(1)
+	check("one of which can be opened", handle.sessions.activeId, first)
+
+	-- A tablet in portrait is the other mode with no sidebar.
+	harness.setViewport(834, 1112)
+	harness.settle(2)
+	check("a portrait tablet is a panel", handle.env.require("ui/responsive").mode, "panel")
+	truthy("and still has the app menu", harness.byName("Nav_menu") ~= nil)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 34. The sidebar toggle ---------------------------------------------------
+
+-- Untested until now, which is how a toggle that was a mathematical no-op shipped:
+-- `collapsed = not sidebarVisible()` is a fixed point in both directions, so pressing
+-- it rebuilt the whole tree and produced a byte-identical sidebar.
+scenario("the sidebar collapses and comes back", function()
+	local harness, handle = bootWith({})
+	local app = handle.app
+
+	truthy("the sidebar starts open", app.sidebarVisible())
+	truthy("and is on screen", harness.byName("Sidebar") ~= nil)
+
+	harness.click(harness.byName("Nav_sidebar"))
+	harness.settle(2)
+	check("pressing the toggle collapses it", app.sidebarVisible(), false)
+	truthy("and takes it off screen", harness.byName("Sidebar") == nil)
+	check("which is remembered", handle.config.get("ui.sidebarCollapsed"), true)
+
+	-- The only control that could bring it back used to live inside the sidebar, so
+	-- collapsing it was a one-way trip.
+	local expand = harness.byName("Nav_collapse")
+	truthy("the header offers a way back", expand ~= nil)
+	harness.click(expand)
+	harness.settle(2)
+	truthy("which restores it", app.sidebarVisible())
+	truthy("and the sidebar with it", harness.byName("Sidebar") ~= nil)
+
+	-- The switch in the appearance pane writes the same path without the quiet flag,
+	-- and nothing was listening for it.
+	handle.config.set("ui.sidebarCollapsed", true)
+	harness.settle(2)
+	check("the setting collapses it too", app.sidebarVisible(), false)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 35. Outbound encoding ----------------------------------------------------
+
+-- The crash this covers: HttpService:JSONEncode raises "Can't convert to JSON" on a
+-- string that is not valid UTF-8, and a web search's scraped snippet is full of
+-- candidates. Because the tool result is appended to the message history, the error
+-- then repeated on every following turn with no position and no clue.
+scenario("invalid UTF-8 never reaches the encoder", function()
+	local harness, handle = bootWith({ provider = false })
+	local util = handle.env.require("runtime/util")
+
+	local bare = "caf\233 latte"
+	check("a lone Latin-1 byte is not valid UTF-8", util.validUtf8(bare), false)
+	local fixed, changed = util.sanitise(bare)
+	check("sanitising reports the repair", changed, true)
+	truthy("and the result validates", util.validUtf8(fixed))
+	contains("keeping the text either side", fixed, "latte")
+
+	local clean = "caf\195\169 latte"
+	truthy("valid text validates", util.validUtf8(clean))
+	local same, untouched = util.sanitise(clean)
+	check("and is returned unchanged", same, clean)
+	check("with nothing reported", untouched, false)
+
+	-- The three producers that were making such bytes.
+	check("an entity above 127 becomes real UTF-8", util.htmlEntities("a&#233;b"), "a\195\169b")
+	check("and one above 255 is no longer dropped", util.htmlEntities("it&#8217;s"), "it\226\128\153s")
+	truthy("a percent-escaped Latin-1 byte is repaired",
+		util.validUtf8(util.urlDecode("caf%E9")))
+
+	-- Byte-indexed cuts through a multi-byte character. The em dash is three bytes.
+	local dashes = string.rep("a\226\128\148", 40)
+	truthy("ellipsis cuts on a character boundary", util.validUtf8(util.ellipsis(dashes, 30)))
+	truthy("so does truncate", util.validUtf8((util.truncate(dashes, 60, "note"))))
+
+	-- The chokepoint itself: every outbound value goes through this.
+	local encoded = util.encode({ snippet = bare, count = 0 / 0, note = "ok" })
+	truthy("encode does not raise on poisoned input", type(encoded) == "string")
+	contains("and still carries the good fields", encoded, "ok")
+	truthy("with no NaN token in the body", encoded:lower():find("nan") == nil, encoded)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 36. Code in the transcript ------------------------------------------------
+
+-- What the model wrote is the most useful thing in a transcript of an agent that
+-- writes and runs code, and it was reachable only by opening a pane that defaulted
+-- shut. What showed instead was ninety characters of the JSON envelope.
+scenario("a tool call shows the code it was given", function()
+	local step = 0
+	local source = "local part = Instance.new(\"Part\")\npart.Anchored = true\nreturn part.Name"
+	local harness, handle = bootWith({
+		handler = function()
+			step = step + 1
+			if step == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("call_1", "run_luau", { code = source }) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Made a part." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+	handle.sessions.current().send("make me a part")
+	harness.settle(12)
+
+	local row = harness.byName("Tool")
+	truthy("the tool row is there", row ~= nil)
+	local shown = harness.textOf(row)
+	contains("the code is on screen without opening anything", shown, "part.Anchored = true")
+	contains("and the last line too", shown, "return part.Name")
+	contains("under its language", shown, "lua")
+	contains("with a line count", shown, "3 lines")
+
+	-- The header says what the call is doing rather than showing the envelope.
+	truthy("no JSON envelope in the row", shown:find('{"code"', 1, true) == nil, shown)
+
+	-- Turning it off leaves the code behind the row's own caret rather than removing it.
+	handle.config.set("ui.showToolCode", false)
+	harness.settle(3)
+	local without = harness.byName("Tool")
+	truthy("the row survives the setting", without ~= nil)
+	truthy("and the listing is gone from view",
+		harness.textOf(without):find("part.Anchored", 1, true) == nil)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 37. The providers panel ---------------------------------------------------
+
+-- What this locks in: the key is never rendered, the facts the registry keeps are on
+-- screen, and a health event does not tear the panel down. The old panel printed the
+-- whole API key into a field, showed none of the endpoint/protocol/latency facts, and
+-- rebuilt itself from scratch on every completion.
+scenario("the providers panel shows the record without showing the key", function()
+	local harness, handle = bootWith({})
+	local record = handle.providers.active()
+	record.apiKey = "sk-secret-tail-9999"
+	record.wsUrl = ""
+	handle.providers.save(record, { force = true })
+	handle.app.show("providers")
+	harness.settle(2)
+
+	local text = harness.textOf()
+	truthy("the key is not on screen", text:find("sk-secret-tail", 1, true) == nil, text)
+	contains("only its last four characters are", text, "9999")
+	contains("the completions endpoint is named", text, "/chat/completions")
+	contains("so is the model list route", text, "/models")
+	contains("and the wire protocol", text, "Chat completions")
+	-- The single fact that decides whether a long reply can arrive, never stated before.
+	contains("and whether replies can stream", text, "HTTP only")
+	contains("with the fallback rule as configured", text, "active provider first")
+
+	truthy("the provider is listed in the rail",
+		harness.byName("Provider_" .. tostring(record.id)) ~= nil)
+
+	-- A health tick used to rebuild the panel, its header and its scroll position.
+	local rail = harness.byName("Provider_" .. tostring(record.id))
+	handle.providers.markFail(record, "a transient 500")
+	harness.settle(1)
+	check("a health event leaves the rail row in place",
+		harness.byName("Provider_" .. tostring(record.id)), rail)
+	contains("while the failure count updates", harness.textOf(), "1 failed")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 38. Tool pairing ----------------------------------------------------------
+
+-- The 400 this prevents is not survivable on its own: it is not retried, three of them
+-- bench the provider, the chain walks the same broken history to the next one, and
+-- ctx.serialise keeps both halves -- so one orphan kills every following turn and
+-- survives a restart.
+scenario("orphaned tool calls and results are repaired before they go out", function()
+	local harness, handle = bootWith({ provider = false })
+	local ctx = handle.sessions.current().ctx
+
+	-- A result whose call is not in the assistant turn before it. A gateway that drops
+	-- an assistant message with empty content manufactures exactly this.
+	ctx.pushUser("do the thing")
+	ctx.pushAssistant({ content = "", toolCalls = {
+		{ id = "call_real", type = "function", ["function"] = { name = "run_luau", arguments = "{}" } },
+	} })
+	ctx.pushToolResult("call_real", "run_luau", "fine")
+	ctx.pushToolResult("call_ghost", "run_luau", "orphan")
+
+	local dropped, filled = ctx.repair()
+	check("the orphan was dropped", dropped, 1)
+	check("and nothing was invented", filled, 0)
+	local ids = {}
+	for _, message in ipairs(ctx.messages) do
+		if message.role == "tool" then ids[#ids + 1] = message.tool_call_id end
+	end
+	check("one result survives", #ids, 1)
+	check("the matched one", ids[1], "call_real")
+
+	-- The mirror: a call the turn never answered, which is what a crash between
+	-- dispatch and result recording leaves behind.
+	ctx.pushUser("and again")
+	ctx.pushAssistant({ content = "", toolCalls = {
+		{ id = "call_hanging", type = "function", ["function"] = { name = "file_write", arguments = "{}" } },
+	} })
+	local dropped2, filled2 = ctx.repair()
+	check("nothing was dropped this time", dropped2, 0)
+	check("the hanging call was answered", filled2, 1)
+	local last = ctx.messages[#ctx.messages]
+	check("with a tool message", last.role, "tool")
+	check("naming the call", last.tool_call_id, "call_hanging")
+	contains("and saying what happened", last.content, "did not complete")
+
+	-- Idempotent: a repaired history repairs to itself, so the warning does not repeat
+	-- on every request for the rest of the conversation.
+	local dropped3, filled3 = ctx.repair()
+	check("a second pass drops nothing", dropped3, 0)
+	check("and fills nothing", filled3, 0)
+
+	-- And it happens on the way out, not only when asked.
+	ctx.pushToolResult("call_ghost_again", "run_luau", "orphan")
+	local wire = ctx.wire("system")
+	local seen = {}
+	for _, message in ipairs(wire) do
+		for _, call in ipairs(message.toolCalls or {}) do seen[tostring(call.id)] = true end
+	end
+	local unmatched = 0
+	for _, message in ipairs(wire) do
+		if message.role == "tool" and not seen[tostring(message.tool_call_id)] then
+			unmatched = unmatched + 1
+		end
+	end
+	check("the wire payload has no orphans", unmatched, 0)
 end)
 
 print(("="):rep(72))

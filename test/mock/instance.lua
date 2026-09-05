@@ -455,6 +455,11 @@ function M.build(dt)
 		end
 		if key == "AbsoluteSize" then return absoluteSize(self, 0) end
 		if key == "AbsolutePosition" then return absolutePosition(self, 0) end
+		-- Parent is the one property whose nil is meaningful: a destroyed instance
+		-- reports nil for it rather than raising, and that is how a subscriber decides
+		-- the surface it was watching has gone. Reading it must therefore not be an
+		-- unknown read, even when the key has been cleared.
+		if key == "Parent" then return nil end
 		local fallback = self.__defaults[key]
 		if fallback ~= nil then return resolveDefault(fallback) end
 		-- A child is reachable as a field, same as the real API.

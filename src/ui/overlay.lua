@@ -11,7 +11,6 @@ return function(env)
 	local responsive = env.require("ui/responsive")
 	local dispose = env.require("runtime/dispose")
 	local P = env.require("ui/primitives")
-	local C = env.require("ui/controls")
 	local icons = env.require("ui/icons")
 
 	local TOAST_SECONDS = 4.5
@@ -30,7 +29,7 @@ return function(env)
 
 		M.toastColumn = P.column(M.layer, {
 			name = "Toasts",
-			size = UDim2.new(0, 320, 0, 0),
+			size = UDim2.new(0, theme.size.menuWide, 0, 0),
 			auto = "Y",
 			anchor = Vector2.new(0.5, 0),
 			position = UDim2.new(0.5, 0, 0, theme.space.lg + responsive.inset.Y),
@@ -82,7 +81,11 @@ return function(env)
 		P.stroke(card, theme.color.border)
 		card.BackgroundTransparency = 1
 
-		P.statusDot(card, { color = theme.toneColor(tone or "info"), layoutOrder = 1, diameter = 8 })
+		P.statusDot(card, {
+			color = theme.toneColor(tone or "info"),
+			layoutOrder = 1,
+			diameter = theme.size.dot,
+		})
 
 		local label = P.text(card, {
 			text = tostring(text),
@@ -90,9 +93,10 @@ return function(env)
 			color = theme.color.text,
 			wrap = true,
 			auto = "Y",
+			size = UDim2.new(0, 0, 0, 0),
+			flex = "Fill",
 			layoutOrder = 2,
 		})
-		label.Size = UDim2.new(1, -(theme.space.sm + 8), 0, 0)
 
 		local entry = { card = card, closed = false }
 
@@ -132,15 +136,16 @@ return function(env)
 		scrim.Active = true
 
 		local sheetMode = responsive.mode == "sheet"
+		local widest = math.max(responsive.viewport.X - theme.space.xxl * 2, theme.size.modalMin)
 		local card = P.column(scrim, {
 			name = "Modal",
 			size = sheetMode
 				and UDim2.new(1, -theme.space.md * 2, 0, 0)
-				or UDim2.new(0, util.clamp(props.width or 380, 260, math.max(responsive.viewport.X - 48, 260)), 0, 0),
+				or UDim2.new(0, util.clamp(props.width or theme.size.modal, theme.size.modalMin, widest), 0, 0),
 			auto = "Y",
 			anchor = sheetMode and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5),
 			position = sheetMode and UDim2.new(0.5, 0, 1, -theme.space.lg) or UDim2.fromScale(0.5, 0.5),
-			bg = theme.color.surface,
+			bg = theme.color.surfaceRaised,
 			radius = theme.radius.xl,
 			gap = theme.space.md,
 			padding = theme.space.lg,
@@ -148,7 +153,7 @@ return function(env)
 		})
 		P.stroke(card, theme.color.border)
 		local scale = Instance.new("UIScale", card)
-		scale.Scale = 0.96
+		scale.Scale = theme.scale.enter
 
 		local header = P.row(card, {
 			name = "Header",
@@ -191,7 +196,7 @@ return function(env)
 			for index, item in ipairs(M.open) do
 				if item == handle then table.remove(M.open, index) end
 			end
-			env.tween:Create(scale, theme.tween("exit"), { Scale = 0.96 }):Play()
+			env.tween:Create(scale, theme.tween("exit"), { Scale = theme.scale.enter }):Play()
 			local out = env.tween:Create(scrim, theme.tween("exit"), { BackgroundTransparency = 1 })
 			out.Completed:Connect(function() pcall(function() scrim:Destroy() end) end)
 			out:Play()
@@ -236,7 +241,7 @@ return function(env)
 		})
 
 		M.open[#M.open + 1] = handle
-		env.tween:Create(scrim, theme.tween("enter"), { BackgroundTransparency = 0.45 }):Play()
+		env.tween:Create(scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
 		env.tween:Create(scale, theme.tween("enter"), { Scale = 1 }):Play()
 		return handle
 	end
@@ -246,7 +251,7 @@ return function(env)
 		local modal = M.modal({
 			title = props.title or "Are you sure?",
 			description = props.description,
-			width = props.width or 360,
+			width = props.width or theme.size.modal,
 			onClose = props.onCancel,
 		})
 		if not modal then
@@ -287,7 +292,7 @@ return function(env)
 		local modal = M.modal({
 			title = props.title or "Enter a value",
 			description = props.description,
-			width = props.width or 380,
+			width = props.width or theme.size.modal,
 		})
 		if not modal then return nil end
 
@@ -300,7 +305,7 @@ return function(env)
 				if props.onConfirm then pcall(props.onConfirm, util.trim(text)) end
 			end,
 		})
-		clock.delay(0.05, function() field.focus() end)
+		clock.delay(theme.motion.fast, function() field.focus() end)
 
 		P.button(modal.footer, {
 			text = props.cancelText or "Cancel",
@@ -321,6 +326,95 @@ return function(env)
 			end,
 		})
 		return modal
+	end
+
+	-- A dialog: a large fixed surface with two panes and its own scrim.
+	--
+	-- Not a modal. `M.modal` is a narrow auto-height card built around a title and a
+	-- footer, which is right for a confirmation and wrong for a settings window -- the
+	-- one the settings dialog used to build by hand had no scrim dismissal and was not
+	-- registered here, so Escape did nothing and clicking beside it did nothing.
+	function M.dialog(props)
+		props = props or {}
+		if not ensure() then return nil end
+
+		local margin = theme.space.lg * 2
+		local width = math.min(props.width or theme.size.dialog, responsive.viewport.X - margin)
+		local height = math.min(props.height or theme.size.dialogTall,
+			responsive.viewport.Y - margin - responsive.inset.Y)
+
+		local scrim = P.frame(M.layer, {
+			name = "Scrim",
+			size = UDim2.fromScale(1, 1),
+			bg = theme.color.scrim,
+			bgTransparency = 1,
+			zIndex = theme.z.modal,
+		})
+		scrim.Active = true
+
+		local dismiss = Instance.new("TextButton", scrim)
+		dismiss.Name = "Dismiss"
+		dismiss.Text = ""
+		dismiss.BackgroundTransparency = 1
+		dismiss.Size = UDim2.fromScale(1, 1)
+		dismiss.AutoButtonColor = false
+		dismiss.ZIndex = theme.z.modal
+
+		local card = P.frame(scrim, {
+			name = props.name or "Dialog",
+			size = UDim2.fromOffset(width, height),
+			anchor = Vector2.new(0.5, 0.5),
+			position = UDim2.fromScale(0.5, 0.5),
+			bg = theme.color.surface,
+			radius = theme.radius.xl,
+			zIndex = theme.z.modal + 1,
+			clip = true,
+		})
+		P.stroke(card, theme.color.border)
+		local scale = Instance.new("UIScale", card)
+		scale.Scale = theme.scale.enter
+
+		local handle = { card = card, scrim = scrim, closed = false, width = width, height = height }
+
+		function handle.close()
+			if handle.closed then return end
+			handle.closed = true
+			for index, item in ipairs(M.open) do
+				if item == handle then table.remove(M.open, index) end
+			end
+			env.tween:Create(scale, theme.tween("exit"), { Scale = theme.scale.enter }):Play()
+			local out = env.tween:Create(scrim, theme.tween("exit"), { BackgroundTransparency = 1 })
+			out.Completed:Connect(function() pcall(function() scrim:Destroy() end) end)
+			out:Play()
+			if props.onClose then pcall(props.onClose) end
+		end
+
+		dismiss.Activated:Connect(handle.close)
+
+		local closeDiameter = math.max(theme.size.control, responsive.minTarget())
+		local close = P.iconButton(card, {
+			name = "DialogClose",
+			icon = "close",
+			diameter = theme.size.control,
+			anchor = Vector2.new(1, 0),
+			position = UDim2.new(1, -theme.space.sm, 0, theme.space.sm),
+			zIndex = theme.z.modal + 4,
+			onClick = handle.close,
+		})
+		close.instance.ZIndex = theme.z.modal + 4
+		-- How much of the card's top-right corner the close button owns.
+		--
+		-- It is absolutely positioned over whatever the caller fills the card with, and
+		-- the dialog has no title bar to keep it out of, so a caller that starts its
+		-- content at the top edge draws under it -- which on a narrow layout put the
+		-- button on top of the last category row and made it unreachable. Published
+		-- rather than left for each caller to re-derive from two tokens.
+		handle.closeInset = closeDiameter + theme.space.sm * 2
+
+		M.open[#M.open + 1] = handle
+		env.tween:Create(scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
+		env.tween:Create(scale, theme.tween("enter"), { Scale = 1 }):Play()
+		return handle
 	end
 
 	-- Anchored menu ----------------------------------------------------------
@@ -344,8 +438,7 @@ return function(env)
 		dismiss.Size = UDim2.fromScale(1, 1)
 		dismiss.AutoButtonColor = false
 
-		local width = math.max(props.width or target.AbsoluteSize.X, 160)
-		local count = #(props.options or {})
+		local width = math.max(props.width or target.AbsoluteSize.X, theme.size.menuMin)
 
 		-- The row height is derived from what the rows actually contain, not from a
 		-- control token. An option with a detail line stacks a `small` label over a
@@ -356,10 +449,25 @@ return function(env)
 		for _, option in ipairs(props.options or {}) do
 			if option.detail then hasDetail = true end
 		end
-		local content = theme.text.small.height + 4
-		if hasDetail then content = content + theme.text.caption.height + 2 end
+		local content = theme.text.small.height + theme.space.xxs
+		if hasDetail then content = content + theme.text.caption.height + theme.space.hair end
 		local rowHeight = math.max(theme.size.row, responsive.minTarget(), content + theme.space.xs)
-		local bodyHeight = math.min(count * (rowHeight + 2) + theme.space.xs * 2, 320)
+
+		-- Measured rather than counted: a divider is one pixel and a header is its own
+		-- height, and treating both as a full row made the profile menu tall enough to
+		-- scroll when everything in it already fitted.
+		local headerHeight = theme.text.bodyStrong.height + theme.text.caption.height + theme.space.sm
+		local bodyHeight = theme.space.xs * 2
+		for _, option in ipairs(props.options or {}) do
+			if option.divider then
+				bodyHeight = bodyHeight + 1 + theme.space.hair
+			elseif option.isHeader then
+				bodyHeight = bodyHeight + headerHeight + theme.space.hair
+			else
+				bodyHeight = bodyHeight + rowHeight + theme.space.hair
+			end
+		end
+		bodyHeight = math.min(bodyHeight, theme.size.menuMax)
 
 		local layerOrigin = M.layer.AbsolutePosition
 		local anchorX = target.AbsolutePosition.X - layerOrigin.X
@@ -399,76 +507,140 @@ return function(env)
 		local list = P.scroll(card, {
 			name = "Options",
 			size = UDim2.fromScale(1, 1),
-			gap = 2,
+			gap = theme.space.hair,
 			padding = theme.space.xs,
 			zIndex = theme.z.dropdown + 2,
 		})
 
 		for index, option in ipairs(props.options or {}) do
-			local button = Instance.new("TextButton", list.instance)
-			button.Text = ""
-			button.AutoButtonColor = false
-			button.BackgroundColor3 = option.selected and theme.color.surfaceActive or theme.color.surfaceOverlay
-			button.BackgroundTransparency = option.selected and 0 or 1
-			button.BorderSizePixel = 0
-			button.Size = UDim2.new(1, 0, 0, rowHeight)
-			button.LayoutOrder = index
-			button.Selectable = true
-			P.corner(button, theme.radius.sm)
-
-			local row = P.row(button, {
-				size = UDim2.fromScale(1, 1),
-				gap = theme.space.xs,
-				padding = { x = theme.space.sm },
-			})
-			local labelColumn = P.column(row, {
-				-- Fills rather than reserving space.md, which was twelve pixels for a
-				-- check mark that is icon + gap, so the tick was clipped on every
-				-- selected row.
-				size = UDim2.new(0, 0, 1, 0),
-				flex = "Fill",
-				gap = 0,
-				alignY = "Center",
-				layoutOrder = 1,
-			})
-			P.text(labelColumn, {
-				text = tostring(option.label or option.value or ""),
-				role = "small",
-				color = option.tone and theme.toneColor(option.tone) or theme.color.text,
-				truncate = true,
-			})
-			if option.detail then
-				P.text(labelColumn, {
-					text = option.detail,
-					role = "caption",
-					color = theme.color.textTertiary,
-					truncate = true,
+			if option.divider then
+				local div = P.divider(list.instance, {
+					color = theme.color.borderSubtle,
+					layoutOrder = index,
 				})
-			end
-			if option.selected then
-				local mark = P.frame(row, {
-					size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+				div.Size = UDim2.new(1, 0, 0, 1)
+			elseif option.isHeader then
+				-- The height the menu already reserved for it, sixty lines up. This was a
+				-- literal 36 against 46 pixels of content, so every menu with a header --
+				-- the profile menu, the conversation menu -- drew its subtitle ten pixels
+				-- into the first option below it, while the menu as a whole still reserved
+				-- the correct 48 and left the difference floating at the bottom.
+				local headRow = P.column(list.instance, {
+					size = UDim2.new(1, 0, 0, headerHeight),
+					padding = { x = theme.space.sm, top = theme.space.xs },
+					gap = 0,
+					layoutOrder = index,
+				})
+				local title = P.text(headRow, {
+					text = tostring(option.title or ""),
+					role = "bodyStrong",
+					color = theme.color.text,
+					auto = "X",
+					layoutOrder = 1,
+				})
+				title.Size = UDim2.fromOffset(0, theme.text.bodyStrong.height)
+				if option.subtitle then
+					local sub = P.text(headRow, {
+						text = tostring(option.subtitle or ""),
+						role = "caption",
+						color = theme.color.textTertiary,
+						auto = "X",
+						layoutOrder = 2,
+					})
+					sub.Size = UDim2.fromOffset(0, theme.text.caption.height)
+				end
+			else
+				local button = Instance.new("TextButton", list.instance)
+				-- Named after the value it carries. A menu is where most of this
+				-- interface's actions actually live, so an unnamed row is an action
+				-- nothing outside the click handler can reach -- including a test.
+				button.Name = "Option_" .. tostring(option.value ~= nil and option.value or option.label)
+				button.Text = ""
+				button.AutoButtonColor = false
+				button.BackgroundColor3 = option.selected and theme.color.surfaceActive or theme.color.surfaceOverlay
+				button.BackgroundTransparency = option.selected and 0 or 1
+				button.BorderSizePixel = 0
+				button.Size = UDim2.new(1, 0, 0, rowHeight)
+				button.LayoutOrder = index
+				button.Selectable = true
+				P.corner(button, theme.radius.sm)
+
+				local row = P.row(button, {
+					size = UDim2.fromScale(1, 1),
+					gap = theme.space.xs,
+					padding = { x = theme.space.sm },
+				})
+
+				if option.icon then
+					local iconHolder = P.frame(row, {
+						size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+						layoutOrder = 1,
+					})
+					icons.draw(option.icon, iconHolder, theme.size.icon, theme.color.textSecondary)
+				end
+
+				local labelColumn = P.column(row, {
+					size = UDim2.new(0, 0, 1, 0),
+					flex = "Fill",
+					gap = 0,
+					alignY = "Center",
 					layoutOrder = 2,
 				})
-				icons.check(mark, theme.size.icon, theme.color.accent)
-			end
+				P.text(labelColumn, {
+					text = tostring(option.label or option.value or ""),
+					role = "small",
+					color = option.tone and theme.toneColor(option.tone) or theme.color.text,
+					truncate = true,
+				})
+				if option.detail then
+					P.text(labelColumn, {
+						text = option.detail,
+						role = "caption",
+						color = theme.color.textTertiary,
+						truncate = true,
+					})
+				end
 
-			button.MouseEnter:Connect(function()
-				if not option.selected then
-					env.tween:Create(button, theme.tween("hover"), {
-						BackgroundTransparency = 0, BackgroundColor3 = theme.color.surfaceHover,
-					}):Play()
+				if option.shortcut then
+					local scLabel = P.text(row, {
+						text = tostring(option.shortcut),
+						role = "caption",
+						color = theme.color.textTertiary,
+						auto = "X",
+						layoutOrder = 3,
+					})
+					scLabel.Size = UDim2.fromOffset(0, theme.text.caption.height)
+				elseif option.chevron then
+					local chSlot = P.frame(row, {
+						size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+						layoutOrder = 3,
+					})
+					icons.chevron(chSlot, theme.size.icon, theme.color.textTertiary, "right")
+				elseif option.selected then
+					local mark = P.frame(row, {
+						size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+						layoutOrder = 3,
+					})
+					icons.check(mark, theme.size.icon, theme.color.accent)
 				end
-			end)
-			button.MouseLeave:Connect(function()
-				if not option.selected then
-					env.tween:Create(button, theme.tween("hover"), { BackgroundTransparency = 1 }):Play()
-				end
-			end)
-			button.Activated:Connect(function()
-				handle.close()
-				if props.onSelect then pcall(props.onSelect, option.value ~= nil and option.value or option.label, option) end
-			end)
+
+				button.MouseEnter:Connect(function()
+					if not option.selected then
+						env.tween:Create(button, theme.tween("hover"), {
+							BackgroundTransparency = 0, BackgroundColor3 = theme.color.surfaceHover,
+						}):Play()
+					end
+				end)
+				button.MouseLeave:Connect(function()
+					if not option.selected then
+						env.tween:Create(button, theme.tween("hover"), { BackgroundTransparency = 1 }):Play()
+					end
+				end)
+				button.Activated:Connect(function()
+					handle.close()
+					if props.onSelect then pcall(props.onSelect, option.value ~= nil and option.value or option.label, option) end
+				end)
+			end
 		end
 
 		M.open[#M.open + 1] = handle

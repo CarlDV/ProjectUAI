@@ -22,21 +22,7 @@ return function(env)
 		{ value = "deny", label = "Deny" },
 	}
 
-	local GROUP_LABELS = {
-		agentself = "Agent",
-		instance = "Instance tree",
-		script = "Code",
-		fs = "Files",
-		net = "HTTP",
-		web = "Web",
-		players = "Players",
-		character = "Character",
-		world = "World",
-		remotes = "Remotes",
-		gui = "Interface",
-		perf = "Diagnostics",
-		meta = "Metadata",
-	}
+	local GROUP_LABELS = registry.GROUP_LABELS
 
 	function M.new(parent)
 		local panel = {}
@@ -60,6 +46,7 @@ return function(env)
 		P.text(head, {
 			text = string.format("%d tools in %d groups", stats.total, util.count(stats.byGroup)),
 			role = "heading",
+			layoutOrder = 1,
 		})
 		local summary = P.text(head, {
 			text = string.format("%d unavailable on this host: %s",
@@ -69,10 +56,10 @@ return function(env)
 			color = theme.color.textTertiary,
 			wrap = true,
 			auto = "Y",
+			layoutOrder = 2,
 		})
 		summary.Size = UDim2.new(1, 0, 0, 0)
 
-		local searchField
 		local scroll
 
 		local function rebuild()
@@ -101,10 +88,55 @@ return function(env)
 			local position = 0
 			for _, group in ipairs(order) do
 				position = position + 1
-				P.sectionHeader(scroll.instance, {
-					title = GROUP_LABELS[group] or group,
+				-- The group header carries its own switch: turning a family off removes it
+				-- from the list the model is sent, which is a different thing from denying
+				-- a call and belongs next to the family rather than in a settings pane.
+				local header = P.row(scroll.instance, {
+					name = "Group_" .. tostring(group),
+					size = UDim2.new(1, 0, 0, 0),
+					auto = "Y",
+					gap = theme.space.sm,
+					-- The same inset a card gives its own contents, so a group's name lines up
+					-- with the tool names under it instead of sitting sixteen pixels to their
+					-- left, and its switch lines up with theirs.
+					padding = { x = theme.space.lg },
 					layoutOrder = position,
 				})
+				local headText = P.column(header, {
+					size = UDim2.new(0, 0, 0, 0),
+					auto = "Y",
+					flex = "Fill",
+					gap = 0,
+					layoutOrder = 1,
+				})
+				P.text(headText, {
+					text = GROUP_LABELS[group] or group,
+					role = "label",
+					color = theme.color.text,
+					auto = "Y",
+					wrap = true,
+				})
+				local groupNote = P.text(headText, {
+					text = "",
+					role = "caption",
+					color = theme.color.textTertiary,
+					wrap = true,
+					auto = "Y",
+				})
+				local function describeGroup()
+					groupNote.Text = registry.groupEnabled(group)
+						and util.pluralise(#grouped[group], "tool")
+						or (util.pluralise(#grouped[group], "tool") .. ", not offered to the model")
+				end
+				describeGroup()
+				local groupSwitch = C.switch(header, {
+					value = registry.groupEnabled(group),
+					onChange = function(value)
+						registry.setGroupEnabled(group, value)
+						describeGroup()
+					end,
+				})
+				groupSwitch.instance.LayoutOrder = 2
 
 				for _, tool in ipairs(grouped[group]) do
 					position = position + 1
@@ -127,7 +159,7 @@ return function(env)
 						color = missing and theme.color.textDisabled or theme.color.text,
 						layoutOrder = 1,
 					})
-					name.Size = UDim2.fromOffset(0, theme.text.monoSmall.size + 4)
+					name.Size = UDim2.fromOffset(0, theme.text.monoSmall.height)
 					name.AutomaticSize = Enum.AutomaticSize.X
 
 					P.badge(top, {
@@ -183,8 +215,12 @@ return function(env)
 			end
 		end
 
-		searchField = P.field(head, {
+		-- Third in the head block, stated rather than left to the tie-break: the two
+		-- labels above it are constructed earlier but neither of them sets an order.
+		P.field(head, {
+			name = "ToolSearch",
 			placeholder = "Search tools",
+			layoutOrder = 3,
 			onChange = function(text)
 				filter = util.trim(text)
 				rebuild()
@@ -195,7 +231,9 @@ return function(env)
 			name = "ToolList",
 			size = UDim2.new(1, 0, 1, 0),
 			gap = theme.space.sm,
-			padding = { x = theme.space.md, bottom = theme.space.md },
+			-- Top padding as well. Without it the first group header butted against the
+			-- head block above it while the bottom of the list had twelve pixels of air.
+			padding = { x = theme.space.md, top = theme.space.sm, bottom = theme.space.lg },
 			layoutOrder = 2,
 		})
 		local flex = Instance.new("UIFlexItem", scroll.instance)

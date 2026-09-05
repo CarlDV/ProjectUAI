@@ -221,7 +221,13 @@ function M.build(deps)
 		MouseBehavior = nil,
 		MouseIconEnabled = true,
 		GetFocusedTextBox = function() return nil end,
-		IsKeyDown = function() return false end,
+		-- Modifier state, so a shortcut that reads it can be exercised. Keyed by the
+		-- KeyCode's name because that is what a scenario has in hand.
+		heldKeys = {},
+		IsKeyDown = function(self, keyCode)
+			local name = type(keyCode) == "table" and tostring(keyCode.Name) or tostring(keyCode)
+			return rawget(self, "heldKeys")[name] == true
+		end,
 		GetMouseLocation = function() return dt.Vector2.new(400, 300) end,
 		GetPlatform = function() return { Name = "Windows" } end,
 		GetConnectedGamepads = function() return {} end,

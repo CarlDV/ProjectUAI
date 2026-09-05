@@ -38,7 +38,7 @@ return function(env)
 		-- anchored rule would silently become the first row instead of the last.
 		P.frame(shell, {
 			name = "Rule",
-			size = UDim2.new(1, 0, 0, 1),
+			size = UDim2.new(1, 0, 0, theme.stroke.hair),
 			bg = theme.color.borderSubtle,
 			layoutOrder = 3,
 		})
@@ -47,14 +47,17 @@ return function(env)
 		header.Text = ""
 		header.AutoButtonColor = false
 		header.BackgroundTransparency = 1
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget() - 8))
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget() - theme.space.sm))
 		header.LayoutOrder = 1
 		header.Selectable = true
 
 		local headerRow = P.row(header, {
 			size = UDim2.fromScale(1, 1),
 			gap = theme.space.xs,
-			padding = { x = theme.space.md },
+			-- The transcript's own horizontal inset. At md the task strip's caret sat four
+			-- pixels left of every row in the conversation under it, down the full height
+			-- of the panel.
+			padding = { x = theme.space.xl },
 		})
 		local caret = P.frame(headerRow, {
 			size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
@@ -75,7 +78,7 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
 			gap = theme.space.xxs,
-			padding = { x = theme.space.md, bottom = theme.space.sm },
+			padding = { x = theme.space.xl, bottom = theme.space.sm },
 			layoutOrder = 2,
 			visible = false,
 		})
@@ -117,14 +120,14 @@ return function(env)
 					layoutOrder = index,
 				})
 				local glyphHolder = P.frame(row, {
-					size = UDim2.fromOffset(theme.size.icon, theme.text.small.size + 4),
+					size = UDim2.fromOffset(theme.size.icon, theme.text.small.height),
 					layoutOrder = 1,
 				})
 				if mark.glyph then
 					icons.draw(mark.glyph, glyphHolder, theme.size.icon - 2, theme.color[mark.colour])
 				else
 					P.statusDot(glyphHolder, {
-						diameter = 5,
+						diameter = theme.size.dotSmall,
 						color = theme.color[mark.colour],
 						anchor = Vector2.new(0.5, 0.5),
 						position = UDim2.fromScale(0.5, 0.5),

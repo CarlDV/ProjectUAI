@@ -13,6 +13,11 @@ return function(env)
 		session = { prompt = 0, completion = 0, total = 0, cost = 0, requests = 0, estimated = false },
 		turn = { prompt = 0, completion = 0, total = 0, cost = 0 },
 		changed = signal.new("usage"),
+		-- One request, as it was measured, rather than the running totals `changed`
+		-- carries. This is the only place in the client where a model id and the tokens
+		-- it actually spent are in scope together, so anything keeping a per-model
+		-- history has to hear about it here.
+		recorded = signal.new("usage:recorded"),
 	}
 
 	-- input, output per million tokens. Matched longest-prefix, so a dated model
@@ -126,6 +131,16 @@ return function(env)
 		M.session.cached = (M.session.cached or 0) + (tonumber(cached) or 0)
 		M.session.reasoning = (M.session.reasoning or 0) + (tonumber(reasoning) or 0)
 
+		local delta = {
+			model = model,
+			prompt = prompt,
+			completion = completion,
+			cost = cost,
+			estimated = estimated,
+			cached = tonumber(cached) or 0,
+			reasoning = tonumber(reasoning) or 0,
+		}
+		M.recorded:fire(delta)
 		M.changed:fire(M.session, M.turn)
 		return { prompt = prompt, completion = completion, cost = cost, estimated = estimated }
 	end

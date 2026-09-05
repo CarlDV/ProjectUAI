@@ -65,6 +65,79 @@ return function(env)
 		return nil
 	end
 
+	-- Groups the user has switched off.
+	--
+	-- A whole family of tools is a coarser thing to turn off than a permission rule
+	-- and it answers a different question: a rule decides whether a call is allowed,
+	-- this decides whether the model is told the tool exists at all. Somebody who does
+	-- not want the agent touching remotes in this game wants the second one.
+	local GROUP_LABELS = {
+		agentself = "Agent",
+		instance = "Instance tree",
+		script = "Code",
+		fs = "Files",
+		net = "HTTP",
+		web = "Web",
+		players = "Players",
+		character = "Character",
+		world = "World",
+		remotes = "Remotes",
+		gui = "Interface",
+		perf = "Diagnostics",
+		meta = "Metadata",
+	}
+
+	M.GROUP_LABELS = GROUP_LABELS
+
+	function M.groupLabel(group)
+		return GROUP_LABELS[group] or tostring(group)
+	end
+
+	local function disabledGroups()
+		local stored = config.get("agent.disabledGroups", {})
+		if type(stored) ~= "table" then return {} end
+		return stored
+	end
+
+	function M.groupEnabled(group)
+		return disabledGroups()[tostring(group)] ~= true
+	end
+
+	function M.setGroupEnabled(group, enabled)
+		local list = util.copy(disabledGroups())
+		if enabled == false then
+			list[tostring(group)] = true
+		else
+			list[tostring(group)] = nil
+		end
+		config.set("agent.disabledGroups", list)
+		return enabled ~= false
+	end
+
+	-- Every group the registry knows about, with what is in it and whether it is on.
+	function M.groups()
+		M.load()
+		local byGroup, order = {}, {}
+		for _, tool in ipairs(M.list()) do
+			local entry = byGroup[tool.group]
+			if not entry then
+				entry = {
+					id = tool.group,
+					label = M.groupLabel(tool.group),
+					total = 0,
+					unavailable = 0,
+					enabled = M.groupEnabled(tool.group),
+				}
+				byGroup[tool.group] = entry
+				order[#order + 1] = entry
+			end
+			entry.total = entry.total + 1
+			if M.missingCapability(tool) then entry.unavailable = entry.unavailable + 1 end
+		end
+		table.sort(order, function(a, b) return a.label < b.label end)
+		return order
+	end
+
 	-- Keywords whose value is a JSON array. Everything else in a schema that is an
 	-- empty table wants to encode as {}, not [].
 	local SCHEMA_ARRAYS = {
@@ -112,6 +185,7 @@ return function(env)
 			if M.missingCapability(tool) then allow = false end
 			if readonly and tool.risk ~= "read" then allow = false end
 			if permissions.ruleFor(name) == "deny" then allow = false end
+			if not M.groupEnabled(tool.group) then allow = false end
 			if opts.only and not opts.only[name] then allow = false end
 			if opts.groups and not opts.groups[tool.group] then allow = false end
 			if allow then
