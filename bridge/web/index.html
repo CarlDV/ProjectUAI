@@ -1,40 +1,328 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>UAI</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project UAI &mdash; Web Bridge</title>
+  <meta name="description" content="Project UAI Autonomous Agent Web Bridge Interface">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="shortcut icon" href="favicon.ico">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<div id="gate" hidden>
-  <form id="gate-form">
-    <h1>UAI</h1>
-    <p>Paste the token the bridge printed when it started.</p>
-    <input id="gate-token" type="password" placeholder="token" autocomplete="off" spellcheck="false">
-    <button type="submit">Connect</button>
-    <p id="gate-error" class="error" hidden></p>
-  </form>
-</div>
+  <!-- Token Gate Login Screen -->
+  <div id="gate" hidden>
+    <form id="gate-form" class="gate-card">
+      <div class="gate-logo">
+        <svg width="44" height="44" viewBox="0 0 512 512" fill="none">
+          <rect width="512" height="512" rx="112" fill="#131312" stroke="#2b2b28" stroke-width="6"/>
+          <g transform="translate(256, 256)">
+            <circle r="46" fill="#E26D46"/>
+            <path d="M-18,-42 L0,-156 L18,-42 Z" fill="#E26D46" />
+            <path d="M-18,42 L0,156 L18,42 Z" fill="#E26D46" />
+            <path d="M-42,-18 L-156,0 L-42,18 Z" fill="#E26D46" />
+            <path d="M42,-18 L156,0 L42,18 Z" fill="#E26D46" />
+            <g transform="rotate(45)">
+              <path d="M-14,-40 L0,-146 L14,-40 Z" fill="#E26D46" />
+              <path d="M-14,40 L0,146 L14,40 Z" fill="#E26D46" />
+              <path d="M-40,-14 L-146,0 L-40,14 Z" fill="#E26D46" />
+              <path d="M40,-14 L146,0 L40,14 Z" fill="#E26D46" />
+            </g>
+          </g>
+        </svg>
+      </div>
+      <div class="gate-header">
+        <h1>PROJECT UAI</h1>
+        <span class="gate-badge">Bridge</span>
+      </div>
+      <p class="gate-desc">Paste the 64-character secret token printed in the bridge console to connect.</p>
 
-<div id="app" hidden>
-  <header>
-    <span id="dot" class="dot" title="game connection"></span>
-    <strong>UAI</strong>
-    <span id="status">connecting</span>
-    <button id="clear" type="button" class="ghost" title="Clear the conversation">clear</button>
-  </header>
+      <div class="gate-input-wrap">
+        <input id="gate-token" type="password" placeholder="Paste session token…" autocomplete="off" spellcheck="false" required>
+      </div>
 
-  <main id="transcript" aria-live="polite"></main>
+      <button type="submit" id="gate-submit" class="gate-btn">Connect Bridge</button>
+      <button type="button" id="gate-demo-btn" class="gate-demo-btn">Or continue in Demo / Simulation mode &rarr;</button>
 
-  <footer>
-    <textarea id="input" rows="1" placeholder="Ask UAI to do something…" autocomplete="off"></textarea>
-    <button id="send" type="button">Send</button>
-    <button id="stop" type="button" class="danger" hidden>Stop</button>
-  </footer>
-</div>
+      <p id="gate-error" class="gate-error" hidden></p>
+    </form>
+  </div>
 
-<script src="app.js"></script>
+  <!-- Main Bridge Application Container -->
+  <div id="app" hidden>
+
+    <!-- Minimalist Top Bar (Anywhere Relay Style) -->
+    <header class="top-nav">
+      <div class="top-nav-left">
+        <button type="button" id="sidebarToggle" class="nav-icon-btn" aria-label="Toggle navigation drawer" title="Menu & Features">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+
+        <div class="brand-status-wrap">
+          <span id="dot" class="status-dot simulation" title="Connection status"></span>
+          <span class="brand-title">PROJECT UAI</span>
+          <span class="brand-subtitle" id="status">bridge</span>
+        </div>
+      </div>
+
+      <div class="top-nav-right">
+        <button type="button" id="toolsDrawerBtn" class="top-action-btn" title="Open In-Game Tools Catalog">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+          </svg>
+          <span>Tools (60+)</span>
+        </button>
+
+        <button type="button" id="telemetryDrawerBtn" class="top-action-btn" title="Telemetry & Accounting">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10"></line>
+            <line x1="12" y1="20" x2="12" y2="4"></line>
+            <line x1="6" y1="20" x2="6" y2="14"></line>
+          </svg>
+          <span id="topTokenCount">0 tok</span>
+        </button>
+
+        <button type="button" id="clear" class="nav-icon-btn" title="Clear conversation transcript">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Chat Scroll Area -->
+    <main id="transcript" class="chat-stream" aria-live="polite">
+      <!-- Welcome Empty State -->
+      <div id="welcomeState" class="empty-state" hidden>
+        <div class="empty-spark-icon">
+          <svg width="32" height="32" viewBox="0 0 512 512" fill="none">
+            <rect width="512" height="512" rx="112" fill="#141416"/>
+            <g transform="translate(256, 256)">
+              <circle r="46" fill="#E26D46"/>
+              <path d="M-18,-42 L0,-156 L18,-42 Z" fill="#E26D46" />
+              <path d="M-18,42 L0,156 L18,42 Z" fill="#E26D46" />
+              <path d="M-42,-18 L-156,0 L-42,18 Z" fill="#E26D46" />
+              <path d="M42,-18 L156,0 L42,18 Z" fill="#E26D46" />
+            </g>
+          </svg>
+        </div>
+        <div class="empty-title">Project UAI Runtime</div>
+        <p class="empty-subtitle">Direct bridge to your Roblox agent. Type a prompt below to inspect DataModel instances, players, remotes or run tools.</p>
+      </div>
+    </main>
+
+    <!-- Floating Scroll-To-Bottom Button -->
+    <button id="scrollToBottom" class="scroll-bottom-pill" type="button" title="Scroll to latest" hidden>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+      <span>Latest</span>
+    </button>
+
+    <!-- Floating Composer Section (Matches Screenshot) -->
+    <div class="composer-container">
+      <div class="composer-box">
+        <!-- Input Textarea -->
+        <textarea id="input" rows="1" placeholder="Type a message" autocomplete="off" spellcheck="false"></textarea>
+
+        <!-- Composer Bottom Bar -->
+        <div class="composer-toolbar">
+          <div class="composer-toolbar-left">
+            <!-- Tools Action Pill -->
+            <button type="button" id="composerToolsPill" class="composer-pill" title="Browse in-game tools">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+              </svg>
+              <span>Tools</span>
+            </button>
+
+            <!-- Model Selector Dropdown Pill with Anchor Wrapper -->
+            <div class="pill-wrapper">
+              <button type="button" id="modelSelectorPill" class="composer-pill model-pill" title="Change active model">
+                <span class="pill-dot"></span>
+                <span id="activeModelLabel">claude 3.7 sonnet</span>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+
+              <!-- Model Selector Popup Menu Anchored Directly Above -->
+              <div id="modelSelectorMenu" class="popup-menu" hidden>
+                <div class="popup-menu-header">Select Model</div>
+                <div class="popup-menu-item active" data-model="Claude 3.7 Sonnet">● Claude 3.7 Sonnet (Default)</div>
+                <div class="popup-menu-item" data-model="Gemini 2.5 Pro">● Gemini 2.5 Pro</div>
+                <div class="popup-menu-item" data-model="GPT-4o">● GPT-4o</div>
+                <div class="popup-menu-item" data-model="DeepSeek V3">● DeepSeek V3</div>
+                <div class="popup-menu-item" data-model="Claude 3.5 Haiku">● Claude 3.5 Haiku</div>
+              </div>
+            </div>
+
+            <!-- Quick Action Prompts Dropdown with Anchor Wrapper -->
+            <div class="pill-wrapper">
+              <button type="button" id="quickPromptsPill" class="composer-pill" title="Quick prompt shortcuts">
+                <span>Quick Prompts</span>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+
+              <!-- Quick Prompts Popup Menu Anchored Directly Above -->
+              <div id="quickPromptsMenu" class="popup-menu" hidden>
+                <div class="popup-menu-header">Quick Actions</div>
+                <div class="popup-menu-item" data-prompt="Inspect Workspace and list top-level models and geometry">🔍 Inspect Workspace</div>
+                <div class="popup-menu-item" data-prompt="List all active players in server and their team affiliation">👥 List Players</div>
+                <div class="popup-menu-item" data-prompt="Check game performance, client FPS, memory usage and ping">⚡ Check Performance</div>
+                <div class="popup-menu-item" data-prompt="Find local character and report current Position and Humanoid state">📍 Character Status</div>
+                <div class="popup-menu-item" data-prompt="Scan for RemoteEvents and RemoteFunctions in ReplicatedStorage">📡 Scan Remotes</div>
+                <div class="popup-menu-item" data-prompt="Dispatch subagent to survey environment for hidden items">🤖 Dispatch Scout Subagent</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="composer-toolbar-right">
+            <button id="stop" type="button" class="composer-stop-btn" title="Stop execution" hidden>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+              </svg>
+            </button>
+
+            <!-- Circular / Rounded Send Button with Arrow (Matches Screenshot) -->
+            <button id="send" type="button" class="composer-send-btn" title="Send message (Enter)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+                <polyline points="12 5 19 12 12 19"></polyline>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer Subtitle Hint -->
+      <div class="composer-subhint">
+        Enter to send, Shift + Enter for a new line
+      </div>
+    </div>
+
+    <!-- Slide-Out Features Drawer (Tools, Subagents, Telemetry, Settings) -->
+    <div id="drawerOverlay" class="drawer-overlay" hidden></div>
+    <aside id="featuresDrawer" class="features-drawer" hidden>
+      <div class="drawer-header">
+        <div class="drawer-tabs">
+          <button type="button" class="drawer-tab active" data-tab="tools">Tools</button>
+          <button type="button" class="drawer-tab" data-tab="subagents">Subagents</button>
+          <button type="button" class="drawer-tab" data-tab="telemetry">Telemetry</button>
+          <button type="button" class="drawer-tab" data-tab="settings">Settings</button>
+        </div>
+        <button type="button" id="drawerCloseBtn" class="nav-icon-btn" aria-label="Close drawer">&times;</button>
+      </div>
+
+      <div class="drawer-body">
+        <!-- Tab 1: Tools Catalog -->
+        <section id="drawerTabTools" class="drawer-tab-content active">
+          <div class="drawer-section-title">
+            <span>In-Game Tool Catalog (60+)</span>
+            <input type="text" id="drawerToolSearch" class="drawer-search-input" placeholder="Search tools…">
+          </div>
+          <div class="drawer-category-pills" id="drawerCategoryPills">
+            <button type="button" class="cat-pill active" data-cat="all">All</button>
+            <button type="button" class="cat-pill" data-cat="instance">Instance</button>
+            <button type="button" class="cat-pill" data-cat="character">Character</button>
+            <button type="button" class="cat-pill" data-cat="players">Players</button>
+            <button type="button" class="cat-pill" data-cat="world">World</button>
+            <button type="button" class="cat-pill" data-cat="remotes">Remotes</button>
+            <button type="button" class="cat-pill" data-cat="script">Script</button>
+            <button type="button" class="cat-pill" data-cat="fs">Filesystem</button>
+            <button type="button" class="cat-pill" data-cat="perf">Performance</button>
+            <button type="button" class="cat-pill" data-cat="agentself">Subagents</button>
+          </div>
+          <div id="drawerToolsList" class="drawer-tools-list"></div>
+        </section>
+
+        <!-- Tab 2: Subagents -->
+        <section id="drawerTabSubagents" class="drawer-tab-content" hidden>
+          <div class="drawer-section-title">
+            <span>Subagent Orchestration</span>
+            <span class="badge-accent" id="activeSubagentsCount">0 active</span>
+          </div>
+          <p class="drawer-subtitle">Traces for recursive child agents dispatched via <code>dispatch_agent</code>.</p>
+          <div id="subagentsList" class="drawer-subagents-list"></div>
+        </section>
+
+        <!-- Tab 3: Telemetry -->
+        <section id="drawerTabTelemetry" class="drawer-tab-content" hidden>
+          <div class="drawer-section-title">
+            <span>Telemetry &amp; Token Accounting</span>
+            <span class="badge-success">Local Client</span>
+          </div>
+          <div class="telemetry-compact-grid">
+            <div class="metric-box">
+              <div class="metric-label">Total Tokens</div>
+              <div class="metric-val" id="statTotalTokens">0</div>
+              <div class="metric-sub"><span id="statPromptTokens">0</span> in / <span id="statCompletionTokens">0</span> out</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-label">Est. Cost</div>
+              <div class="metric-val text-accent" id="statCost">$0.0000</div>
+              <div class="metric-sub">OpenRouter / Provider pricing</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-label">Messages</div>
+              <div class="metric-val" id="statMessages">0</div>
+              <div class="metric-sub">Active session turns</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-label">Tools Run</div>
+              <div class="metric-val" id="statTools">0</div>
+              <div class="metric-sub">In-game executions</div>
+            </div>
+          </div>
+
+          <div class="drawer-card">
+            <div class="drawer-card-title">Diagnostics</div>
+            <div class="diag-item"><span>Mode:</span> <strong id="diagMode">Live Server (Simulation)</strong></div>
+            <div class="diag-item"><span>Transport:</span> <strong>Loopback SSE</strong></div>
+            <div class="diag-item"><span>Session Uptime:</span> <strong id="diagUptime">00:00:00</strong></div>
+          </div>
+        </section>
+
+        <!-- Tab 4: Settings -->
+        <section id="drawerTabSettings" class="drawer-tab-content" hidden>
+          <div class="drawer-section-title"><span>Preferences &amp; Export</span></div>
+          <div class="drawer-card">
+            <div class="drawer-setting-row">
+              <div>
+                <div class="setting-name">Auto-Scroll</div>
+                <div class="setting-desc">Scroll to bottom on new events</div>
+              </div>
+              <input type="checkbox" id="settingAutoScroll" checked>
+            </div>
+            <div class="drawer-setting-row">
+              <div>
+                <div class="setting-name">Export Markdown</div>
+                <div class="setting-desc">Download session transcript (.md)</div>
+              </div>
+              <button type="button" id="btnExportMarkdown" class="btn-sm-action">Export</button>
+            </div>
+            <div class="drawer-setting-row">
+              <div>
+                <div class="setting-name">Export JSON</div>
+                <div class="setting-desc">Raw event log (.json)</div>
+              </div>
+              <button type="button" id="btnExportJson" class="btn-sm-action">Export</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </aside>
+
+  </div>
+
+  <script src="app.js"></script>
 </body>
 </html>
