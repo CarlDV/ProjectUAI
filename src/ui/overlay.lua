@@ -165,6 +165,19 @@ return function(env)
 				math.min(theme.size.statCard, room), math.max(room, theme.size.modalMin)))
 		end
 
+		local dismiss
+		if props.dismissable ~= false then
+			-- Clicking the scrim is the way out. Placed behind the card, which is
+			-- Active and consumes its own clicks.
+			dismiss = Instance.new("TextButton", scrim)
+			dismiss.Name = "Dismiss"
+			dismiss.Text = ""
+			dismiss.BackgroundTransparency = 1
+			dismiss.Size = UDim2.fromScale(1, 1)
+			dismiss.ZIndex = theme.z.modal
+			dismiss.AutoButtonColor = false
+		end
+
 		local cardProps = {
 			name = "Modal",
 			size = sheetMode
@@ -187,6 +200,8 @@ return function(env)
 			cardProps.gap = theme.space.md
 			card = P.column(scrim, cardProps)
 		end
+		-- Active so clicks and touches inside the card never fall through to the dismiss button.
+		card.Active = true
 		P.stroke(card, theme.color.border)
 		local scale = Instance.new("UIScale", card)
 		scale.Scale = theme.scale.enter
@@ -246,6 +261,10 @@ return function(env)
 			if props.onClose then pcall(props.onClose) end
 		end
 
+		if dismiss then
+			dismiss.Activated:Connect(handle.close)
+		end
+
 		if props.dismissable ~= false then
 			local closeButton = P.iconButton(header, {
 				name = "Close",
@@ -255,15 +274,6 @@ return function(env)
 				layoutOrder = 2,
 			})
 			closeButton.instance.LayoutOrder = 2
-			-- Clicking the scrim is the other way out. The card swallows the click,
-			-- so this only fires on the area around it.
-			local dismiss = Instance.new("TextButton", scrim)
-			dismiss.Text = ""
-			dismiss.BackgroundTransparency = 1
-			dismiss.Size = UDim2.fromScale(1, 1)
-			dismiss.ZIndex = theme.z.modal
-			dismiss.AutoButtonColor = false
-			dismiss.Activated:Connect(handle.close)
 		end
 
 		-- The body. In bounded scroll mode, it takes the region between the fixed-height
@@ -449,6 +459,7 @@ return function(env)
 			zIndex = theme.z.modal + 1,
 			clip = true,
 		})
+		card.Active = true
 		P.stroke(card, theme.color.border)
 		local scale = Instance.new("UIScale", card)
 		scale.Scale = theme.scale.enter
