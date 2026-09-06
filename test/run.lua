@@ -4430,6 +4430,47 @@ scenario("a bullet sits on the line it belongs to, and output has room", functio
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+scenario("icons use getcustomasset when the capability is present", function()
+	local harness, handle = bootWith({ provider = false })
+	local icons = handle.env.require("ui/icons")
+	local caps = handle.env.require("runtime/caps")
+	local fsx = handle.env.require("runtime/fsx")
+
+	-- Mock executor customasset and filesystem
+	local writtenFiles = {}
+	caps.fn.customasset = function(path)
+		return "rbxasset://" .. tostring(path)
+	end
+	caps.fn.writefile = function(path, content)
+		writtenFiles[path] = content
+		return true
+	end
+	caps.fn.readfile = function(path)
+		return writtenFiles[path]
+	end
+	caps.fn.isfile = function(path)
+		return writtenFiles[path] ~= nil
+	end
+	caps.fn.makefolder = function() end
+	caps.fn.isfolder = function() return true end
+	caps.fs = true
+
+	local Instance = harness.sandbox.Instance
+	local Color3 = harness.sandbox.Color3
+
+	local testParent = Instance.new("Frame")
+	local frame = icons.draw("gear", testParent, 24, Color3.fromRGB(255, 255, 255))
+	truthy("an icon was created", frame ~= nil)
+	check("named IconGear", frame.Name, "IconGear")
+	local img = frame and frame:FindFirstChild("Image")
+	truthy("an Image child was created", img ~= nil)
+	check("its image is from getcustomasset", img and img.Image, "rbxasset://UAI/icons/settings.png")
+	truthy("the asset was written to disk automatically", writtenFiles["UAI/icons/settings.png"] ~= nil)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 print(("="):rep(72))
 print(string.format("%d scenarios, %d checks passed, %d failed",
 	suite.scenarios, suite.passed, suite.failed))if suite.failed > 0 then

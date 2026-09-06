@@ -9,6 +9,14 @@
 package.path = "test/?.lua;" .. package.path
 local luau = require("luau")
 
+pcall(function()
+	local fh = io.open("tools/pack_icons.lua", "r")
+	if fh then
+		fh:close()
+		dofile("tools/pack_icons.lua")
+	end
+end)
+
 local WINDOWS = package.config:sub(1, 1) == "\\"
 
 local function listFiles(dir)

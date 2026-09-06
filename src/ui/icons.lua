@@ -10,8 +10,77 @@
 -- reads as homemade at any size; a small-caps label does not.
 return function(env)
 	local theme = env.require("ui/theme")
+	local caps = env.require("runtime/caps")
+	local fsx = env.require("runtime/fsx")
+	local assets = env.require("ui/assets")
 
 	local M = {}
+
+	local LUCIDE_MAP = {
+		close = "x",
+		minus = "minus",
+		plus = "plus",
+		check = "check",
+		chevron = "chevron-down",
+		dot = "dot",
+		bars = "menu",
+		stop = "square",
+		send = "send",
+		spark = "sparkle",
+		copy = "copy",
+		trash = "trash",
+		sidebarToggle = "panel-left",
+		search = "search",
+		arrowLeft = "arrow-left",
+		arrowRight = "arrow-right",
+		code = "code",
+		windowMinimize = "minus",
+		windowMaximize = "maximize-2",
+		circleHollow = "circle",
+		enter = "send",
+		folder = "folder",
+		branch = "git-branch",
+		worktree = "git-fork",
+		terminal = "square-terminal",
+		document = "file-text",
+		gear = "settings",
+		sliders = "sliders-horizontal",
+		globe = "globe",
+		book = "book-open",
+		signOut = "log-out",
+		ellipsis = "move-horizontal",
+	}
+
+	local assetCache = {}
+
+	local function getCustomIcon(name)
+		local mapped = LUCIDE_MAP[name]
+		if not mapped then return nil end
+		if assetCache[name] then return assetCache[name] end
+
+		if not (caps.fn.customasset and caps.fs) then
+			return nil
+		end
+
+		local relPath = "icons/" .. mapped .. ".png"
+		local fullPath = fsx.resolve(relPath)
+		if not fullPath then return nil end
+
+		if not fsx.exists(relPath) and assets and assets.icons and assets.icons[mapped] then
+			local decoded = assets.decode(assets.icons[mapped])
+			if decoded then
+				fsx.write(relPath, decoded)
+			end
+		end
+
+		local ok, asset = pcall(caps.fn.customasset, fullPath)
+		if ok and asset and type(asset) == "string" and asset ~= "" then
+			assetCache[name] = asset
+			return asset
+		end
+
+		return nil
+	end
 
 	local function bar(parent, props)
 		local piece = Instance.new("Frame", parent)
@@ -41,33 +110,67 @@ return function(env)
 		return frame
 	end
 
+	local function makeCustom(parent, size, name, asset, colour, rotation)
+		local frame = holder(parent, size, name)
+		if rotation and rotation ~= 0 then
+			frame.Rotation = rotation
+		end
+		local img = Instance.new("ImageLabel", frame)
+		img.Name = "Image"
+		img.BackgroundTransparency = 1
+		img.BorderSizePixel = 0
+		img.AnchorPoint = Vector2.new(0.5, 0.5)
+		img.Position = UDim2.fromScale(0.5, 0.5)
+		img.Size = UDim2.fromScale(1, 1)
+		img.Image = asset
+		img.ImageColor3 = colour
+		return frame
+	end
+
+	local function customOrHolder(parent, size, name, iconKey, colour, rotation)
+		local asset = getCustomIcon(iconKey)
+		if asset then
+			return makeCustom(parent, size, name, asset, colour, rotation), true
+		end
+		local frame = holder(parent, size, name)
+		if rotation and rotation ~= 0 then
+			frame.Rotation = rotation
+		end
+		return frame, false
+	end
+
 	local WEIGHT = 0.115
 
 	function M.close(parent, size, colour)
-		local frame = holder(parent, size, "IconClose")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconClose", "close", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(0.78, WEIGHT), rotation = 45, color = tint })
 		bar(frame, { size = UDim2.fromScale(0.78, WEIGHT), rotation = -45, color = tint })
 		return frame
 	end
 
 	function M.minus(parent, size, colour)
-		local frame = holder(parent, size, "IconMinus")
-		bar(frame, { size = UDim2.fromScale(0.72, WEIGHT), color = colour or theme.color.textSecondary })
+		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconMinus", "minus", tint)
+		if custom then return frame end
+		bar(frame, { size = UDim2.fromScale(0.72, WEIGHT), color = tint })
 		return frame
 	end
 
 	function M.plus(parent, size, colour)
-		local frame = holder(parent, size, "IconPlus")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconPlus", "plus", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(0.72, WEIGHT), color = tint })
 		bar(frame, { size = UDim2.fromScale(WEIGHT, 0.72), color = tint })
 		return frame
 	end
 
 	function M.check(parent, size, colour)
-		local frame = holder(parent, size, "IconCheck")
 		local tint = colour or theme.color.success
+		local frame, custom = customOrHolder(parent, size, "IconCheck", "check", tint)
+		if custom then return frame end
 		bar(frame, {
 			size = UDim2.fromScale(0.34, WEIGHT), rotation = 45, color = tint,
 			position = UDim2.fromScale(0.3, 0.62),
@@ -83,9 +186,11 @@ return function(env)
 	local CHEVRON_ROTATION = { up = 180, down = 0, left = 90, right = -90 }
 
 	function M.chevron(parent, size, colour, direction)
-		local frame = holder(parent, size, "IconChevron")
-		frame.Rotation = CHEVRON_ROTATION[direction or "down"] or 0
+		local rot = CHEVRON_ROTATION[direction or "down"] or 0
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconChevron", "chevron", tint, rot)
+		if custom then return frame end
+		frame.Rotation = rot
 		bar(frame, {
 			size = UDim2.fromScale(0.46, WEIGHT), rotation = 45, color = tint,
 			position = UDim2.fromScale(0.34, 0.44),
@@ -98,14 +203,17 @@ return function(env)
 	end
 
 	function M.dot(parent, size, colour)
-		local frame = holder(parent, size, "IconDot")
-		bar(frame, { size = UDim2.fromScale(0.42, 0.42), color = colour or theme.color.accent })
+		local tint = colour or theme.color.accent
+		local frame, custom = customOrHolder(parent, size, "IconDot", "dot", tint)
+		if custom then return frame end
+		bar(frame, { size = UDim2.fromScale(0.42, 0.42), color = tint })
 		return frame
 	end
 
 	function M.bars(parent, size, colour)
-		local frame = holder(parent, size, "IconBars")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconBars", "bars", tint)
+		if custom then return frame end
 		for index, offset in ipairs({ 0.26, 0.5, 0.74 }) do
 			bar(frame, {
 				size = UDim2.fromScale(0.74, WEIGHT * 0.9), color = tint,
@@ -116,16 +224,19 @@ return function(env)
 	end
 
 	function M.stop(parent, size, colour)
-		local frame = holder(parent, size, "IconStop")
-		local square = bar(frame, { size = UDim2.fromScale(0.5, 0.5), color = colour or theme.color.text, radius = 0 })
+		local tint = colour or theme.color.text
+		local frame, custom = customOrHolder(parent, size, "IconStop", "stop", tint)
+		if custom then return frame end
+		local square = bar(frame, { size = UDim2.fromScale(0.5, 0.5), color = tint, radius = 0 })
 		Instance.new("UICorner", square).CornerRadius = UDim.new(0, theme.radius.sm)
 		return frame
 	end
 
 	-- A send affordance: the return arrow ↵ matching Claude Code Desktop.
 	function M.send(parent, size, colour)
-		local frame = holder(parent, size, "IconSend")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconSend", "send", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(WEIGHT, 0.34), color = tint, position = UDim2.fromScale(0.68, 0.44) })
 		bar(frame, { size = UDim2.fromScale(0.42, WEIGHT), color = tint, position = UDim2.fromScale(0.5, 0.6) })
 		bar(frame, { size = UDim2.fromScale(0.22, WEIGHT), rotation = 45, color = tint, position = UDim2.fromScale(0.38, 0.52) })
@@ -138,8 +249,9 @@ return function(env)
 	-- here that carries brand rather than function -- so it gets the accent by
 	-- default rather than the secondary text tone every other icon uses.
 	function M.spark(parent, size, colour)
-		local frame = holder(parent, size, "IconSpark")
 		local tint = colour or theme.color.accent
+		local frame, custom = customOrHolder(parent, size, "IconSpark", "spark", tint)
+		if custom then return frame end
 		for _, rotation in ipairs({ 0, 45, 90, 135 }) do
 			bar(frame, { size = UDim2.fromScale(0.82, WEIGHT), rotation = rotation, color = tint })
 		end
@@ -147,8 +259,9 @@ return function(env)
 	end
 
 	function M.copy(parent, size, colour)
-		local frame = holder(parent, size, "IconCopy")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconCopy", "copy", tint)
+		if custom then return frame end
 		for index, spec in ipairs({
 			{ position = UDim2.fromScale(0.38, 0.38), size = UDim2.fromScale(0.5, 0.5) },
 			{ position = UDim2.fromScale(0.6, 0.6), size = UDim2.fromScale(0.5, 0.5) },
@@ -169,8 +282,9 @@ return function(env)
 	end
 
 	function M.trash(parent, size, colour)
-		local frame = holder(parent, size, "IconTrash")
 		local tint = colour or theme.color.danger
+		local frame, custom = customOrHolder(parent, size, "IconTrash", "trash", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(0.66, WEIGHT), color = tint, position = UDim2.fromScale(0.5, 0.26) })
 		local body = Instance.new("Frame", frame)
 		body.BackgroundTransparency = 1
@@ -186,8 +300,9 @@ return function(env)
 	end
 
 	function M.sidebarToggle(parent, size, colour)
-		local frame = holder(parent, size, "IconSidebarToggle")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconSidebarToggle", "sidebarToggle", tint)
+		if custom then return frame end
 		local box = Instance.new("Frame", frame)
 		box.BackgroundTransparency = 1
 		box.BorderSizePixel = 0
@@ -208,8 +323,9 @@ return function(env)
 	end
 
 	function M.search(parent, size, colour)
-		local frame = holder(parent, size, "IconSearch")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconSearch", "search", tint)
+		if custom then return frame end
 		local glass = Instance.new("Frame", frame)
 		glass.BackgroundTransparency = 1
 		glass.BorderSizePixel = 0
@@ -230,8 +346,9 @@ return function(env)
 	end
 
 	function M.arrowLeft(parent, size, colour)
-		local frame = holder(parent, size, "IconArrowLeft")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconArrowLeft", "arrowLeft", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(0.56, WEIGHT), color = tint, position = UDim2.fromScale(0.52, 0.5) })
 		bar(frame, { size = UDim2.fromScale(0.32, WEIGHT), rotation = 45, color = tint, position = UDim2.fromScale(0.35, 0.38) })
 		bar(frame, { size = UDim2.fromScale(0.32, WEIGHT), rotation = -45, color = tint, position = UDim2.fromScale(0.35, 0.62) })
@@ -239,8 +356,9 @@ return function(env)
 	end
 
 	function M.arrowRight(parent, size, colour)
-		local frame = holder(parent, size, "IconArrowRight")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconArrowRight", "arrowRight", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(0.56, WEIGHT), color = tint, position = UDim2.fromScale(0.48, 0.5) })
 		bar(frame, { size = UDim2.fromScale(0.32, WEIGHT), rotation = -45, color = tint, position = UDim2.fromScale(0.65, 0.38) })
 		bar(frame, { size = UDim2.fromScale(0.32, WEIGHT), rotation = 45, color = tint, position = UDim2.fromScale(0.65, 0.62) })
@@ -248,8 +366,9 @@ return function(env)
 	end
 
 	function M.code(parent, size, colour)
-		local frame = holder(parent, size, "IconCode")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconCode", "code", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(0.28, WEIGHT * 0.85), rotation = 55, color = tint, position = UDim2.fromScale(0.32, 0.38) })
 		bar(frame, { size = UDim2.fromScale(0.28, WEIGHT * 0.85), rotation = -55, color = tint, position = UDim2.fromScale(0.32, 0.62) })
 		bar(frame, { size = UDim2.fromScale(0.28, WEIGHT * 0.85), rotation = -55, color = tint, position = UDim2.fromScale(0.68, 0.38) })
@@ -263,8 +382,9 @@ return function(env)
 	end
 
 	function M.windowMaximize(parent, size, colour)
-		local frame = holder(parent, size, "IconWindowMaximize")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconWindowMaximize", "windowMaximize", tint)
+		if custom then return frame end
 		local box = Instance.new("Frame", frame)
 		box.BackgroundTransparency = 1
 		box.BorderSizePixel = 0
@@ -279,8 +399,9 @@ return function(env)
 	end
 
 	function M.circleHollow(parent, size, colour)
-		local frame = holder(parent, size, "IconCircleHollow")
 		local tint = colour or theme.color.textTertiary
+		local frame, custom = customOrHolder(parent, size, "IconCircleHollow", "circleHollow", tint)
+		if custom then return frame end
 		local circle = Instance.new("Frame", frame)
 		circle.BackgroundTransparency = 1
 		circle.BorderSizePixel = 0
@@ -462,8 +583,9 @@ return function(env)
 	end
 
 	function M.enter(parent, size, colour)
-		local frame = holder(parent, size, "IconEnter")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconEnter", "enter", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(WEIGHT, 0.34), color = tint, position = UDim2.fromScale(0.68, 0.44) })
 		bar(frame, { size = UDim2.fromScale(0.42, WEIGHT), color = tint, position = UDim2.fromScale(0.5, 0.6) })
 		bar(frame, { size = UDim2.fromScale(0.22, WEIGHT), rotation = 45, color = tint, position = UDim2.fromScale(0.38, 0.52) })
@@ -472,8 +594,9 @@ return function(env)
 	end
 
 	function M.folder(parent, size, colour)
-		local frame = holder(parent, size, "IconFolder")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconFolder", "folder", tint)
+		if custom then return frame end
 		local body = Instance.new("Frame", frame)
 		body.BackgroundTransparency = 1
 		body.BorderSizePixel = 0
@@ -489,8 +612,9 @@ return function(env)
 	end
 
 	function M.branch(parent, size, colour)
-		local frame = holder(parent, size, "IconBranch")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconBranch", "branch", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(WEIGHT, 0.66), color = tint, position = UDim2.fromScale(0.34, 0.5) })
 		bar(frame, { size = UDim2.fromScale(0.32, WEIGHT), rotation = -40, color = tint, position = UDim2.fromScale(0.5, 0.44) })
 		bar(frame, { size = UDim2.fromScale(WEIGHT, 0.32), color = tint, position = UDim2.fromScale(0.66, 0.32) })
@@ -498,8 +622,9 @@ return function(env)
 	end
 
 	function M.worktree(parent, size, colour)
-		local frame = holder(parent, size, "IconWorktree")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconWorktree", "worktree", tint)
+		if custom then return frame end
 		local box = Instance.new("Frame", frame)
 		box.BackgroundTransparency = 1
 		box.BorderSizePixel = 0
@@ -514,8 +639,9 @@ return function(env)
 	end
 
 	function M.terminal(parent, size, colour)
-		local frame = holder(parent, size, "IconTerminal")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconTerminal", "terminal", tint)
+		if custom then return frame end
 		local box = Instance.new("Frame", frame)
 		box.BackgroundTransparency = 1
 		box.BorderSizePixel = 0
@@ -533,8 +659,9 @@ return function(env)
 	end
 
 	function M.document(parent, size, colour)
-		local frame = holder(parent, size, "IconDocument")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconDocument", "document", tint)
+		if custom then return frame end
 		local box = Instance.new("Frame", frame)
 		box.BackgroundTransparency = 1
 		box.BorderSizePixel = 0
@@ -551,8 +678,9 @@ return function(env)
 	end
 
 	function M.gear(parent, size, colour)
-		local frame = holder(parent, size, "IconGear")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconGear", "gear", tint)
+		if custom then return frame end
 		local outer = Instance.new("Frame", frame)
 		outer.BackgroundTransparency = 1
 		outer.BorderSizePixel = 0
@@ -570,8 +698,9 @@ return function(env)
 	end
 
 	function M.sliders(parent, size, colour)
-		local frame = holder(parent, size, "IconSliders")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconSliders", "sliders", tint)
+		if custom then return frame end
 		for index, pos in ipairs({ 0.28, 0.5, 0.72 }) do
 			bar(frame, { size = UDim2.fromScale(WEIGHT * 0.8, 0.68), color = tint, position = UDim2.fromScale(pos, 0.5) })
 			local knobY = (index == 1) and 0.38 or ((index == 2) and 0.62 or 0.44)
@@ -581,8 +710,9 @@ return function(env)
 	end
 
 	function M.globe(parent, size, colour)
-		local frame = holder(parent, size, "IconGlobe")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconGlobe", "globe", tint)
+		if custom then return frame end
 		local circle = Instance.new("Frame", frame)
 		circle.BackgroundTransparency = 1
 		circle.BorderSizePixel = 0
@@ -599,8 +729,9 @@ return function(env)
 	end
 
 	function M.book(parent, size, colour)
-		local frame = holder(parent, size, "IconBook")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconBook", "book", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(0.3, 0.54), color = tint, position = UDim2.fromScale(0.34, 0.5) })
 		bar(frame, { size = UDim2.fromScale(0.3, 0.54), color = tint, position = UDim2.fromScale(0.66, 0.5) })
 		bar(frame, { size = UDim2.fromScale(WEIGHT * 0.8, 0.58), color = theme.color.canvas, position = UDim2.fromScale(0.5, 0.5), zIndex = 3 })
@@ -608,8 +739,9 @@ return function(env)
 	end
 
 	function M.signOut(parent, size, colour)
-		local frame = holder(parent, size, "IconSignOut")
 		local tint = colour or theme.color.textSecondary
+		local frame, custom = customOrHolder(parent, size, "IconSignOut", "signOut", tint)
+		if custom then return frame end
 		bar(frame, { size = UDim2.fromScale(0.48, WEIGHT), color = tint, position = UDim2.fromScale(0.44, 0.5) })
 		bar(frame, { size = UDim2.fromScale(0.24, WEIGHT), rotation = -45, color = tint, position = UDim2.fromScale(0.58, 0.38) })
 		bar(frame, { size = UDim2.fromScale(0.24, WEIGHT), rotation = 45, color = tint, position = UDim2.fromScale(0.58, 0.62) })
@@ -618,8 +750,9 @@ return function(env)
 	end
 
 	function M.ellipsis(parent, size, colour)
-		local frame = holder(parent, size, "IconEllipsis")
 		local tint = colour or theme.color.textTertiary
+		local frame, custom = customOrHolder(parent, size, "IconEllipsis", "ellipsis", tint)
+		if custom then return frame end
 		for index, offset in ipairs({ 0.24, 0.5, 0.76 }) do
 			bar(frame, {
 				size = UDim2.fromScale(0.16, 0.16), color = tint,
