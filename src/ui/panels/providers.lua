@@ -128,6 +128,11 @@ return function(env)
 			title = adding and "Add a provider" or ("Connection for " .. tostring(editing.label)),
 			description = "Any endpoint that speaks /v1/chat/completions, or Anthropic's Messages API.",
 			width = theme.size.modalWide,
+			-- Six labelled rows, two segmented pickers and a footer do not fit on a phone,
+			-- and an unbounded modal is centred -- so what did not fit went off the top and
+			-- the bottom at once, taking the title and the Save button with it. Bounded and
+			-- scrolled, the header and the footer stay put and the form moves.
+			scroll = true,
 		})
 		if not modal then return end
 

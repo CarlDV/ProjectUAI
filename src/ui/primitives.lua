@@ -605,9 +605,16 @@ return function(env)
 		local role = theme.textRole(props.role or "body")
 		local multiline = props.multiline == true
 		local bare = props.bare == true
+		-- `height` is honoured on a single line too, not only when multiline.
+		--
+		-- It used to be ignored there, so a caller that wanted a composer rather than a
+		-- search box got the 32px control token and had no way to say otherwise -- which
+		-- is why the prompt field and the search field were the same height even though
+		-- one of them is the primary surface of the app. The platform floor still
+		-- applies: it is a minimum, not the value.
 		local height = multiline
 			and (props.height or theme.size.control * 2)
-			or math.max(theme.size.control, responsive.minTarget())
+			or math.max(props.height or theme.size.control, responsive.minTarget())
 
 		local shell = P.frame(parent, {
 			name = props.name or "Field",

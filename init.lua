@@ -67,6 +67,16 @@ env.plr = env.players and env.players.LocalPlayer or nil
 -- somewhere far away from the cause.
 local loaded, loading = {}, {}
 
+-- How many modules this artifact carries, counted rather than written down: the
+-- bundler decides it, and a literal here would go stale on the next build. It is the
+-- only denominator available to the boot indicator, and it is deliberately *not*
+-- treated as a target -- a normal boot loads about four fifths of it and never
+-- reaches the rest, because a panel's module is loaded the first time that panel is
+-- opened.
+env.moduleTotal = 0
+for _ in pairs(MODULES) do env.moduleTotal = env.moduleTotal + 1 end
+env.moduleCount = 0
+
 function env.require(id)
 	local cached = loaded[id]
 	if cached ~= nil then return cached end
@@ -87,6 +97,12 @@ function env.require(id)
 		error("[uai] module '" .. tostring(id) .. "' returned nothing", 2)
 	end
 	loaded[id] = result
+	env.moduleCount = env.moduleCount + 1
+	-- The one hook in the loader, and it exists for the boot indicator: the count is
+	-- real work finishing, which is the only progress this client can honestly report
+	-- before the interface is up. pcall because a watcher must never be able to stop a
+	-- module from loading.
+	if env.onModuleLoaded then pcall(env.onModuleLoaded, id, env.moduleCount, env.moduleTotal) end
 	return result
 end
 
@@ -103,6 +119,19 @@ local function start()
 	config.load()
 	log.mirror = config.get("logs.mirror", false) == true
 	log.info("boot", string.format("UAI %s starting -- %s", VERSION, caps.summary()))
+
+	-- The boot indicator, mounted before the work it reports rather than after.
+	--
+	-- After config, because the theme it draws with is built from stored values, and
+	-- before everything else: the tool registry, the session restore, the stats seed
+	-- and the interface itself are the seconds this is covering. It is only a pcall
+	-- deep because a client that cannot draw it must still boot -- a progress bar is
+	-- not worth failing a start over.
+	local boot
+	pcall(function()
+		boot = env.require("ui/boot").show()
+		env.onModuleLoaded = function(id, count, total) boot.step(id, count, total) end
+	end)
 
 	-- Asked for early and answered in the background: the place name is what the
 	-- conversation list groups by, and it is a web call.
@@ -122,6 +151,14 @@ local function start()
 	local app = env.require("ui/app")
 	app.mount()
 	app.show(config.get("ui.panel", "chat"))
+
+	-- The interface is up, so the indicator has nothing left to report. The count is
+	-- what it closes on: the rest of the artifact is the panels nobody has opened yet.
+	env.onModuleLoaded = nil
+	if boot then
+		pcall(boot.done, string.format("%d of %d modules loaded -- the rest load with the panel that needs them",
+			env.moduleCount, env.moduleTotal))
+	end
 
 	-- After the interface, because the bridge attaches to whichever thread is
 	-- active and the interface is what establishes that on a fresh install. A
@@ -198,6 +235,13 @@ if not ok then
 	warn("[uai] failed to start: " .. tostring(result))
 	-- A visible failure beats a silent one: the log module may not even have
 	-- loaded, so this goes to the console directly.
+	--
+	-- And on screen too, where the indicator already is: a boot that dies at module
+	-- forty leaves a bar stopped at forty and no explanation, which is worse than
+	-- never having drawn one. Both the flag and the notice are cleared here, so a
+	-- half-loaded client leaves nothing of itself behind.
+	env.onModuleLoaded = nil
+	pcall(function() env.require("ui/boot").fail(result) end)
 	return nil
 end
 return result

@@ -122,6 +122,22 @@ return function(env)
 
 	-- Returns a handle with `content` (a column to fill) and `close`. The caller
 	-- builds the body; this owns the scrim, the card, the animation and dismissal.
+	--
+	-- `scroll = true` is for a modal holding a form rather than a sentence.
+	--
+	-- An auto-height card has no ceiling: it is as tall as whatever is put in it, and
+	-- since it is centred, anything past the viewport goes off *both* edges at once. The
+	-- provider editor is seven labelled rows and a footer, so on a phone in landscape --
+	-- 720 tall, which is an ordinary Roblox client -- its title and preset row were cut
+	-- off above the screen and its key row and Save button below it, with no way to reach
+	-- either: nothing scrolled, because nothing knew it was too big. In this mode the
+	-- card takes a bounded height instead, the header and footer stay put, and the body
+	-- between them scrolls.
+	--
+	-- Bounded rather than measured. Roblox will report a UIListLayout's content size, but
+	-- only after a frame, and driving a card's height off it means the modal resizes
+	-- under the pointer as rows are built -- so the height here is a cap the caller
+	-- states, clamped to what the screen has.
 	function M.modal(props)
 		props = props or {}
 		if not ensure() then return nil end
@@ -137,12 +153,28 @@ return function(env)
 
 		local sheetMode = responsive.mode == "sheet"
 		local widest = math.max(responsive.viewport.X - theme.space.xxl * 2, theme.size.modalMin)
+		local scrolls = props.scroll == true
+		-- Everything the screen has, less the margin a floating card keeps and whatever
+		-- the platform is covering: the top inset, and the on-screen keyboard, which is
+		-- the case that matters most here because a form is a thing you type into.
+		local room = responsive.viewport.Y - responsive.inset.Y
+			- responsive.bottomObstruction() - theme.space.lg * 2
+		local height = 0
+		if scrolls then
+			height = math.floor(util.clamp(props.height or theme.size.dialogTall,
+				math.min(theme.size.statCard, room), math.max(room, theme.size.modalMin)))
+		end
+
 		local card = P.column(scrim, {
 			name = "Modal",
 			size = sheetMode
-				and UDim2.new(1, -theme.space.md * 2, 0, 0)
-				or UDim2.new(0, util.clamp(props.width or theme.size.modal, theme.size.modalMin, widest), 0, 0),
-			auto = "Y",
+				and UDim2.new(1, -theme.space.md * 2, 0, height)
+				or UDim2.new(0, util.clamp(props.width or theme.size.modal, theme.size.modalMin, widest),
+					0, height),
+			-- Auto only when nothing bounds it. A card with both a stated height and
+			-- AutomaticSize.Y grows past the height, which is the bug this mode exists to
+			-- fix wearing a different hat.
+			auto = (not scrolls) and "Y" or nil,
 			anchor = sheetMode and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5),
 			position = sheetMode and UDim2.new(0.5, 0, 1, -theme.space.lg) or UDim2.fromScale(0.5, 0.5),
 			bg = theme.color.surfaceRaised,
@@ -223,13 +255,43 @@ return function(env)
 			dismiss.Activated:Connect(handle.close)
 		end
 
-		handle.content = P.column(card, {
-			name = "Body",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			gap = theme.space.sm,
-			layoutOrder = 2,
-		})
+		-- The body. In the bounded mode it is a scroll region that takes whatever the
+		-- header and footer leave -- flex, not a hand-summed remainder, because the header
+		-- is two wrapped labels whose height nobody here knows.
+		--
+		-- Callers get a column to fill either way, so nothing outside this function has to
+		-- know which mode it is in. In scroll mode that column lives inside the scroll and
+		-- auto-sizes as before; the difference is entirely in what bounds it.
+		if scrolls then
+			local holder = P.frame(card, {
+				name = "BodyHolder",
+				size = UDim2.new(1, 0, 0, 0),
+				flex = "Fill",
+				layoutOrder = 2,
+			})
+			handle.scroll = P.scroll(holder, {
+				name = "BodyScroll",
+				size = UDim2.fromScale(1, 1),
+				gap = theme.space.sm,
+				-- Room for the scrollbar, so the last few pixels of a field are not under it.
+				padding = { right = theme.space.sm },
+			})
+			handle.content = P.column(handle.scroll.instance, {
+				name = "Body",
+				size = UDim2.new(1, 0, 0, 0),
+				auto = "Y",
+				gap = theme.space.sm,
+				layoutOrder = 1,
+			})
+		else
+			handle.content = P.column(card, {
+				name = "Body",
+				size = UDim2.new(1, 0, 0, 0),
+				auto = "Y",
+				gap = theme.space.sm,
+				layoutOrder = 2,
+			})
+		end
 
 		handle.footer = P.row(card, {
 			name = "Footer",

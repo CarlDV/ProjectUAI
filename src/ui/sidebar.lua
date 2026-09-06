@@ -262,6 +262,25 @@ return function(env)
 			padding = { y = theme.space.xxs },
 		})
 
+		-- Which place groups are folded, by placeId.
+		--
+		-- Stored rather than kept in a local: the list is rebuilt from scratch on every
+		-- new thread, rename, delete, place change and busy transition, so a local would
+		-- unfold everything several times a minute. Quiet writes, because this is a
+		-- record of what the user folded and not a token anything derives from -- a noisy
+		-- one would reach the theme's subscription and rebuild the whole interface.
+		local function collapsedKey(placeId)
+			return "ui.placeCollapsed." .. tostring(placeId)
+		end
+
+		local function isCollapsed(placeId)
+			return config.get(collapsedKey(placeId), false) == true
+		end
+
+		local function setCollapsed(placeId, value)
+			config.set(collapsedKey(placeId), value == true, { quiet = true })
+		end
+
 		local function sessionMenu(session, target)
 			overlay.menu({
 				target = target,
@@ -319,16 +338,33 @@ return function(env)
 					layoutOrder = order,
 				})
 
-				local head = P.row(column, {
+				-- The group header is the fold control, so the whole line answers a click
+				-- rather than a chevron nobody can hit. The count rides on it because a
+				-- folded group has to say how much it is hiding -- otherwise folding one
+				-- loses the only sign those conversations exist.
+				local collapsed = isCollapsed(group.placeId)
+				local head = P.rowButton(column, {
 					name = "PlaceHead",
-					size = UDim2.new(1, 0, 0, math.max(theme.size.rowTight, responsive.minTarget())),
+					height = theme.size.rowTight,
 					-- The same inset as the rows it heads. It was xxs against their xs, so
 					-- a group's name sat two pixels left of every conversation under it.
 					padding = { x = ROW_INSET },
 					gap = theme.space.xxs,
 					layoutOrder = 1,
+					onClick = function()
+						setCollapsed(group.placeId, not isCollapsed(group.placeId))
+						handle.renderHistory()
+					end,
 				})
-				P.text(head, {
+				-- Points at what pressing it will do, like the More row above.
+				local caret = P.frame(head.row, {
+					name = "PlaceCaret",
+					size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+					layoutOrder = 1,
+				})
+				icons.chevron(caret, theme.size.icon, theme.color.textTertiary,
+					collapsed and "right" or "down")
+				P.text(head.row, {
 					name = "PlaceName",
 					text = group.label,
 					role = "overline",
@@ -336,57 +372,108 @@ return function(env)
 					size = UDim2.new(0, 0, 0, theme.text.overline.height),
 					flex = "Fill",
 					truncate = true,
-					layoutOrder = 1,
+					layoutOrder = 2,
 				})
+				-- How many are in there, and how many of those are working. The second
+				-- number is the reason a fold is safe to leave shut: a group with a turn
+				-- running in it still says so from the header.
+				local busyCount = 0
+				for _, session in ipairs(group.sessions) do
+					if session.busy then busyCount = busyCount + 1 end
+				end
+				if busyCount > 0 then
+					local slot = P.frame(head.row, {
+						name = "PlaceBusy",
+						size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+						layoutOrder = 3,
+					})
+					C.spinner(slot, {
+						diameter = theme.size.icon,
+						anchor = Vector2.new(0.5, 0.5),
+						position = UDim2.fromScale(0.5, 0.5),
+					})
+				end
+				local countLabel = P.text(head.row, {
+					name = "PlaceCount",
+					text = tostring(#group.sessions),
+					role = "caption",
+					color = theme.color.textTertiary,
+					align = "Right",
+					auto = "X",
+					layoutOrder = 4,
+				})
+				countLabel.Size = UDim2.fromOffset(0, theme.text.caption.height)
 				-- The place the client is in now is the only one a new conversation can
 				-- be started in, so it is the only one that offers.
 				if group.current then
-					local plus = P.iconButton(head, {
+					local plus = P.iconButton(head.row, {
 						name = "NewInPlace",
 						icon = "plus",
 						diameter = theme.size.rowTight,
-						layoutOrder = 2,
+						layoutOrder = 5,
 						onClick = function()
 							host.openSession(sessions.newThread().id)
 						end,
 					})
-					plus.instance.LayoutOrder = 2
+					plus.instance.LayoutOrder = 5
 				end
+
+				-- The rows go in a holder of their own so folding hides one frame rather
+				-- than each row: a hidden child still takes its slot in a list layout only
+				-- if the layout can see it, and hiding thirty of them one at a time is
+				-- thirty writes where one will do.
+				local body = P.column(column, {
+					name = "PlaceSessions",
+					size = UDim2.new(1, 0, 0, 0),
+					auto = "Y",
+					gap = theme.space.hair,
+					layoutOrder = 2,
+					visible = not collapsed,
+				})
 
 				for index, session in ipairs(group.sessions) do
 					local selected = session.id == active.id
-					local row = P.rowButton(column, {
+					local row = P.rowButton(body, {
 						name = "SessionRow",
 						height = theme.size.rowSmall,
 						padding = { x = ROW_INSET },
 						selected = selected,
-						layoutOrder = index + 1,
+						layoutOrder = index,
 						onClick = function()
 							host.openSession(session.id)
 						end,
 					})
-					-- A conversation you are not looking at can still be working: leaving
-					-- one does not stop it. The spinner is what says so, and it is the
+					-- The leading slot is always there and usually empty.
+					--
+					-- It used to hold a hollow circle per row and a filled dot on the active
+					-- one: a column of bullets down a 240px list whose only job was to say
+					-- which row was selected, which the row's own highlight already says and
+					-- says better. The slot itself stays, at the icon's width, because it is
+					-- what puts every title on the same left edge as the group name above it
+					-- -- and because a spinner has to be able to appear in a row without
+					-- moving that row's text.
+					--
+					-- The spinner is the one thing here that survived: a conversation you are
+					-- not looking at can still be working, leaving one does not stop it, and
+					-- that is the one fact a row cannot state any other way. It is also the
 					-- reason the list refreshes on every busy transition.
+					local slot = P.frame(row.row, {
+						name = "IconSlot",
+						size = UDim2.fromOffset(ROW_ICON, ROW_ICON),
+						layoutOrder = 1,
+					})
 					if session.busy then
-						local slot = P.frame(row.row, {
-							name = "IconSlot",
-							size = UDim2.fromOffset(ROW_ICON, ROW_ICON),
-							layoutOrder = 1,
-						})
 						C.spinner(slot, {
 							diameter = ROW_ICON,
 							anchor = Vector2.new(0.5, 0.5),
 							position = UDim2.fromScale(0.5, 0.5),
 						})
-					else
-						row.icon(selected and "dot" or "circleHollow", 1,
-							selected and theme.color.accent or theme.color.textTertiary, ROW_ICON)
 					end
 					local titleText = session.title
 					if session.ephemeral then titleText = titleText .. "  (not saved)" end
 					row.label(titleText, 2,
-						selected and theme.color.text or theme.color.textSecondary)
+						selected and theme.color.text or theme.color.textSecondary,
+						selected and "label" or nil)
 					local menuButton = P.iconButton(row.row, {
 						name = "SessionMenu",
 						icon = "ellipsis",

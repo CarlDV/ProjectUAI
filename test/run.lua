@@ -4471,6 +4471,338 @@ scenario("icons use getcustomasset when the capability is present", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+-- 46. The sidebar's groups ------------------------------------------------
+
+-- The list is grouped by place and the groups now fold. Two things are asserted here
+-- that nothing else would catch: the fold survives the rebuild the list does on every
+-- session change, and the header still says how much it is hiding -- a fold that loses
+-- the count is a fold that loses the only sign those conversations exist.
+scenario("a place group folds and says what it is hiding", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Noted." }) }
+		end,
+	})
+
+	handle.sessions.current().send("the first thing")
+	harness.settle(8)
+	handle.app.openSession(handle.sessions.newThread().id)
+	handle.sessions.current().send("the second thing")
+	harness.settle(8)
+
+	local sidebar = harness.byName("Sidebar")
+	local head = harness.byName("PlaceHead", sidebar)
+	truthy("the group has a header", head ~= nil, harness.dump(sidebar))
+	local count = harness.byName("PlaceCount", head)
+	check("counting what is in it", count and count.Text, "2")
+	truthy("with a caret saying it folds", harness.byName("PlaceCaret", head) ~= nil)
+
+	local body = harness.byName("PlaceSessions", sidebar)
+	truthy("the rows are in a holder of their own", body ~= nil)
+	check("open to start with", body.Visible, true)
+	check("holding both conversations", #harness.allByName("SessionRow", body), 2)
+
+	harness.click(head)
+	harness.settle(1)
+	local folded = harness.byName("PlaceSessions", harness.byName("Sidebar"))
+	check("clicking the header folds it", folded.Visible, false)
+	-- The count is what a folded group has instead of its rows.
+	contains("and the header still reports the count",
+		harness.textOf(harness.byName("PlaceHead", harness.byName("Sidebar"))), "2")
+
+	-- The list rebuilds from scratch on any session change, so the fold has to be
+	-- stored rather than held in a local -- otherwise it springs open several times a
+	-- minute on its own.
+	handle.sessions.current().rename("Second thing")
+	harness.settle(2)
+	check("a rename does not unfold it",
+		harness.byName("PlaceSessions", harness.byName("Sidebar")).Visible, false)
+	harness.click(harness.byName("PlaceHead", harness.byName("Sidebar")))
+	harness.settle(1)
+	check("and the header opens it again",
+		harness.byName("PlaceSessions", harness.byName("Sidebar")).Visible, true)
+
+	-- A row's leading glyph is gone: the circle-and-dot pair said which row was
+	-- selected, which the row's own highlight says better. The slot stays so every
+	-- title shares one left edge with the group name above it, and so a spinner can
+	-- appear without moving the text.
+	local row = harness.allByName("SessionRow", harness.byName("Sidebar"))[1]
+	truthy("a session row still has its leading slot", harness.byName("IconSlot", row) ~= nil)
+	check("and nothing is drawn in it",
+		#harness.byName("IconSlot", row):GetChildren(), 0)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 47. The boot indicator --------------------------------------------------
+
+-- Running the loader was silent: a megabyte fetched, parsed, then sixty modules loaded
+-- and a window mounted, which on a slow client is seconds of nothing and looks exactly
+-- like a script that failed. The count is the one honest thing there is to report
+-- before the interface exists, and it comes from the loader itself.
+scenario("the boot indicator reports real module progress", function()
+	local harness = envMock.new({})
+	harness.http.handler = function() return { StatusCode = 404, Body = "{}" } end
+	-- Read before settling: the notice is on screen during the boot and removes itself
+	-- shortly after, so this is the only moment it exists.
+	local handle, err = harness.boot()
+	truthy("the client booted", handle ~= nil, tostring(err))
+
+	local pill = nil
+	for _, child in ipairs(harness.coreGui:GetChildren()) do
+		if child.Name == "UAI_Boot" then pill = child end
+	end
+	truthy("a boot notice was mounted", pill ~= nil, harness.dump(harness.coreGui))
+	-- Above the interface's own DisplayOrder, or a slow mount draws over the thing
+	-- reporting it. Against `app.screen` rather than `harness.screen()`: that helper
+	-- returns the first ScreenGui under CoreGui, which during a boot is this pill.
+	local appScreen = handle.app.screen
+	truthy("above the interface it is reporting on",
+		pill.DisplayOrder > appScreen.DisplayOrder,
+		tostring(pill.DisplayOrder) .. " vs " .. tostring(appScreen.DisplayOrder))
+
+	local text = harness.textOf(pill)
+	contains("naming the client", text, "UAI")
+	-- A real fraction of a real total. The denominator is every module in the artifact
+	-- and the numerator is how many actually loaded, so the two must differ: a boot
+	-- deliberately does not reach the panels nobody has opened.
+	truthy("with a count of modules against the artifact's total",
+		text:find("%d+ / %d+") ~= nil, text)
+	truthy("the loader counted them", handle.env.moduleCount > 0)
+	truthy("out of the artifact's own total", handle.env.moduleTotal >= handle.env.moduleCount)
+	truthy("and the total is not a guess -- it is every module in the bundle",
+		handle.env.moduleTotal > 60, tostring(handle.env.moduleTotal))
+	truthy("a boot does not load all of them, and the notice says so",
+		handle.env.moduleCount < handle.env.moduleTotal,
+		tostring(handle.env.moduleCount) .. " of " .. tostring(handle.env.moduleTotal))
+	contains("explaining what the rest are waiting for", text, "load with the panel")
+
+	local fill = harness.byName("BootFill", pill)
+	truthy("the bar is filled to the fraction that loaded", fill ~= nil)
+	truthy("which is a real share, not full",
+		fill.Size.X.Scale > 0.5 and fill.Size.X.Scale < 1, tostring(fill.Size.X.Scale))
+
+	-- And it leaves nothing behind.
+	harness.settle(4)
+	local remaining = nil
+	for _, child in ipairs(harness.coreGui:GetChildren()) do
+		if child.Name == "UAI_Boot" then remaining = child end
+	end
+	truthy("the notice removes itself once the interface is up", remaining == nil)
+	truthy("and the loader hook is released", handle.env.onModuleLoaded == nil)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+	check("nothing was warned", #harness.console.warnings, 0,
+		table.concat(harness.console.warnings, "\n"))
+end)
+
+-- 48. The model picker ----------------------------------------------------
+
+-- It was an anchored menu with four unrelated kinds of row stacked in it: every
+-- provider, then every model on the active one, then a fetch, then five effort levels.
+-- Twenty-odd rows of one visual weight with no headings, which on a gateway serving
+-- eighty ids meant scrolling a 320px menu past the thing you came for.
+scenario("the model picker separates endpoint, model and effort", function()
+	local harness, handle = bootWith({
+		model = "claude-opus-5",
+		handler = function(entry)
+			if tostring(entry.url):find("/models") then
+				local data = {}
+				for index = 1, 14 do data[index] = { id = "vendor/model-" .. tostring(index) } end
+				return { StatusCode = 200, Body = json.encode({ data = data }) }
+			end
+			return { StatusCode = 404, Body = "{}" }
+		end,
+	})
+
+	-- The composer's chip is the way in, and it is the same decision from the user's
+	-- point of view: what answers, and how hard it is asked to think.
+	harness.click(harness.byName("ModelChip"))
+	harness.settle(2)
+	truthy("the chip opens the picker", harness.byName("Section_Endpoint") ~= nil, harness.dump())
+
+	-- Every row is a real record. The provider row states the health the registry has
+	-- actually recorded rather than claiming to be well.
+	local providerRow = harness.byName("Provider_harness")
+	truthy("the endpoint this client has is listed", providerRow ~= nil)
+	contains("with its real URL", harness.textOf(providerRow), "harness.test")
+	contains("and the health that was recorded", harness.textOf(providerRow), "not tried yet")
+
+	local modelRow = harness.byName("Model_claude-opus-5")
+	truthy("the model it is pointed at is listed", modelRow ~= nil)
+	contains("with the window this client documents", harness.textOf(modelRow), "1M")
+	contains("and where the id came from", harness.textOf(modelRow), "added on this client")
+
+	-- Effort is the model's own scale, and Opus 5 documents five levels.
+	truthy("the effort scale is the model's own", harness.byName("Effort_xhigh") ~= nil)
+	harness.click(harness.byName("Effort_low"))
+	harness.settle(1)
+	check("picking one writes the real setting", handle.config.get("agent.effort"), "low")
+
+	-- A filter appears only once the list is long enough to need one.
+	truthy("a six-model list gets no filter", harness.byName("ModelFilter") == nil)
+	harness.click(harness.byName("FetchModels"))
+	harness.settle(6)
+	local asked = nil
+	for _, entry in ipairs(harness.http.log) do
+		if tostring(entry.url):find("/models") then asked = entry end
+	end
+	truthy("the endpoint was asked for its list", asked ~= nil)
+	truthy("the list comes back without pressing anything else",
+		harness.byName("Model_vendor/model-3") ~= nil, harness.dump())
+	truthy("and a long list gets a filter", harness.byName("ModelFilter") ~= nil)
+
+	harness.click(harness.byName("Model_vendor/model-3"))
+	harness.settle(1)
+	check("picking a model points the provider at it",
+		handle.providers.active().model, "vendor/model-3")
+	contains("which the composer's chip then states",
+		harness.byName("ModelLabel").Text, "vendor/model-3")
+
+	-- A model with no documented effort scale gets no effort control, because sending an
+	-- effort a model has no parameter for is a setting that changes nothing. The old
+	-- menu offered five rows of it on every id.
+	truthy("a model with no documented scale is told so", harness.byName("NoEffort") ~= nil)
+	truthy("rather than being offered levels that do nothing",
+		harness.byName("Effort_xhigh") == nil)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 49. Modals fit the screen ----------------------------------------------
+
+-- An auto-height modal has no ceiling, and it is centred -- so a form taller than the
+-- viewport goes off both edges at once. The provider editor is six labelled rows, two
+-- segmented pickers and a footer: on a phone its title went off the top and its Save
+-- button off the bottom, with nothing scrollable and no way to reach either.
+scenario("a form modal stays on screen and keeps its footer reachable", function()
+	local harness, handle = bootWith({ provider = false })
+
+	local function inside(node, root)
+		local walk = node
+		while walk do
+			if walk == root then return true end
+			walk = walk.Parent
+		end
+		return false
+	end
+
+	-- Every layout mode, including the two where the viewport is shorter than the form.
+	for _, spec in ipairs({
+		{ 1280, 720, "window" },
+		{ 390, 844, "sheet" },
+		{ 844, 390, "panel" },
+	}) do
+		harness.setViewport(spec[1], spec[2])
+		harness.settle(2)
+		check("the layout is " .. spec[3], handle.env.require("ui/responsive").mode, spec[3])
+
+		handle.env.require("ui/panels/providers").editor(
+			handle.providers.blank("custom"), function() end)
+		harness.settle(2)
+
+		local card = harness.byName("Modal")
+		truthy("the editor opened at " .. tostring(spec[2]) .. "px tall", card ~= nil)
+		-- Bounded rather than auto: a card with both a height and AutomaticSize.Y grows
+		-- past the height, which is the same bug wearing a different hat. Compared by
+		-- name because an unassigned AutomaticSize is the mock's default rather than an
+		-- EnumItem, and the two do not tostring the same way.
+		truthy("with a bounded height",
+			tostring(card.AutomaticSize):find("None") ~= nil, tostring(card.AutomaticSize))
+		truthy("and a real one", card.Size.Y.Offset > 0, tostring(card.Size.Y.Offset))
+		local top = card.AbsolutePosition.Y
+		local bottom = top + card.AbsoluteSize.Y
+		truthy("its top edge is on screen", top >= -1, tostring(top))
+		truthy("and so is its bottom edge", bottom <= spec[2] + 1,
+			tostring(bottom) .. " vs viewport " .. tostring(spec[2]))
+
+		-- The form scrolls; the footer does not. Save has to be reachable without
+		-- scrolling to it, because a form you cannot submit is worse than one you cannot
+		-- read.
+		local scroll = harness.byName("BodyScroll", card)
+		truthy("the body is a scroll region", scroll ~= nil)
+		for _, name in ipairs({ "Preset", "ProviderName", "BaseUrl", "Protocol", "AuthStyle" }) do
+			local node = harness.byName(name, card)
+			truthy(name .. " is reachable inside it", node ~= nil and inside(node, scroll),
+				name .. " missing or outside the scroll")
+		end
+		local save = harness.byName("SaveProvider", card)
+		truthy("Save exists", save ~= nil)
+		truthy("and is pinned outside the scroll", not inside(save, scroll))
+
+		handle.env.require("ui/overlay").closeAll()
+		harness.settle(1)
+	end
+
+	-- The unbounded mode is still the default: a confirmation is two sentences and a
+	-- pair of buttons, and giving that a fixed height would leave it mostly empty.
+	handle.env.require("ui/overlay").confirm({ title = "Remove it?", description = "It will not come back." })
+	harness.settle(1)
+	check("a plain modal still sizes to its content",
+		tostring(harness.byName("Modal").AutomaticSize), "Enum.AutomaticSize.Y")
+	handle.env.require("ui/overlay").closeAll()
+	harness.settle(1)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 50. The transcript names its speakers -----------------------------------
+
+-- A turn was a tinted box, then unmarked prose, then another tinted box: scrolling back
+-- through a long conversation meant inferring the speaker from the fill, and the reply's
+-- attribution existed nowhere at all -- a client that can switch model mid-conversation
+-- was rendering four different models' answers identically.
+scenario("each turn says who said it, and the reply says with what", function()
+	local harness, handle = bootWith({
+		model = "claude-opus-5",
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Two things, then." }) }
+		end,
+	})
+
+	handle.sessions.current().send("what is in the workspace")
+	harness.settle(10)
+
+	local user = harness.byName("User")
+	truthy("the question rendered", user ~= nil)
+	local userByline = harness.byName("Byline", user)
+	truthy("with a byline", userByline ~= nil, harness.dump(user))
+	-- The display name, because that is what the person sees everywhere else in the game.
+	contains("naming the person at this client", harness.textOf(userByline), "TestPlayer")
+
+	local agent = harness.byName("Agent")
+	truthy("the reply rendered", agent ~= nil)
+	local agentByline = harness.byName("Byline", agent)
+	truthy("with a byline of its own", agentByline ~= nil, harness.dump(agent))
+	local speaker = harness.byName("Speaker", agentByline)
+	check("naming what answered", speaker and speaker.Text, "Claude")
+	-- The model is the fact that was invisible before, and it comes from the record the
+	-- request is actually built from rather than from a literal.
+	local detail = harness.byName("BylineDetail", agentByline)
+	check("and the model it answered with", detail and detail.Text, "claude-opus-5")
+
+	handle.providers.setModel(handle.providers.active().id, "some/other-model")
+	harness.settle(1)
+	handle.sessions.current().send("and now")
+	harness.settle(10)
+	local bylines = harness.allByName("BylineDetail", harness.byName("Transcript"))
+	check("a second reply names the model that produced it",
+		bylines[#bylines].Text, "some/other-model")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 print(("="):rep(72))
 print(string.format("%d scenarios, %d checks passed, %d failed",
 	suite.scenarios, suite.passed, suite.failed))if suite.failed > 0 then

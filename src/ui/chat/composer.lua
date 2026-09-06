@@ -25,7 +25,6 @@ return function(env)
 	local sessions = env.require("agent/session")
 	local permissions = env.require("agent/permissions")
 	local providers = env.require("provider/registry")
-	local models = env.require("provider/models")
 	local traits = env.require("provider/traits")
 
 	local M = {}
@@ -348,9 +347,12 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
 			bg = theme.color.surfaceRaised,
-			radius = theme.radius.lg,
+			-- A larger corner than a control's, because this is not a control-sized box:
+			-- it is the surface the whole app is driven from, and at the md radius a
+			-- fifty-pixel-tall box reads as a text input someone stretched.
+			radius = theme.radius.xl,
 			gap = theme.space.xs,
-			padding = { x = theme.space.sm, y = theme.space.xxs },
+			padding = { x = theme.space.md, y = theme.space.xs },
 			alignY = "Center",
 		})
 		local boxStroke = P.stroke(inputRow, theme.color.borderSubtle)
@@ -406,11 +408,28 @@ return function(env)
 			if props.onSend then props.onSend(payload) end
 		end
 
+		-- Focus is the box lifting a step and taking the accent on its outline, not just
+		-- the outline. On a dark ramp a hairline changing hue is easy to miss, and this is
+		-- the one control in the app whose focus state has to be unmistakable -- the
+		-- keyboard shortcut that opens quick chat is a printable character, so "is this
+		-- focused" decides where the next keystroke goes.
 		local function paintFocus(focused)
 			env.tween:Create(boxStroke, theme.tween("hover"), {
 				Color = focused and theme.color.accentBorder or theme.color.borderSubtle,
 			}):Play()
+			env.tween:Create(inputRow, theme.tween("hover"), {
+				BackgroundColor3 = focused and theme.color.surfaceOverlay or theme.color.surfaceRaised,
+			}):Play()
 		end
+
+		-- Two lines' worth of room at rest.
+		--
+		-- The field was one control tall -- the same box as a search field -- and the
+		-- transcript above it is where a conversation is read, so the thing you type into
+		-- was the smallest surface on screen. Two lines is what the reference client
+		-- gives it: enough that a sentence does not scroll under the cursor, and it holds
+		-- the send button off the text rather than beside it at the same height.
+		local RESTING_LINES = 2
 
 		local function buildField(carried)
 			return P.field(fieldHolder, {
@@ -418,7 +437,8 @@ return function(env)
 				bare = true,
 				placeholder = props.placeholder or "Describe a task or ask a question",
 				multiline = composer.expanded,
-				height = composer.expanded and (theme.size.control * 3) or nil,
+				height = composer.expanded and (theme.text.body.height * 5 + theme.space.md)
+					or (theme.text.body.height * RESTING_LINES + theme.space.sm),
 				text = carried,
 				onFocus = function() paintFocus(true) end,
 				onBlur = function() paintFocus(false) end,
@@ -771,90 +791,16 @@ return function(env)
 		return composer
 	end
 
-	-- Picks a provider, or a model within the active one. Both live behind the same
-	-- chip because they are the same decision from the user's point of view. Models
-	-- listed here are the ones the endpoint reported plus the ones the user added --
-	-- never a guess, so the menu can legitimately be empty until one of those has
-	-- happened.
+	-- Picks the endpoint, the model on it, and the effort it is asked for. All three
+	-- live behind the same chip because they are one decision from the user's point of
+	-- view -- and behind ui/panels/modelpicker rather than an anchored menu, because a
+	-- menu is the right shape for six rows and this list is as long as the endpoint's
+	-- catalogue. `target` is unused now and kept in the signature: it is what an
+	-- anchored menu needed, and the chip still passes it.
 	function M.providerMenu(target, composer)
-		local options = {}
-		local record = providers.active()
-		for _, entry in ipairs(providers.list()) do
-			options[#options + 1] = {
-				label = entry.label,
-				value = "provider:" .. entry.id,
-				detail = entry.model ~= "" and entry.model or entry.baseUrl,
-				selected = record and record.id == entry.id,
-			}
-		end
-		if record then
-			for _, id in ipairs(models.list(record)) do
-				-- The window is the one thing about a model worth reading at a glance,
-				-- and no endpoint publishes it -- so where it is known, it rides on the
-				-- label. The value stays the bare id, which is what goes on the wire.
-				local badge = traits.badge(id)
-				options[#options + 1] = {
-					label = badge and (id .. " (" .. badge .. ")") or id,
-					value = "model:" .. id,
-					detail = "model on " .. record.label,
-					selected = id == record.model,
-				}
-			end
-			options[#options + 1] = {
-				label = "Fetch models from /models",
-				value = "fetch",
-				detail = record.baseUrl .. "/models",
-				tone = "info",
-			}
-			options[#options + 1] = { label = "Add a model by id", value = "addmodel", tone = "info" }
-		end
-		options[#options + 1] = { divider = true }
-		for _, level in ipairs({ "low", "medium", "high", "xhigh", "max" }) do
-			options[#options + 1] = {
-				label = "Effort: " .. (level:gsub("^%l", string.upper)),
-				value = "effort:" .. level,
-				selected = tostring(config.get("agent.effort", "high")) == level,
-			}
-		end
-		options[#options + 1] = { divider = true }
-		options[#options + 1] = { label = "Manage providers", value = "manage", tone = "info" }
-
-		overlay.menu({
-			target = target,
-			width = theme.size.menuWide,
-			options = options,
-			onSelect = function(value)
-				local app = env.require("ui/app")
-				if value == "manage" then
-					app.show("providers")
-				elseif value == "fetch" and record then
-					overlay.toast("Fetching models from " .. record.label, "info", 2)
-					task.spawn(function()
-						local found, note = models.discover(record, { force = true })
-						overlay.toast(tostring(note), #found > 0 and "good" or "warn")
-						if composer then composer.syncContext() end
-					end)
-				elseif value == "addmodel" and record then
-					overlay.prompt({
-						title = "Add a model to " .. record.label,
-						description = "Type the id exactly as the provider expects it. It is saved to this provider and selected.",
-						placeholder = "model id",
-						onConfirm = function(text)
-							local ok, result = models.add(record, text)
-							overlay.toast(tostring(result), ok and "good" or "warn")
-							if composer then composer.syncContext() end
-						end,
-					})
-				elseif util.startsWith(tostring(value), "provider:") then
-					providers.setActive(tostring(value):sub(10))
-				elseif util.startsWith(tostring(value), "model:") and record then
-					providers.setModel(record.id, tostring(value):sub(7))
-				elseif util.startsWith(tostring(value), "effort:") then
-					config.set("agent.effort", tostring(value):sub(8))
-					if composer then composer.syncContext() end
-				end
-			end,
-		})
+		return env.require("ui/panels/modelpicker").open(function()
+			if composer then composer.syncContext() end
+		end)
 	end
 
 	return M

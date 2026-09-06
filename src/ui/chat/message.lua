@@ -480,6 +480,73 @@ return function(env)
 		end
 	end
 
+	-- Who said it, above what they said.
+	--
+	-- One line, quiet, at label weight: a name and -- on the reply -- the model that
+	-- produced it. It is the piece the transcript was missing. A turn was a tinted box
+	-- followed by unmarked prose followed by another tinted box, so scrolling back
+	-- through a long conversation meant inferring the speaker from the fill, and the
+	-- reply's own attribution existed nowhere at all: a client that can switch model
+	-- mid-conversation was rendering four different models' answers identically.
+	--
+	-- Not a bubble and not an avatar. The transcript is a document with the questions
+	-- marked in it, so the mark is a byline.
+	local function byline(parent, props)
+		local row = P.row(parent, {
+			name = "Byline",
+			size = UDim2.new(1, 0, 0, theme.text.label.height),
+			gap = theme.space.xs,
+			layoutOrder = props.layoutOrder or 1,
+		})
+		if props.icon then
+			local slot = P.frame(row, {
+				name = "BylineIcon",
+				size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+				layoutOrder = 1,
+			})
+			icons.draw(props.icon, slot, theme.size.icon, props.color or theme.color.textTertiary)
+		end
+		P.text(row, {
+			name = "Speaker",
+			text = tostring(props.name or ""),
+			role = "label",
+			color = props.color or theme.color.textSecondary,
+			size = UDim2.new(0, 0, 1, 0),
+			auto = "X",
+			layoutOrder = 2,
+		})
+		-- The rest of the line, either as the model id or as nothing. It fills rather
+		-- than sizing to its text so the byline is one full-width row whatever is in it.
+		if props.detail then
+			P.text(row, {
+				name = "BylineDetail",
+				text = tostring(props.detail),
+				role = "caption",
+				color = theme.color.textTertiary,
+				size = UDim2.new(0, 0, 1, 0),
+				flex = "Fill",
+				truncate = true,
+				layoutOrder = 3,
+			})
+		else
+			P.spacer(row, { grow = true, layoutOrder = 3 })
+		end
+		return row
+	end
+
+	-- Who the person at this client is, for the byline. The display name, because that
+	-- is what they see everywhere else in the game.
+	local function localName()
+		local okName, display = pcall(function() return env.plr and env.plr.DisplayName end)
+		if okName and type(display) == "string" and util.trim(display) ~= "" then
+			return display
+		end
+		if env.plr and type(env.plr.Name) == "string" and env.plr.Name ~= "" then
+			return env.plr.Name
+		end
+		return "You"
+	end
+
 	-- The user's own turn. A fill, a hairline, and an accent rule down the left edge.
 	--
 	-- The rule is what makes it unmistakably a sent message. Without it the turn was a
@@ -487,7 +554,14 @@ return function(env)
 	-- exact description of the composer's input field twenty pixels below -- so a
 	-- transcript read as a column of empty prompts rather than as a conversation.
 	function M.user(parent, text, order)
-		local holder = wrapper(parent, { name = "User", layoutOrder = order })
+		local holder = P.column(parent, {
+			name = "User",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.xs,
+			layoutOrder = order or 0,
+		})
+		byline(holder, { name = localName(), layoutOrder = 1 })
 		local body = ruled(holder, {
 			name = "Bubble",
 			bg = theme.color.bubbleUser,
@@ -501,6 +575,7 @@ return function(env)
 			padRight = theme.space.md,
 			padY = theme.space.sm,
 			clip = true,
+			layoutOrder = 2,
 		})
 		local label = P.text(body, {
 			text = tostring(text),
@@ -513,7 +588,26 @@ return function(env)
 	end
 
 	function M.agent(parent, text, order)
-		local holder = wrapper(parent, { name = "Agent", layoutOrder = order })
+		local holder = P.column(parent, {
+			name = "Agent",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.xs,
+			layoutOrder = order or 0,
+		})
+		-- The model that is answering, from the record the request will actually be
+		-- built from. It is the one fact about a reply that is invisible otherwise, and
+		-- it is read here rather than passed in because the transcript renders from an
+		-- event log that does not carry it.
+		local record = env.require("provider/registry").active()
+		local model = record and util.trim(tostring(record.model or "")) or ""
+		byline(holder, {
+			name = "Claude",
+			icon = "spark",
+			color = theme.color.accent,
+			detail = model ~= "" and model or nil,
+			layoutOrder = 1,
+		})
 		local column = P.column(holder, {
 			name = "Body",
 			size = UDim2.new(1, 0, 0, 0),
@@ -521,6 +615,7 @@ return function(env)
 			-- Paragraphs need more than eight pixels between them or a long reply
 			-- arrives as one grey slab with no shape to it.
 			gap = theme.space.md,
+			layoutOrder = 2,
 		})
 		local handle = { root = holder, column = column }
 		function handle.setText(value)
