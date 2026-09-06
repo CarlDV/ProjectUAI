@@ -26,7 +26,6 @@ return function(env)
 		bars = "menu",
 		stop = "square",
 		send = "send",
-		spark = "sparkle",
 		copy = "copy",
 		trash = "trash",
 		sidebarToggle = "panel-left",
@@ -249,9 +248,8 @@ return function(env)
 	-- here that carries brand rather than function -- so it gets the accent by
 	-- default rather than the secondary text tone every other icon uses.
 	function M.spark(parent, size, colour)
+		local frame = holder(parent, size, "IconSpark")
 		local tint = colour or theme.color.accent
-		local frame, custom = customOrHolder(parent, size, "IconSpark", "spark", tint)
-		if custom then return frame end
 		for _, rotation in ipairs({ 0, 45, 90, 135 }) do
 			bar(frame, { size = UDim2.fromScale(0.82, WEIGHT), rotation = rotation, color = tint })
 		end
