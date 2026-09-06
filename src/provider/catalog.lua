@@ -33,8 +33,11 @@ return function(env)
 			-- them is a shape no real client produces.
 			headers = {
 				["X-Title"] = "Project UAI",
-				["HTTP-Referer"] = "https://github.com/CarlDV/ProjectUAI",
+				["X-OpenRouter-Title"] = "Project UAI",
+				["HTTP-Referer"] = "https://carldv.github.io/ProjectUAI/",
+				["X-OpenRouter-Categories"] = "game,cli-agent",
 			},
+			claudeUa = false,
 			note = "Lists several hundred models. Fetch them and pick, or type the id shown on openrouter.ai.",
 		},
 		{

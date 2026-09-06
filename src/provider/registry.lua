@@ -93,7 +93,7 @@ return function(env)
 			params = util.deepCopy(preset.params or {}),
 			query = util.deepCopy(preset.query or {}),
 			stream = true,
-			claudeUa = true,
+			claudeUa = preset.claudeUa ~= nil and preset.claudeUa or true,
 			enabled = true,
 			order = 0,
 			wsUrl = "",

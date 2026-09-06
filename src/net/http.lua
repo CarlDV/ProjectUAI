@@ -122,6 +122,15 @@ return function(env)
 				["Accept-Language"] = "en-US,en;q=0.9",
 			}
 		end
+		if kind == "openrouter" then
+			return {
+				["User-Agent"] = "ProjectUAI/1.0.0",
+				["HTTP-Referer"] = "https://carldv.github.io/ProjectUAI/",
+				["X-Title"] = "Project UAI",
+				["X-OpenRouter-Title"] = "Project UAI",
+				["X-OpenRouter-Categories"] = "game,cli-agent",
+			}
+		end
 		if not ua.enabled() then return {} end
 		return ua.headers({ attempt = attempt, timeout = timeout })
 	end
@@ -129,10 +138,44 @@ return function(env)
 	-- Header merge order: identity first, then the caller's, so a caller can
 	-- deliberately override one value without losing the rest of the set.
 	local function buildHeaders(spec, attempt)
-		local headers = identityHeaders(spec.identity or "claude", attempt, spec.timeout)
+		local url = tostring(spec.url or "")
+		local isOpenRouter = url:find("openrouter.ai", 1, true) ~= nil
+		local identity = isOpenRouter and "openrouter" or (spec.identity or "claude")
+
+		local headers = identityHeaders(identity, attempt, spec.timeout)
 		for key, value in pairs(spec.headers or {}) do
 			if value ~= nil then headers[key] = tostring(value) end
 		end
+
+		if isOpenRouter then
+			-- Ensure OpenRouter attribution headers are always present for rankings and app stats
+			if not headers["HTTP-Referer"] and not headers["http-referer"] then
+				headers["HTTP-Referer"] = "https://carldv.github.io/ProjectUAI/"
+			end
+			if not headers["X-Title"] and not headers["x-title"] then
+				headers["X-Title"] = "Project UAI"
+			end
+			if not headers["X-OpenRouter-Title"] and not headers["x-openrouter-title"] then
+				headers["X-OpenRouter-Title"] = "Project UAI"
+			end
+			if not headers["X-OpenRouter-Categories"] and not headers["x-openrouter-categories"] then
+				headers["X-OpenRouter-Categories"] = "game,cli-agent"
+			end
+			if not headers["User-Agent"] and not headers["user-agent"] then
+				headers["User-Agent"] = "ProjectUAI/1.0.0"
+			end
+			-- Suppress Claude Code / Stainless headers for OpenRouter
+			headers["x-app"] = nil
+			headers["X-Stainless-Lang"] = nil
+			headers["X-Stainless-Package-Version"] = nil
+			headers["X-Stainless-OS"] = nil
+			headers["X-Stainless-Arch"] = nil
+			headers["X-Stainless-Runtime"] = nil
+			headers["X-Stainless-Runtime-Version"] = nil
+			headers["X-Stainless-Retry-Count"] = nil
+			headers["X-Stainless-Timeout"] = nil
+		end
+
 		if spec.body and not headers["Content-Type"] and not headers["content-type"] then
 			headers["Content-Type"] = "application/json"
 		end
@@ -212,8 +255,8 @@ return function(env)
 			status = res and res.status or 0,
 			bytes = res and #tostring(res.body or "") or 0,
 			via = res and res.via or (caps.fn.request and "executor" or "roblox"),
-			identity = spec.identity or "claude",
-			uaSent = (spec.identity ~= "none") and caps.uaSupported or false,
+			identity = (url:find("openrouter.ai", 1, true) and "openrouter") or spec.identity or "claude",
+			uaSent = ((spec.identity ~= "none") or url:find("openrouter.ai", 1, true)) and caps.uaSupported or false,
 			error = err,
 			attempt = attempt,
 			-- A refusal with an empty body cannot be diagnosed from a status code

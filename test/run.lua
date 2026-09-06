@@ -4919,6 +4919,32 @@ scenario("mobile panel can be moved and resized, and burger menu stays within sc
 	responsive.refresh("test")
 end)
 
+scenario("OpenRouter requests carry Project UAI app attribution and disable Claude Code headers", function()
+	local harness, handle = bootWith({
+		baseUrl = "https://openrouter.ai/api/v1",
+		handler = function(entry)
+			return { StatusCode = 200, Body = chatBody({ content = "From OpenRouter." }) }
+		end,
+	})
+
+	handle.sessions.current().send("test openrouter stats")
+	harness.settle(6)
+
+	local requests = chatRequests(harness)
+	check("one request sent to openrouter", #requests, 1)
+	local headers = requests[1] and requests[1].headers or {}
+
+	check("openrouter user agent is ProjectUAI", headers["User-Agent"], "ProjectUAI/1.0.0")
+	check("openrouter referer is ProjectUAI website", headers["HTTP-Referer"], "https://carldv.github.io/ProjectUAI/")
+	check("openrouter title is Project UAI", headers["X-Title"], "Project UAI")
+	check("openrouter modern title is Project UAI", headers["X-OpenRouter-Title"], "Project UAI")
+	check("openrouter categories are set", headers["X-OpenRouter-Categories"], "game,cli-agent")
+	check("claude cli x-app header is suppressed", headers["x-app"], nil)
+	check("stainless lang header is suppressed", headers["X-Stainless-Lang"], nil)
+	check("stainless runtime header is suppressed", headers["X-Stainless-Runtime"], nil)
+	check("stainless package header is suppressed", headers["X-Stainless-Package-Version"], nil)
+end)
+
 print(("="):rep(72))
 print(string.format("%d scenarios, %d checks passed, %d failed",
 	suite.scenarios, suite.passed, suite.failed))if suite.failed > 0 then

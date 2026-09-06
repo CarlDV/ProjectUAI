@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="sparkGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#F5B29B" />
+      <stop offset="45%" stop-color="#E26D46" />
+      <stop offset="100%" stop-color="#D97757" />
+    </radialGradient>
+  </defs>
+  <!-- Squircle rounded background -->
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="#131312" stroke="#2B2B28" stroke-width="6"/>
+  
+  <!-- 8-Pointed Spark (Project UAI / Claude Identity) -->
+  <g transform="translate(256, 256)">
+    <!-- Central core -->
+    <circle r="46" fill="url(#sparkGlow)"/>
+    
+    <!-- 8 Radiating spokes -->
+    <!-- 0 deg & 180 deg -->
+    <path d="M-18,-42 L0,-156 L18,-42 Z" fill="url(#sparkGlow)" />
+    <path d="M-18,42 L0,156 L18,42 Z" fill="url(#sparkGlow)" />
+    <!-- 90 deg & 270 deg -->
+    <path d="M-42,-18 L-156,0 L-42,18 Z" fill="url(#sparkGlow)" />
+    <path d="M42,-18 L156,0 L42,18 Z" fill="url(#sparkGlow)" />
+    <!-- Diagonals 45, 135, 225, 315 deg -->
+    <g transform="rotate(45)">
+      <path d="M-14,-40 L0,-146 L14,-40 Z" fill="url(#sparkGlow)" />
+      <path d="M-14,40 L0,146 L14,40 Z" fill="url(#sparkGlow)" />
+      <path d="M-40,-14 L-146,0 L-40,14 Z" fill="url(#sparkGlow)" />
+      <path d="M40,-14 L146,0 L40,14 Z" fill="url(#sparkGlow)" />
+    </g>
+  </g>
+</svg>

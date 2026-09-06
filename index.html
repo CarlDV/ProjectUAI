@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Project UAI — Universal In-Game AI Agent for Roblox</title>
+  <meta name="title" content="Project UAI — Universal In-Game AI Agent for Roblox">
+  <meta name="description" content="Project UAI is an advanced autonomous AI agent runtime for Roblox featuring multi-model intelligence, parallel tool calls, subagents, and 60+ in-game tools.">
+  <meta name="author" content="CarlDV">
+  <link rel="canonical" href="https://carldv.github.io/ProjectUAI/">
+  
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://carldv.github.io/ProjectUAI/">
+  <meta property="og:title" content="Project UAI — Universal In-Game AI Agent for Roblox">
+  <meta property="og:description" content="A universal AI agent runtime for Roblox. Multi-model intelligence, parallel tool execution, subagent orchestration, and 60+ in-game tools.">
+  <meta property="og:image" content="https://carldv.github.io/ProjectUAI/webassets/showcase.png">
+  <meta property="og:site_name" content="Project UAI">
+
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://carldv.github.io/ProjectUAI/">
+  <meta property="twitter:title" content="Project UAI — Universal In-Game AI Agent for Roblox">
+  <meta property="twitter:description" content="A universal AI agent runtime for Roblox. Multi-model intelligence, parallel tool execution, subagent orchestration, and 60+ in-game tools.">
+  <meta property="twitter:image" content="https://carldv.github.io/ProjectUAI/webassets/showcase.png">
+
+  <link rel="icon" type="image/svg+xml" href="webassets/icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="webassets/icon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="webassets/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="webassets/icon-180.png">
+  <link rel="shortcut icon" href="favicon.ico">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="header-container">
+      <a href="#" class="brand-link" aria-label="Project UAI Home">
+        <div class="brand-icon">
+          <svg width="26" height="26" viewBox="0 0 512 512" fill="none">
+            <rect width="512" height="512" rx="112" fill="#131312"/>
+            <g transform="translate(256, 256)">
+              <circle r="46" fill="#E26D46"/>
+              <path d="M-18,-42 L0,-156 L18,-42 Z" fill="#E26D46" />
+              <path d="M-18,42 L0,156 L18,42 Z" fill="#E26D46" />
+              <path d="M-42,-18 L-156,0 L-42,18 Z" fill="#E26D46" />
+              <path d="M42,-18 L156,0 L42,18 Z" fill="#E26D46" />
+              <g transform="rotate(45)">
+                <path d="M-14,-40 L0,-146 L14,-40 Z" fill="#E26D46" />
+                <path d="M-14,40 L0,146 L14,40 Z" fill="#E26D46" />
+                <path d="M-40,-14 L-146,0 L-40,14 Z" fill="#E26D46" />
+                <path d="M40,-14 L146,0 L40,14 Z" fill="#E26D46" />
+              </g>
+            </g>
+          </svg>
+        </div>
+        <span>Project UAI</span>
+      </a>
+
+      <nav class="site-nav" id="siteNav" aria-label="Main Navigation">
+        <ul class="nav-links">
+          <li><a href="#showcase" class="nav-link">Showcase</a></li>
+          <li><a href="#features" class="nav-link">Features</a></li>
+          <li><a href="#tools" class="nav-link">Tools</a></li>
+          <li><a href="#attribution" class="nav-link">OpenRouter</a></li>
+          <li><a href="#quickstart" class="nav-link">Quickstart</a></li>
+        </ul>
+      </nav>
+
+      <div class="header-actions">
+        <a href="https://openrouter.ai/apps/url/https%3A%2F%2Fcarldv.github.io%2FProjectUAI%2F" target="_blank" rel="noopener noreferrer" class="btn-sm btn-secondary" title="View Project UAI on OpenRouter">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+          OpenRouter
+        </a>
+        <a href="https://github.com/CarlDV/ProjectUAI" target="_blank" rel="noopener noreferrer" class="btn-sm btn-primary">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+          </svg>
+          GitHub
+        </a>
+        <button class="mobile-menu-btn" id="mobileMenuToggle" aria-label="Toggle navigation" aria-expanded="false">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="mainContent">
+
+    <section class="hero">
+      <div class="badge-wrapper">
+        <span class="badge-dot"></span>
+        <span>Universal In-Game AI Agent Runtime</span>
+      </div>
+
+      <h1 class="hero-title">The Universal AI Agent<br>for Roblox.</h1>
+      
+      <p class="hero-subtitle">
+        A full autonomous AI agent that runs directly inside any Roblox client. Streaming multi-model intelligence, parallel tool execution, recursive subagents, and deep game inspection.
+      </p>
+
+      <div class="loadstring-container">
+        <div class="loadstring-code" id="loadstringCode">
+loadstring(game:HttpGet("https://raw.githubusercontent.com/CarlDV/ProjectUAI/main/dist/uai.lua"))()
+        </div>
+        <button class="copy-btn" id="copyLoadstringBtn" aria-label="Copy loadstring script">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          Copy Script
+        </button>
+      </div>
+
+      <div class="hero-ctas">
+        <a href="#quickstart" class="btn-lg btn-primary">
+          Get Started
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+            <polyline points="12 5 19 12 12 19"></polyline>
+          </svg>
+        </a>
+        <a href="https://github.com/CarlDV/ProjectUAI" target="_blank" rel="noopener noreferrer" class="btn-lg btn-secondary">
+          Documentation & Source
+        </a>
+      </div>
+    </section>
+
+    <section class="metrics-strip">
+      <div class="metrics-container">
+        <div class="metric-item">
+          <div class="metric-val">150M+</div>
+          <div class="metric-label">Tokens Processed</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-val">60+</div>
+          <div class="metric-label">In-Game Tools</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-val">0ms</div>
+          <div class="metric-label">Setup (Single Script)</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-val">100%</div>
+          <div class="metric-label">Provider Freedom</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="showcase" id="showcase">
+      <div class="showcase-header">
+        <div class="section-label">Showcase</div>
+        <h2 class="section-title">Built for Real In-Game Autonomy</h2>
+        <p class="section-desc">
+          Experience low-latency streaming chat, active multi-session management, and comprehensive token accounting right from the in-game overlay.
+        </p>
+      </div>
+
+      <div class="showcase-flow">
+        <div class="showcase-row">
+          <div class="showcase-media-wrap">
+            <div class="media-card">
+              <div class="media-topbar">
+                <div class="media-dots">
+                  <span class="media-dot"></span>
+                  <span class="media-dot"></span>
+                  <span class="media-dot"></span>
+                </div>
+                <span class="media-title">overlay.lua &middot; Metrics &amp; Activity</span>
+                <span></span>
+              </div>
+              <div class="media-content">
+                <img src="webassets/showcase.png" alt="Project UAI In-Game Dashboard showing token accounting, streaks, and model picker" loading="lazy">
+              </div>
+            </div>
+          </div>
+
+          <div class="showcase-text-wrap">
+            <span class="showcase-tag">Telemetry &amp; Accounting</span>
+            <h3 class="showcase-heading">Real-Time Token &amp; Activity Tracking</h3>
+            <p class="showcase-body">
+              Every turn automatically records prompt and completion tokens, active day streaks, hourly usage heatmaps, and favorite model metrics without relying on any external analytics backend.
+            </p>
+            <ul class="showcase-points">
+              <li class="showcase-point">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Zero telemetry leaks — all usage stats computed locally on the client</span>
+              </li>
+              <li class="showcase-point">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Active day streaks &amp; GitHub-style activity contribution calendar</span>
+              </li>
+              <li class="showcase-point">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Live model distribution and token consumption benchmarks</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="showcase-row reverse">
+          <div class="showcase-text-wrap">
+            <span class="showcase-tag">Execution Engine</span>
+            <h3 class="showcase-heading">Live Autonomous Agent Interaction</h3>
+            <p class="showcase-body">
+              Watch Project UAI reason through multi-step objectives, inspect live game instances, execute Luau sandbox code, and stream responses with real-time thinking traces.
+            </p>
+            <ul class="showcase-points">
+              <li class="showcase-point">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Fluid streaming chat with live Markdown &amp; codeblock syntax</span>
+              </li>
+              <li class="showcase-point">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Foldable activity blocks with tool arguments, outputs, and diffs</span>
+              </li>
+              <li class="showcase-point">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Non-blocking concurrency across multiple active conversations</span>
+              </li>
+            </ul>
+          </div>
+
+          <div class="showcase-media-wrap">
+            <div class="media-card">
+              <div class="media-topbar">
+                <div class="media-dots">
+                  <span class="media-dot"></span>
+                  <span class="media-dot"></span>
+                  <span class="media-dot"></span>
+                </div>
+                <span class="media-title">uai.lua &middot; Execution Flow (Auto-play GIF)</span>
+                <span></span>
+              </div>
+              <div class="media-content">
+                <img src="webassets/showcase.gif" alt="Project UAI In-Game Execution Flow GIF" loading="lazy">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="features" id="features">
+      <div class="showcase-header">
+        <div class="section-label">Capabilities</div>
+        <h2 class="section-title">Engineered Without Compromise</h2>
+        <p class="section-desc">
+          A modular, production-grade Luau architecture that decouples agent orchestration from visual rendering.
+        </p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+          </div>
+          <h3>True Autonomous Loop</h3>
+          <p>Multi-round tool execution, automatic context compaction with progressive summarization, intelligent retry backoff honoring <code>Retry-After</code>, and seamless provider fallback.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </div>
+          <h3>Subagents &amp; Delegation</h3>
+          <p>Dispatch isolated subagents concurrently. Each child maintains dedicated step and time budgets, tool permission gates, and can be queried for follow-up inspection without polluting the parent turn.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
+              <line x1="4" y1="22" x2="4" y2="15"></line>
+            </svg>
+          </div>
+          <h3>Universal Providers</h3>
+          <p>Zero vendor lock-in. Built-in presets for OpenRouter, Anthropic (Messages &amp; OpenAI endpoints), OpenAI, Google Gemini, and custom OpenAI-compatible endpoints like local Ollama or vLLM relays.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <h3>Multi-Device Responsive UI</h3>
+          <p>Adapts fluidly across platforms: floating window on desktop, bottom sheet on mobile, full dock on tablet, and centered panel on console. 44px touch targets on touch screens and 28px on pointer.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="4 17 10 11 4 5"></polyline>
+              <line x1="12" y1="19" x2="20" y2="19"></line>
+            </svg>
+          </div>
+          <h3>Claude Code Wire Identity</h3>
+          <p>Inference requests mimic the official Claude Code CLI headers on compatible endpoints, while cleanly providing dedicated OpenRouter attribution headers when connecting to OpenRouter.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+          </div>
+          <h3>Gated Security &amp; Permissions</h3>
+          <p>Risk-tiered tool execution. Dangerous operations (remote firing, filesystem writing, raw Luau evaluation) can be prompted or auto-allowed with granular session permission controls.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="tools-section" id="tools">
+      <div class="tools-container">
+        <div class="showcase-header">
+          <div class="section-label">Ecosystem</div>
+          <h2 class="section-title">60+ Tools Across 13 Groups</h2>
+          <p class="section-desc">
+            Equipped with engine-level instrumentation to interact with any place, character, or network remote.
+          </p>
+        </div>
+
+        <div class="tools-grid">
+          <div class="tool-group">
+            <div class="tool-group-header">
+              <span class="tool-group-title">Instance Tree &amp; Inspection</span>
+              <span class="tool-badge">Core</span>
+            </div>
+            <div class="tool-tags">
+              <span class="tool-tag">instance_get</span>
+              <span class="tool-tag">instance_children</span>
+              <span class="tool-tag">instance_descendants</span>
+              <span class="tool-tag">instance_find</span>
+              <span class="tool-tag">instance_tree</span>
+              <span class="tool-tag">property_get</span>
+              <span class="tool-tag">property_set</span>
+            </div>
+          </div>
+
+          <div class="tool-group">
+            <div class="tool-group-header">
+              <span class="tool-group-title">Sandboxed Luau Execution</span>
+              <span class="tool-badge">Runtime</span>
+            </div>
+            <div class="tool-tags">
+              <span class="tool-tag">luau_run</span>
+              <span class="tool-tag">luau_eval</span>
+              <span class="tool-tag">luau_watch</span>
+              <span class="tool-tag">decompiled_view</span>
+              <span class="tool-tag">bytecode_inspect</span>
+            </div>
+          </div>
+
+          <div class="tool-group">
+            <div class="tool-group-header">
+              <span class="tool-group-title">Networking &amp; Remotes</span>
+              <span class="tool-badge">Network</span>
+            </div>
+            <div class="tool-tags">
+              <span class="tool-tag">remote_discover</span>
+              <span class="tool-tag">remote_fire</span>
+              <span class="tool-tag">remote_invoke</span>
+              <span class="tool-tag">remote_spy</span>
+              <span class="tool-tag">http_request</span>
+            </div>
+          </div>
+
+          <div class="tool-group">
+            <div class="tool-group-header">
+              <span class="tool-group-title">Web Search &amp; Knowledge</span>
+              <span class="tool-badge">External</span>
+            </div>
+            <div class="tool-tags">
+              <span class="tool-tag">web_search</span>
+              <span class="tool-tag">page_read</span>
+              <span class="tool-tag">url_scrape</span>
+              <span class="tool-tag">wiki_lookup</span>
+            </div>
+          </div>
+
+          <div class="tool-group">
+            <div class="tool-group-header">
+              <span class="tool-group-title">Character &amp; Camera</span>
+              <span class="tool-badge">Player</span>
+            </div>
+            <div class="tool-tags">
+              <span class="tool-tag">character_move</span>
+              <span class="tool-tag">camera_look</span>
+              <span class="tool-tag">raycast_world</span>
+              <span class="tool-tag">teleport_pos</span>
+              <span class="tool-tag">player_inspect</span>
+            </div>
+          </div>
+
+          <div class="tool-group">
+            <div class="tool-group-header">
+              <span class="tool-group-title">Subagents &amp; Follow-up</span>
+              <span class="tool-badge">Agentic</span>
+            </div>
+            <div class="tool-tags">
+              <span class="tool-tag">agent_dispatch</span>
+              <span class="tool-tag">agent_followup</span>
+              <span class="tool-tag">agent_status</span>
+              <span class="tool-tag">agent_stop</span>
+              <span class="tool-tag">task_manage</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="attribution-section" id="attribution">
+      <div class="attribution-card">
+        <div class="attribution-info">
+          <div class="section-label">App Attribution</div>
+          <h3>Official OpenRouter Integration</h3>
+          <p>
+            Project UAI sends native app attribution headers with every request sent to OpenRouter. This gives users transparent usage analytics, public leaderboard tracking, and seamless model switching across hundreds of frontier models.
+          </p>
+          <a href="https://openrouter.ai/apps/url/https%3A%2F%2Fcarldv.github.io%2FProjectUAI%2F" target="_blank" rel="noopener noreferrer" class="btn-sm btn-primary">
+            View Live OpenRouter Page &rarr;
+          </a>
+        </div>
+
+        <div class="attribution-headers-box">
+          <div class="headers-title">Attribution Header Profile</div>
+          <div class="headers-code">
+            <div><span class="key">User-Agent:</span> <span class="val">ProjectUAI/1.0.0</span></div>
+            <div><span class="key">HTTP-Referer:</span> <span class="val">https://carldv.github.io/ProjectUAI/</span></div>
+            <div><span class="key">X-Title:</span> <span class="val">Project UAI</span></div>
+            <div><span class="key">X-OpenRouter-Title:</span> <span class="val">Project UAI</span></div>
+            <div><span class="key">X-OpenRouter-Categories:</span> <span class="val">game,cli-agent</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="quickstart" id="quickstart">
+      <div class="showcase-header">
+        <div class="section-label">Installation</div>
+        <h2 class="section-title">Up and Running in 30 Seconds</h2>
+        <p class="section-desc">
+          No external DLLs, builds, or dependencies required. Load directly into your client.
+        </p>
+      </div>
+
+      <div class="steps-list">
+        <div class="step-card">
+          <div class="step-number">STEP 01</div>
+          <h3>Execute Loadstring</h3>
+          <p>Run the single distribution script in your executor or embed it into your development environment script.</p>
+        </div>
+
+        <div class="step-card">
+          <div class="step-number">STEP 02</div>
+          <h3>Configure Provider</h3>
+          <p>Press <kbd>Ctrl + \</kbd> (or tap the hamburger menu on mobile), navigate to Providers, and enter your OpenRouter, Anthropic, or OpenAI API key.</p>
+        </div>
+
+        <div class="step-card">
+          <div class="step-number">STEP 03</div>
+          <h3>Start Prompting</h3>
+          <p>Ask questions, inspect memory, analyze game remotes, or dispatch parallel subagents to complete complex tasks.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-container">
+      <div class="footer-brand">
+        <svg width="20" height="20" viewBox="0 0 512 512" fill="none">
+          <rect width="512" height="512" rx="112" fill="#131312"/>
+          <circle cx="256" cy="256" r="64" fill="#E26D46"/>
+        </svg>
+        <span>Project UAI</span>
+      </div>
+
+      <ul class="footer-links">
+        <li><a href="https://github.com/CarlDV/ProjectUAI" target="_blank" rel="noopener noreferrer" class="footer-link">GitHub</a></li>
+        <li><a href="https://openrouter.ai/apps/url/https%3A%2F%2Fcarldv.github.io%2FProjectUAI%2F" target="_blank" rel="noopener noreferrer" class="footer-link">OpenRouter</a></li>
+        <li><a href="https://github.com/CarlDV/ProjectUAI/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" class="footer-link">MIT License</a></li>
+      </ul>
+
+      <div class="footer-copy">
+        <span>&copy; 2026 Project UAI. Open source software released under MIT License.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
