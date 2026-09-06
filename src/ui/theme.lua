@@ -314,7 +314,7 @@ return function(env)
 		menuWide = 320,
 		menuMax = 320,
 		modal = 380,
-		modalWide = 420,
+		modalWide = 480,
 		modalMin = 260,
 		-- The reading column. Past roughly this width a line of prose becomes a single
 		-- sentence a foot long, which is unreadable however correct the layout is.

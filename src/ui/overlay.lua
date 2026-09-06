@@ -157,12 +157,14 @@ return function(env)
 		-- Everything the screen has, less the margin a floating card keeps and whatever
 		-- the platform is covering: the top inset, and the on-screen keyboard, which is
 		-- the case that matters most here because a form is a thing you type into.
+		local bottomObstruction = responsive.bottomObstruction()
 		local room = responsive.viewport.Y - responsive.inset.Y
-			- responsive.bottomObstruction() - theme.space.lg * 2
+			- bottomObstruction - theme.space.lg * 2
 		local height = 0
 		if scrolls then
-			height = math.floor(util.clamp(props.height or theme.size.dialogTall,
-				math.min(theme.size.statCard, room), math.max(room, theme.size.modalMin)))
+			local preferred = props.height or 620
+			height = math.floor(util.clamp(preferred,
+				theme.size.modalMin, math.max(room, theme.size.modalMin)))
 		end
 
 		local dismiss
@@ -186,10 +188,10 @@ return function(env)
 					0, scrolls and height or 0),
 			auto = (not scrolls) and "Y" or nil,
 			anchor = sheetMode and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5),
-			position = sheetMode and UDim2.new(0.5, 0, 1, -theme.space.lg) or UDim2.fromScale(0.5, 0.5),
+			position = sheetMode and UDim2.new(0.5, 0, 1, -(theme.space.lg + bottomObstruction)) or UDim2.fromScale(0.5, 0.5),
 			bg = theme.color.surfaceRaised,
 			radius = theme.radius.xl,
-			padding = theme.space.lg,
+			padding = (not scrolls) and theme.space.lg or nil,
 			zIndex = theme.z.modal + 1,
 		}
 
@@ -208,14 +210,18 @@ return function(env)
 
 		local closeDiameter = math.max(theme.size.control, responsive.minTarget())
 		local descLines = props.description and math.ceil(#tostring(props.description) / 38) or 0
-		local headerHeight = math.max(closeDiameter,
+		local headerContentHeight = math.max(closeDiameter,
 			theme.text.title.height + (props.description and (theme.space.xs + descLines * theme.text.small.height) or 0))
-		local footerHeight = math.max(theme.size.control, responsive.minTarget())
+		local footerContentHeight = math.max(theme.size.control, responsive.minTarget())
+		local pad = theme.space.lg
+		local headerTotal = headerContentHeight + pad
+		local footerTotal = footerContentHeight + pad
 
 		local header = P.row(card, {
 			name = "Header",
-			size = scrolls and UDim2.new(1, 0, 0, headerHeight) or UDim2.new(1, 0, 0, 0),
+			size = scrolls and UDim2.new(1, 0, 0, headerTotal) or UDim2.new(1, 0, 0, 0),
 			position = scrolls and UDim2.new(0, 0, 0, 0) or nil,
+			padding = scrolls and { x = pad, top = pad } or nil,
 			auto = (not scrolls) and "Y" or nil,
 			gap = theme.space.sm,
 			alignY = "Top",
@@ -247,10 +253,15 @@ return function(env)
 		end
 
 		local handle = { card = card, scrim = scrim, closed = false }
+		local unbindResponsive
 
 		function handle.close()
 			if handle.closed then return end
 			handle.closed = true
+			if unbindResponsive then
+				pcall(unbindResponsive)
+				unbindResponsive = nil
+			end
 			for index, item in ipairs(M.open) do
 				if item == handle then table.remove(M.open, index) end
 			end
@@ -260,6 +271,32 @@ return function(env)
 			out:Play()
 			if props.onClose then pcall(props.onClose) end
 		end
+
+		local function relayout()
+			if handle.closed then return end
+			local isSheet = responsive.mode == "sheet"
+			local curWidest = math.max(responsive.viewport.X - theme.space.xxl * 2, theme.size.modalMin)
+			local curObstruction = responsive.bottomObstruction()
+			local curRoom = responsive.viewport.Y - responsive.inset.Y
+				- curObstruction - theme.space.lg * 2
+			local curHeight = 0
+			if scrolls then
+				local preferred = props.height or 620
+				curHeight = math.floor(util.clamp(preferred,
+					theme.size.modalMin, math.max(curRoom, theme.size.modalMin)))
+			end
+
+			card.AnchorPoint = isSheet and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5)
+			card.Position = isSheet
+				and UDim2.new(0.5, 0, 1, -(theme.space.lg + curObstruction))
+				or UDim2.fromScale(0.5, 0.5)
+			card.Size = isSheet
+				and UDim2.new(1, -theme.space.md * 2, 0, scrolls and curHeight or 0)
+				or UDim2.new(0, util.clamp(props.width or theme.size.modal, theme.size.modalMin, curWidest),
+					0, scrolls and curHeight or 0)
+		end
+
+		unbindResponsive = responsive.changed:connect(relayout)
 
 		if dismiss then
 			dismiss.Activated:Connect(handle.close)
@@ -279,16 +316,14 @@ return function(env)
 		-- The body. In bounded scroll mode, it takes the region between the fixed-height
 		-- header and pinned footer without layout-fighting UIFlexItem.
 		if scrolls then
-			local gap = theme.space.md
 			handle.scroll = P.scroll(card, {
 				name = "BodyScroll",
-				position = UDim2.new(0, 0, 0, headerHeight + gap),
-				size = UDim2.new(1, 0, 1, -(headerHeight + footerHeight + gap * 2)),
+				position = UDim2.new(0, 0, 0, headerTotal),
+				size = UDim2.new(1, 0, 1, -(headerTotal + footerTotal)),
 				gap = theme.space.sm,
-				padding = { right = theme.space.sm },
+				padding = { left = pad, right = pad },
 			})
-			-- Ensure CanvasSize X has a stable scale width so child scale 1 never collapses to 0.
-			handle.scroll.instance.CanvasSize = UDim2.new(1, 0, 0, 0)
+			handle.scroll.instance.CanvasPosition = Vector2.new(0, 0)
 			handle.content = P.column(handle.scroll.instance, {
 				name = "Body",
 				size = UDim2.new(1, 0, 0, 0),
@@ -298,9 +333,10 @@ return function(env)
 			})
 			handle.footer = P.row(card, {
 				name = "Footer",
-				size = UDim2.new(1, 0, 0, footerHeight),
+				size = UDim2.new(1, 0, 0, footerTotal),
 				anchor = Vector2.new(0, 1),
 				position = UDim2.new(0, 0, 1, 0),
+				padding = { x = pad, bottom = pad },
 				gap = theme.space.sm,
 				alignX = "Right",
 			})
