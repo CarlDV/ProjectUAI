@@ -165,32 +165,43 @@ return function(env)
 				math.min(theme.size.statCard, room), math.max(room, theme.size.modalMin)))
 		end
 
-		local card = P.column(scrim, {
+		local cardProps = {
 			name = "Modal",
 			size = sheetMode
-				and UDim2.new(1, -theme.space.md * 2, 0, height)
+				and UDim2.new(1, -theme.space.md * 2, 0, scrolls and height or 0)
 				or UDim2.new(0, util.clamp(props.width or theme.size.modal, theme.size.modalMin, widest),
-					0, height),
-			-- Auto only when nothing bounds it. A card with both a stated height and
-			-- AutomaticSize.Y grows past the height, which is the bug this mode exists to
-			-- fix wearing a different hat.
+					0, scrolls and height or 0),
 			auto = (not scrolls) and "Y" or nil,
 			anchor = sheetMode and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5),
 			position = sheetMode and UDim2.new(0.5, 0, 1, -theme.space.lg) or UDim2.fromScale(0.5, 0.5),
 			bg = theme.color.surfaceRaised,
 			radius = theme.radius.xl,
-			gap = theme.space.md,
 			padding = theme.space.lg,
 			zIndex = theme.z.modal + 1,
-		})
+		}
+
+		local card
+		if scrolls then
+			card = P.frame(scrim, cardProps)
+		else
+			cardProps.gap = theme.space.md
+			card = P.column(scrim, cardProps)
+		end
 		P.stroke(card, theme.color.border)
 		local scale = Instance.new("UIScale", card)
 		scale.Scale = theme.scale.enter
 
+		local closeDiameter = math.max(theme.size.control, responsive.minTarget())
+		local descLines = props.description and math.ceil(#tostring(props.description) / 38) or 0
+		local headerHeight = math.max(closeDiameter,
+			theme.text.title.height + (props.description and (theme.space.xs + descLines * theme.text.small.height) or 0))
+		local footerHeight = math.max(theme.size.control, responsive.minTarget())
+
 		local header = P.row(card, {
 			name = "Header",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
+			size = scrolls and UDim2.new(1, 0, 0, headerHeight) or UDim2.new(1, 0, 0, 0),
+			position = scrolls and UDim2.new(0, 0, 0, 0) or nil,
+			auto = (not scrolls) and "Y" or nil,
 			gap = theme.space.sm,
 			alignY = "Top",
 			layoutOrder = 1,
@@ -255,33 +266,33 @@ return function(env)
 			dismiss.Activated:Connect(handle.close)
 		end
 
-		-- The body. In the bounded mode it is a scroll region that takes whatever the
-		-- header and footer leave -- flex, not a hand-summed remainder, because the header
-		-- is two wrapped labels whose height nobody here knows.
-		--
-		-- Callers get a column to fill either way, so nothing outside this function has to
-		-- know which mode it is in. In scroll mode that column lives inside the scroll and
-		-- auto-sizes as before; the difference is entirely in what bounds it.
+		-- The body. In bounded scroll mode, it takes the region between the fixed-height
+		-- header and pinned footer without layout-fighting UIFlexItem.
 		if scrolls then
-			local holder = P.frame(card, {
-				name = "BodyHolder",
-				size = UDim2.new(1, 0, 0, 0),
-				flex = "Fill",
-				layoutOrder = 2,
-			})
-			handle.scroll = P.scroll(holder, {
+			local gap = theme.space.md
+			handle.scroll = P.scroll(card, {
 				name = "BodyScroll",
-				size = UDim2.fromScale(1, 1),
+				position = UDim2.new(0, 0, 0, headerHeight + gap),
+				size = UDim2.new(1, 0, 1, -(headerHeight + footerHeight + gap * 2)),
 				gap = theme.space.sm,
-				-- Room for the scrollbar, so the last few pixels of a field are not under it.
 				padding = { right = theme.space.sm },
 			})
+			-- Ensure CanvasSize X has a stable scale width so child scale 1 never collapses to 0.
+			handle.scroll.instance.CanvasSize = UDim2.new(1, 0, 0, 0)
 			handle.content = P.column(handle.scroll.instance, {
 				name = "Body",
 				size = UDim2.new(1, 0, 0, 0),
 				auto = "Y",
 				gap = theme.space.sm,
 				layoutOrder = 1,
+			})
+			handle.footer = P.row(card, {
+				name = "Footer",
+				size = UDim2.new(1, 0, 0, footerHeight),
+				anchor = Vector2.new(0, 1),
+				position = UDim2.new(0, 0, 1, 0),
+				gap = theme.space.sm,
+				alignX = "Right",
 			})
 		else
 			handle.content = P.column(card, {
@@ -291,16 +302,15 @@ return function(env)
 				gap = theme.space.sm,
 				layoutOrder = 2,
 			})
+			handle.footer = P.row(card, {
+				name = "Footer",
+				size = UDim2.new(1, 0, 0, 0),
+				auto = "Y",
+				gap = theme.space.sm,
+				alignX = "Right",
+				layoutOrder = 3,
+			})
 		end
-
-		handle.footer = P.row(card, {
-			name = "Footer",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			gap = theme.space.sm,
-			alignX = "Right",
-			layoutOrder = 3,
-		})
 
 		M.open[#M.open + 1] = handle
 		env.tween:Create(scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
