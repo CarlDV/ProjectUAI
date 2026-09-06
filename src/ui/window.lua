@@ -71,6 +71,14 @@ return function(env)
 		-- Geometry ------------------------------------------------------------
 
 		local function saveGeometry()
+			if responsive.mode == "panel" then
+				config.set("ui.mobilePanel.width", math.floor(root.AbsoluteSize.X), { quiet = true })
+				config.set("ui.mobilePanel.height", math.floor(root.AbsoluteSize.Y), { quiet = true })
+				config.set("ui.mobilePanel.x", math.floor(root.Position.X.Offset), { quiet = true })
+				config.set("ui.mobilePanel.y", math.floor(root.Position.Y.Offset), { quiet = true })
+				config.set("ui.mobilePanel.placed", true, { quiet = true })
+				return
+			end
 			if responsive.mode ~= "window" then return end
 			config.set("ui.window.width", math.floor(root.AbsoluteSize.X), { quiet = true })
 			config.set("ui.window.height", math.floor(root.AbsoluteSize.Y), { quiet = true })
@@ -123,10 +131,31 @@ return function(env)
 				root.Size = UDim2.new(1, -theme.space.sm * 2, 0, math.floor(height))
 				root.Position = UDim2.new(0.5, 0, 1, -(keyboard + theme.space.sm))
 			elseif mode == "panel" then
-				root.AnchorPoint = Vector2.new(1, 0)
-				root.Size = UDim2.new(0, math.floor(geometry.width),
-					0, math.floor(math.max(geometry.height - keyboard, 240)))
-				root.Position = UDim2.new(1, -theme.space.sm, 0, topInset + theme.space.sm)
+				local placed = config.get("ui.mobilePanel.placed", false)
+				local maxPanelWidth = math.max(minWidth, viewport.X - theme.space.sm * 2)
+				local maxPanelHeight = math.max(240, viewport.Y - topInset - keyboard - theme.space.sm * 2)
+				local defaultWidth = math.min(geometry.width, maxPanelWidth)
+				local defaultHeight = math.min(math.max(geometry.height - keyboard, 240), maxPanelHeight)
+				local width = defaultWidth
+				local height = defaultHeight
+				if placed then
+					width = util.clamp(config.get("ui.mobilePanel.width", defaultWidth), minWidth, maxPanelWidth)
+					height = util.clamp(config.get("ui.mobilePanel.height", defaultHeight), 240, maxPanelHeight)
+				end
+				root.AnchorPoint = Vector2.new(0, 0)
+				root.Size = UDim2.fromOffset(math.floor(width), math.floor(height))
+				if placed then
+					local defaultX = viewport.X - width - theme.space.sm
+					local defaultY = topInset + theme.space.sm
+					root.Position = UDim2.fromOffset(
+						math.floor(config.get("ui.mobilePanel.x", defaultX)),
+						math.floor(config.get("ui.mobilePanel.y", defaultY)))
+					handle.clampIntoView()
+				else
+					root.Position = UDim2.fromOffset(
+						math.floor(viewport.X - width - theme.space.sm),
+						math.floor(topInset + theme.space.sm))
+				end
 			elseif mode == "tv" then
 				root.AnchorPoint = Vector2.new(0.5, 0.5)
 				root.Size = UDim2.fromOffset(
@@ -161,9 +190,21 @@ return function(env)
 		-- so a window dragged to the edge of a large screen does not become
 		-- unreachable on a small one.
 		function handle.clampIntoView()
-			if responsive.mode ~= "window" then return end
 			local viewport = responsive.viewport
 			local size = root.AbsoluteSize
+			if responsive.mode == "panel" then
+				local keyboard = responsive.bottomObstruction()
+				local topInset = responsive.inset.Y
+				local minX = theme.space.xs
+				local maxX = math.max(minX, viewport.X - size.X - theme.space.xs)
+				local minY = topInset + theme.space.xs
+				local maxY = math.max(minY, viewport.Y - keyboard - size.Y - theme.space.xs)
+				root.Position = UDim2.fromOffset(
+					math.floor(util.clamp(root.Position.X.Offset, minX, maxX)),
+					math.floor(util.clamp(root.Position.Y.Offset, minY, maxY)))
+				return
+			end
+			if responsive.mode ~= "window" then return end
 			local keep = math.min(56, size.X, size.Y)
 			local halfX = size.X * 0.5
 			local halfY = size.Y * 0.5
@@ -210,7 +251,7 @@ return function(env)
 		local dragging, moved, origin, startPosition = false, false, nil, nil
 
 		local function draggableNow()
-			return responsive.mode == "window" and not handle.maximised
+			return (responsive.mode == "window" or responsive.mode == "panel") and not handle.maximised
 		end
 
 		handle.header.InputBegan:Connect(function(input)
@@ -251,6 +292,25 @@ return function(env)
 			if not draggableNow() then return end
 			local viewport = responsive.viewport
 			local size = root.AbsoluteSize
+			if responsive.mode == "panel" then
+				local keyboard = responsive.bottomObstruction()
+				local topInset = responsive.inset.Y
+				local x, y = root.Position.X.Offset, root.Position.Y.Offset
+				local leftGap = x
+				local rightGap = viewport.X - (x + size.X)
+				local topGap = y - topInset
+				local bottomGap = (viewport.Y - keyboard) - (y + size.Y)
+
+				if leftGap < SNAP_MARGIN then x = theme.space.sm end
+				if rightGap < SNAP_MARGIN then x = viewport.X - size.X - theme.space.sm end
+				if topGap < SNAP_MARGIN then y = topInset + theme.space.sm end
+				if bottomGap < SNAP_MARGIN then y = viewport.Y - keyboard - size.Y - theme.space.sm end
+
+				env.tween:Create(root, theme.tween("hover"), {
+					Position = UDim2.fromOffset(math.floor(x), math.floor(y)),
+				}):Play()
+				return
+			end
 			local x, y = root.Position.X.Offset, root.Position.Y.Offset
 			local halfViewportX, halfViewportY = viewport.X * 0.5, viewport.Y * 0.5
 			local leftGap = (x - size.X * 0.5) + halfViewportX
@@ -277,9 +337,17 @@ return function(env)
 		grip.BackgroundTransparency = 1
 		grip.AnchorPoint = Vector2.new(1, 1)
 		grip.Position = UDim2.fromScale(1, 1)
-		grip.Size = UDim2.fromOffset(RESIZE_GRIP, RESIZE_GRIP)
+		local gripSize = responsive.touch and math.max(RESIZE_GRIP, responsive.minTarget()) or RESIZE_GRIP
+		grip.Size = UDim2.fromOffset(gripSize, gripSize)
 		grip.ZIndex = theme.z.header + 2
 		grip.Selectable = false
+
+		local function updateGrip()
+			local currentGripSize = responsive.touch and math.max(RESIZE_GRIP, responsive.minTarget()) or RESIZE_GRIP
+			grip.Size = UDim2.fromOffset(currentGripSize, currentGripSize)
+			grip.Visible = draggableNow()
+		end
+
 		for index = 1, 2 do
 			local line = P.frame(grip, {
 				name = "Grip" .. index,
@@ -318,15 +386,26 @@ return function(env)
 			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
 			local delta = input.Position - resizeOrigin
 			local viewport = responsive.viewport
-			-- Through `centred` for the same reason the layout is: the window is centred
-			-- while it is being resized, so a width one pixel out of parity puts the
-			-- group's texture on a half pixel and softens every glyph in it. Dragging the
-			-- grip was the easiest way to land there.
-			root.Size = UDim2.fromOffset(
-				centred(viewport.X,
-					util.clamp(startSize.X + delta.X * 2, minWidth, viewport.X - theme.space.md * 2), minWidth),
-				centred(viewport.Y - responsive.inset.Y,
-					util.clamp(startSize.Y + delta.Y * 2, minHeight, viewport.Y - theme.space.md * 2), minHeight))
+			if responsive.mode == "panel" then
+				local keyboard = responsive.bottomObstruction()
+				local topInset = responsive.inset.Y
+				local maxWidth = math.max(minWidth, viewport.X - theme.space.sm * 2)
+				local maxHeight = math.max(240, viewport.Y - topInset - keyboard - theme.space.sm * 2)
+				root.Size = UDim2.fromOffset(
+					math.floor(util.clamp(startSize.X + delta.X, minWidth, maxWidth)),
+					math.floor(util.clamp(startSize.Y + delta.Y, 240, maxHeight)))
+				handle.clampIntoView()
+			else
+				-- Through `centred` for the same reason the layout is: the window is centred
+				-- while it is being resized, so a width one pixel out of parity puts the
+				-- group's texture on a half pixel and softens every glyph in it. Dragging the
+				-- grip was the easiest way to land there.
+				root.Size = UDim2.fromOffset(
+					centred(viewport.X,
+						util.clamp(startSize.X + delta.X * 2, minWidth, viewport.X - theme.space.md * 2), minWidth),
+					centred(viewport.Y - responsive.inset.Y,
+						util.clamp(startSize.Y + delta.Y * 2, minHeight, viewport.Y - theme.space.md * 2), minHeight))
+			end
 		end))
 
 		function handle.setMaximised(value)
@@ -336,7 +415,7 @@ return function(env)
 			-- write used to reach the theme's config subscription and rebuild the
 			-- entire interface a fifth of a second after the maximise animation.
 			config.set("ui.window.maximised", handle.maximised, { quiet = true })
-			grip.Visible = draggableNow()
+			updateGrip()
 			handle.layout("maximise")
 		end
 
@@ -390,11 +469,11 @@ return function(env)
 		-- signalled separately by responsive.modeChanged.
 		releases[#releases + 1] = responsive.changed:connect(function(info)
 			if not handle.visible then return end
-			grip.Visible = draggableNow()
+			updateGrip()
 			handle.layout(info and info.reason or "viewport")
 		end)
 
-		grip.Visible = draggableNow()
+		updateGrip()
 		handle.outline = outline
 		return handle
 	end

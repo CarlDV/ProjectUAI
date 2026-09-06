@@ -4804,6 +4804,121 @@ scenario("each turn says who said it, and the reply says with what", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+-- 51. In-game chat and virtual input tools ---------------------------------
+
+scenario("chat and virtual input tools are registered and callable", function()
+	local harness, handle = bootWith({ provider = false })
+	local registry = handle.tools
+
+	local chatSend = registry.get("chat_send")
+	truthy("chat_send is registered", chatSend ~= nil)
+	check("chat_send group", chatSend and chatSend.group, "chat")
+	check("chat_send risk", chatSend and chatSend.risk, "write")
+
+	local chatHist = registry.get("chat_history")
+	truthy("chat_history is registered", chatHist ~= nil)
+	check("chat_history group", chatHist and chatHist.group, "chat")
+	check("chat_history risk", chatHist and chatHist.risk, "read")
+
+	local keyPress = registry.get("key_press")
+	truthy("key_press is registered", keyPress ~= nil)
+	check("key_press group", keyPress and keyPress.group, "input")
+	check("key_press risk", keyPress and keyPress.risk, "write")
+
+	local mouseClick = registry.get("mouse_click")
+	truthy("mouse_click is registered", mouseClick ~= nil)
+	check("mouse_click group", mouseClick and mouseClick.group, "input")
+	check("mouse_click risk", mouseClick and mouseClick.risk, "write")
+
+	check("chat group label", registry.groupLabel("chat"), "In-game chat")
+	check("input group label", registry.groupLabel("input"), "Virtual input")
+
+	local histResult = chatHist.run({})
+	contains("chat_history handles empty history", histResult, "No recent in-game chat messages")
+
+	local sendResult = chatSend.run({ message = "Hello from AI" })
+	contains("chat_send reports sent message", sendResult, "Hello from AI")
+
+	local histAfter = chatHist.run({})
+	contains("chat_history records sent message", histAfter, "Hello from AI")
+
+	local badKey = keyPress.run({ key = "InvalidKey123NonExistent" })
+	contains("key_press rejects invalid keys", type(badKey) == "table" and badKey.text or tostring(badKey), "unrecognised KeyCode")
+
+	local okKey = keyPress.run({ key = "E", action = "press" })
+	truthy("key_press executes valid key", okKey:find("Key E: press") ~= nil or okKey:find("no virtual input") ~= nil)
+
+	local clickRes = mouseClick.run({ button = "left", action = "click", x = 100, y = 200 })
+	truthy("mouse_click executes", clickRes:find("Mouse left click") ~= nil or clickRes:find("no mouse input") ~= nil)
+end)
+
+scenario("mobile panel can be moved and resized, and burger menu stays within screen bounds", function()
+	local harness, handle = bootWith({})
+	local responsive = handle.env.require("ui/responsive")
+	local config = handle.env.require("runtime/config")
+
+	-- Set mobile landscape viewport (e.g. 844x390, touch enabled)
+	harness.services.UserInputService.TouchEnabled = true
+	responsive.refresh("test")
+	harness.setViewport(844, 390)
+	harness.settle(2)
+	check("layout mode is panel on mobile", responsive.mode, "panel")
+
+	local window = handle.app.window
+	truthy("window exists", window ~= nil and window.root ~= nil)
+
+	local grip = harness.byName("ResizeGrip")
+	truthy("resize grip exists in panel mode", grip ~= nil)
+	check("touch expands grip hit target", grip.AbsoluteSize.X >= 44, true)
+
+	-- Panel dragging
+	local startPosX = window.root.Position.X.Offset
+	local startPosY = window.root.Position.Y.Offset
+	harness.drag(harness.byName("Header"), 600, 30, 450, 60)
+	harness.settle(4)
+	truthy("dragging header moves the mobile panel horizontally", window.root.Position.X.Offset ~= startPosX)
+	truthy("and vertically", window.root.Position.Y.Offset ~= startPosY)
+	truthy("panel geometry saved to mobilePanel", config.get("ui.mobilePanel.placed", false))
+	check("desktop window geometry was not touched", config.get("ui.window.placed", false), false)
+
+	-- Panel resizing
+	local widthBefore = window.root.Size.X.Offset
+	local heightBefore = window.root.Size.Y.Offset
+	local gripPos = grip.AbsolutePosition
+	harness.drag(grip, gripPos.X, gripPos.Y, gripPos.X - 60, gripPos.Y - 40)
+	harness.settle(4)
+	truthy("panel width resized", window.root.Size.X.Offset ~= widthBefore)
+	truthy("panel height resized", window.root.Size.Y.Offset ~= heightBefore)
+	truthy("panel stays on screen", window.root.Position.Y.Offset >= 0)
+
+	-- Hamburger menu positioning on mobile
+	local burger = harness.byName("Nav_menu")
+	truthy("burger menu button exists on mobile", burger ~= nil)
+	harness.click(burger)
+	harness.settle(2)
+
+	local menuLayer = harness.byName("MenuLayer")
+	truthy("menu opened", menuLayer ~= nil)
+	local menuCard = harness.byName("Menu", menuLayer)
+	truthy("menu card rendered", menuCard ~= nil)
+	truthy("menu card top edge is on screen (no negative Y)", menuCard.AbsolutePosition.Y >= 0,
+		"AbsolutePosition.Y = " .. tostring(menuCard.AbsolutePosition.Y))
+	truthy("menu card bottom edge does not exceed viewport",
+		menuCard.AbsolutePosition.Y + menuCard.AbsoluteSize.Y <= 390,
+		"bottom = " .. tostring(menuCard.AbsolutePosition.Y + menuCard.AbsoluteSize.Y))
+
+	-- Options can be selected
+	local optionTools = harness.byName("Option_tools", menuLayer)
+	truthy("option row exists and is reachable", optionTools ~= nil)
+	harness.click(optionTools)
+	harness.settle(2)
+	check("menu option switched panel", handle.app.panel, "tools")
+
+	-- Clean up touch setting
+	harness.services.UserInputService.TouchEnabled = false
+	responsive.refresh("test")
+end)
+
 print(("="):rep(72))
 print(string.format("%d scenarios, %d checks passed, %d failed",
 	suite.scenarios, suite.passed, suite.failed))if suite.failed > 0 then

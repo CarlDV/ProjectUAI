@@ -67,6 +67,7 @@ hookfunction hookmetamethod getrawmetatable setreadonly isreadonly cloneref clon
 getnilinstances getinstances getscripts getloadedmodules getgc getsenv getcallingscript checkcaller
 decompile getscriptclosure getcustomasset setfflag queue_on_teleport setthreadidentity getthreadidentity
 crypt base64 lz4 messagebox rconsoleprint rconsoleclear setidentity getidentity
+keypress keyrelease mouse1click mouse2click mouse1press mouse1release mousemoveabs mousemoverel
 ]]):gmatch("[%w_]+") do
 	ALLOWED[word] = true
 end

@@ -47,6 +47,7 @@ return function(env)
 			showActivity = true,
 			activityRange = "all",
 			window = { width = 0, height = 0, x = 0, y = 0, maximised = false, placed = false },
+			mobilePanel = { width = 0, height = 0, x = 0, y = 0, placed = false },
 			launcher = { x = 0, y = 0, placed = false },
 		},
 		agent = {

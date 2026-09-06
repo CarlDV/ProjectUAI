@@ -600,14 +600,36 @@ return function(env)
 		bodyHeight = math.min(bodyHeight, theme.size.menuMax)
 
 		local layerOrigin = M.layer.AbsolutePosition
-		local anchorX = target.AbsolutePosition.X - layerOrigin.X
-		local below = target.AbsolutePosition.Y - layerOrigin.Y + target.AbsoluteSize.Y + theme.space.xxs
-		local flip = (below + bodyHeight) > (M.layer.AbsoluteSize.Y - theme.space.md)
-		local anchorY = flip
-			and (target.AbsolutePosition.Y - layerOrigin.Y - bodyHeight - theme.space.xxs)
-			or below
+		local layerSize = M.layer.AbsoluteSize
+		local targetX = target.AbsolutePosition.X - layerOrigin.X
+		local targetY = target.AbsolutePosition.Y - layerOrigin.Y
+		local below = targetY + target.AbsoluteSize.Y + theme.space.xxs
 
-		anchorX = util.clamp(anchorX, theme.space.sm, math.max(M.layer.AbsoluteSize.X - width - theme.space.sm, theme.space.sm))
+		local topLimit = theme.space.xs
+		local bottomObstruction = responsive.bottomObstruction()
+		local bottomLimit = math.max(topLimit + 60, layerSize.Y - bottomObstruction - theme.space.xs)
+
+		local spaceBelow = math.max(0, bottomLimit - below)
+		local spaceAbove = math.max(0, targetY - theme.space.xxs - topLimit)
+
+		-- Only flip upward if it cannot fit below AND there is strictly more room above than below.
+		local flip = (spaceBelow < bodyHeight) and (spaceAbove > spaceBelow)
+
+		local anchorY
+		if flip then
+			local maxH = math.max(120, spaceAbove)
+			bodyHeight = math.min(bodyHeight, maxH)
+			anchorY = targetY - theme.space.xxs - bodyHeight
+		else
+			local maxH = math.max(120, spaceBelow)
+			bodyHeight = math.min(bodyHeight, maxH)
+			anchorY = below
+		end
+
+		anchorY = util.clamp(anchorY, topLimit, math.max(topLimit, bottomLimit - bodyHeight))
+		local maxWidth = math.max(theme.size.menuMin, layerSize.X - theme.space.sm * 2)
+		width = math.min(width, maxWidth)
+		local anchorX = util.clamp(targetX, theme.space.sm, math.max(theme.space.sm, layerSize.X - width - theme.space.sm))
 
 		local card = P.frame(scrim, {
 			name = "Menu",

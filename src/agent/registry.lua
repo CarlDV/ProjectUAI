@@ -85,6 +85,8 @@ return function(env)
 		gui = "Interface",
 		perf = "Diagnostics",
 		meta = "Metadata",
+		chat = "In-game chat",
+		input = "Virtual input",
 	}
 
 	M.GROUP_LABELS = GROUP_LABELS
