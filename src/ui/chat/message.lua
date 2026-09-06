@@ -482,12 +482,16 @@ return function(env)
 
 	-- Who said it, above what they said.
 	--
-	-- One line, quiet, at label weight: a name and -- on the reply -- the model that
-	-- produced it. It is the piece the transcript was missing. A turn was a tinted box
+	-- One quiet line. It is the piece the transcript was missing: a turn was a tinted box
 	-- followed by unmarked prose followed by another tinted box, so scrolling back
 	-- through a long conversation meant inferring the speaker from the fill, and the
-	-- reply's own attribution existed nowhere at all: a client that can switch model
+	-- reply's attribution existed nowhere at all -- a client that can switch model
 	-- mid-conversation was rendering four different models' answers identically.
+	--
+	-- On the reply the model id is the whole byline. There is no "Claude" beside it: the
+	-- surface is a client for one agent, so naming it on every turn is a constant, and a
+	-- constant next to the one thing that actually varies is what makes the varying thing
+	-- hard to find. The mark plus the id says the same thing in one field.
 	--
 	-- Not a bubble and not an avatar. The transcript is a document with the questions
 	-- marked in it, so the mark is a byline.
@@ -504,33 +508,20 @@ return function(env)
 				size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
 				layoutOrder = 1,
 			})
-			icons.draw(props.icon, slot, theme.size.icon, props.color or theme.color.textTertiary)
+			icons.draw(props.icon, slot, theme.size.icon, props.iconColor or theme.color.textTertiary)
 		end
+		-- Fills rather than sizing to its text, so the byline is one full-width row and a
+		-- long model id truncates instead of pushing the line past the reading column.
 		P.text(row, {
 			name = "Speaker",
 			text = tostring(props.name or ""),
-			role = "label",
+			role = props.mono and "monoSmall" or "label",
 			color = props.color or theme.color.textSecondary,
 			size = UDim2.new(0, 0, 1, 0),
-			auto = "X",
+			flex = "Fill",
+			truncate = true,
 			layoutOrder = 2,
 		})
-		-- The rest of the line, either as the model id or as nothing. It fills rather
-		-- than sizing to its text so the byline is one full-width row whatever is in it.
-		if props.detail then
-			P.text(row, {
-				name = "BylineDetail",
-				text = tostring(props.detail),
-				role = "caption",
-				color = theme.color.textTertiary,
-				size = UDim2.new(0, 0, 1, 0),
-				flex = "Fill",
-				truncate = true,
-				layoutOrder = 3,
-			})
-		else
-			P.spacer(row, { grow = true, layoutOrder = 3 })
-		end
 		return row
 	end
 
@@ -595,17 +586,20 @@ return function(env)
 			gap = theme.space.xs,
 			layoutOrder = order or 0,
 		})
-		-- The model that is answering, from the record the request will actually be
-		-- built from. It is the one fact about a reply that is invisible otherwise, and
-		-- it is read here rather than passed in because the transcript renders from an
-		-- event log that does not carry it.
+		-- The model that is answering, from the record the request will actually be built
+		-- from, and it is the whole byline rather than a detail beside a name. Read here
+		-- rather than passed in because the transcript renders from an event log that does
+		-- not carry it. A record with no model named falls back to the provider's label,
+		-- which is the most this client honestly knows in that state.
 		local record = env.require("provider/registry").active()
 		local model = record and util.trim(tostring(record.model or "")) or ""
+		if model == "" then model = record and record.label or "no model" end
 		byline(holder, {
-			name = "Claude",
+			name = model,
+			mono = true,
 			icon = "spark",
-			color = theme.color.accent,
-			detail = model ~= "" and model or nil,
+			iconColor = theme.color.accent,
+			color = theme.color.textTertiary,
 			layoutOrder = 1,
 		})
 		local column = P.column(holder, {

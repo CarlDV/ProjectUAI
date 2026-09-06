@@ -4784,18 +4784,19 @@ scenario("each turn says who said it, and the reply says with what", function()
 	truthy("the reply rendered", agent ~= nil)
 	local agentByline = harness.byName("Byline", agent)
 	truthy("with a byline of its own", agentByline ~= nil, harness.dump(agent))
+	-- The model is the whole byline, not a detail beside a name. This surface is a client
+	-- for one agent, so "Claude" on every reply is a constant -- and a constant next to
+	-- the one field that varies is what makes the varying field hard to find.
 	local speaker = harness.byName("Speaker", agentByline)
-	check("naming what answered", speaker and speaker.Text, "Claude")
-	-- The model is the fact that was invisible before, and it comes from the record the
-	-- request is actually built from rather than from a literal.
-	local detail = harness.byName("BylineDetail", agentByline)
-	check("and the model it answered with", detail and detail.Text, "claude-opus-5")
+	check("naming the model that answered", speaker and speaker.Text, "claude-opus-5")
+	truthy("and nothing else", harness.textOf(agentByline):find("Claude", 1, true) == nil,
+		harness.textOf(agentByline))
 
 	handle.providers.setModel(handle.providers.active().id, "some/other-model")
 	harness.settle(1)
 	handle.sessions.current().send("and now")
 	harness.settle(10)
-	local bylines = harness.allByName("BylineDetail", harness.byName("Transcript"))
+	local bylines = harness.allByName("Speaker", harness.byName("Transcript"))
 	check("a second reply names the model that produced it",
 		bylines[#bylines].Text, "some/other-model")
 

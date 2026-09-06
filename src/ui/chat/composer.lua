@@ -347,12 +347,9 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
 			bg = theme.color.surfaceRaised,
-			-- A larger corner than a control's, because this is not a control-sized box:
-			-- it is the surface the whole app is driven from, and at the md radius a
-			-- fifty-pixel-tall box reads as a text input someone stretched.
-			radius = theme.radius.xl,
+			radius = theme.radius.lg,
 			gap = theme.space.xs,
-			padding = { x = theme.space.md, y = theme.space.xs },
+			padding = { x = theme.space.sm, y = theme.space.xxs },
 			alignY = "Center",
 		})
 		local boxStroke = P.stroke(inputRow, theme.color.borderSubtle)
@@ -422,23 +419,21 @@ return function(env)
 			}):Play()
 		end
 
-		-- Two lines' worth of room at rest.
+		-- One line at rest, which is what a single-line field is.
 		--
-		-- The field was one control tall -- the same box as a search field -- and the
-		-- transcript above it is where a conversation is read, so the thing you type into
-		-- was the smallest surface on screen. Two lines is what the reference client
-		-- gives it: enough that a sentence does not scroll under the cursor, and it holds
-		-- the send button off the text rather than beside it at the same height.
-		local RESTING_LINES = 2
-
+		-- It was briefly two, on the theory that the primary surface of the app deserves
+		-- the room. It does not: `multiline` is false at rest, so the second line was
+		-- empty space under one line of text with the caret at the top of it -- a tall
+		-- grey box, which is exactly what it looked like. The expand toggle is what asks
+		-- for room, and that is the mode where the extra lines can actually be typed
+		-- into.
 		local function buildField(carried)
 			return P.field(fieldHolder, {
 				name = "Prompt",
 				bare = true,
 				placeholder = props.placeholder or "Describe a task or ask a question",
 				multiline = composer.expanded,
-				height = composer.expanded and (theme.text.body.height * 5 + theme.space.md)
-					or (theme.text.body.height * RESTING_LINES + theme.space.sm),
+				height = composer.expanded and (theme.text.body.height * 5 + theme.space.md) or nil,
 				text = carried,
 				onFocus = function() paintFocus(true) end,
 				onBlur = function() paintFocus(false) end,

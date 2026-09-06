@@ -241,7 +241,25 @@ return function(env)
 			end
 		end
 
+		-- Same guard as the history, for the same reason: this rebuilds five rows and it
+		-- is called from refresh, which runs on every status event of every turn. The
+		-- three things it can show are which panel is selected, whether it is open, and
+		-- how many subagents are running.
+		local function moreSignature()
+			return string.format("%s|%s|%d", tostring(host.panel),
+				expanded and "+" or "-", #subagent.running())
+		end
+
+		function handle.syncMore(force)
+			local signature = moreSignature()
+			if not force and signature == handle.moreSignature then return false end
+			handle.moreSignature = signature
+			handle.renderMore()
+			return true
+		end
+
 		handle.renderMore()
+		handle.moreSignature = moreSignature()
 
 		-- The conversation list, which takes whatever height is left rather than a
 		-- hand-summed remainder: the stack above it changes height with density, with
@@ -353,7 +371,9 @@ return function(env)
 					layoutOrder = 1,
 					onClick = function()
 						setCollapsed(group.placeId, not isCollapsed(group.placeId))
-						handle.renderHistory()
+						-- Through the signature, so the fold state it just wrote becomes the
+						-- baseline the next change is compared against.
+						handle.syncHistory()
 					end,
 				})
 				-- Points at what pressing it will do, like the More row above.
@@ -562,6 +582,44 @@ return function(env)
 			return record.label
 		end
 
+		-- What the list currently shows, as a string.
+		--
+		-- The list is rebuilt from destroyed instances, and everything that can change it
+		-- -- a new thread, a rename, a delete, a switch, a busy transition, a place
+		-- resolving -- arrives as the same signal with no description of what moved. So
+		-- the cheap thing is to ask whether the answer would differ before spending
+		-- thirty instances per row finding out that it would not.
+		--
+		-- This is the stutter. `session.emit` fires listChanged on send, and app.syncNav
+		-- runs on every status event -- of which a turn emits one per step plus one per
+		-- request -- and each of those was tearing down and rebuilding every row in the
+		-- sidebar. A twelve-conversation client spent about 1800 instance constructions
+		-- per turn redrawing a list whose contents had not changed since the first one.
+		local function listSignature()
+			local parts = { tostring(sessions.activeId) }
+			for _, group in ipairs(sessions.groups()) do
+				parts[#parts + 1] = string.format("%s|%s|%s",
+					tostring(group.placeId), tostring(group.label),
+					isCollapsed(group.placeId) and "-" or "+")
+				for _, session in ipairs(group.sessions) do
+					parts[#parts + 1] = string.format("%s\1%s\1%s\1%s",
+						tostring(session.id), tostring(session.title),
+						session.busy and "b" or "-", session.ephemeral and "e" or "-")
+				end
+			end
+			return table.concat(parts, "\2")
+		end
+
+		-- The list, only if it would look different. `force` is for the paths that know
+		-- it changed for a reason the signature cannot see -- a fold, a theme rebuild.
+		function handle.syncHistory(force)
+			local signature = listSignature()
+			if not force and signature == handle.signature then return false end
+			handle.signature = signature
+			handle.renderHistory()
+			return true
+		end
+
 		function handle.refresh()
 			profileDetail.Text = "\194\183 " .. describeProvider()
 			for id, entry in pairs(modes) do
@@ -571,17 +629,17 @@ return function(env)
 			end
 			handle.back.setEnabled(host.canBack())
 			handle.forward.setEnabled(host.canForward())
-			handle.renderMore()
-			handle.renderHistory()
+			handle.syncMore()
+			handle.syncHistory()
 		end
 
-		handle.refresh()
+		handle.signature = listSignature()
 
 		-- The list is the app's own state: a new thread, a rename, a delete or a switch
 		-- all have to show up here without the panel knowing this exists.
 		local unsubscribeSessions = sessions.listChanged:connect(function()
 			if not sidebar.Parent then return end
-			handle.renderHistory()
+			handle.syncHistory()
 		end)
 		local unsubscribeProviders = providers.changed:connect(function()
 			if not sidebar.Parent then return end
@@ -589,7 +647,8 @@ return function(env)
 		end)
 		local unsubscribePlace = place.changed:connect(function()
 			if not sidebar.Parent then return end
-			handle.renderHistory()
+			-- The place decides a group's label, which the signature covers.
+			handle.syncHistory()
 		end)
 		-- The count on the Subagents row. Debounced, because the register changes on
 		-- every tool call a child makes and this rebuilds a list of rows -- and
@@ -597,7 +656,7 @@ return function(env)
 		-- one that drops the count back to nothing, is not the one that gets dropped.
 		local unsubscribeAgents = subagent.changed:connect(clock.debounce(function()
 			if not sidebar.Parent then return end
-			handle.renderMore()
+			handle.syncMore()
 		end, 0.3))
 
 		sidebar.Destroying:Connect(function()
