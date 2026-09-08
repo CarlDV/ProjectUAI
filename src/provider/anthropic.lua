@@ -421,6 +421,7 @@ return function(env)
 
 		local body = M.buildBody(record, util.merge(request, { stream = wantStream }))
 		local headers = M.headers(record)
+		for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
 		headers["Accept"] = wantStream and "text/event-stream" or "application/json"
 
 		local started = clock.ms()

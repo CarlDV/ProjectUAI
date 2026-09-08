@@ -411,11 +411,18 @@ return function(env)
 				end
 			else
 				local effortRows = section(nextOrder(), "Reasoning effort", "not offered")
+				-- A forced reasoning claim changes this note: the scale is still not
+				-- documented, but the setting now goes out as asked rather than nowhere.
+				local forced = traits.thinkingStyle(record.model) == "adaptive"
 				local note = P.text(effortRows, {
 					name = "NoEffort",
-					text = ("%s publishes no effort scale this client knows, so none is sent and the setting "
-						.. "(%s) is not applied to it."):format(
-						record.model ~= "" and record.model or "This model", titleCase(wanted)),
+					text = forced
+						and ("%s publishes no effort scale this client knows, but reasoning has been "
+							.. "declared by hand, so the setting (%s) is sent as it stands."):format(
+							record.model ~= "" and record.model or "This model", titleCase(wanted))
+						or ("%s publishes no effort scale this client knows, so none is sent and the setting "
+							.. "(%s) is not applied to it."):format(
+							record.model ~= "" and record.model or "This model", titleCase(wanted)),
 					role = "caption",
 					color = theme.color.textTertiary,
 					wrap = true,
@@ -424,6 +431,74 @@ return function(env)
 					layoutOrder = 1,
 				})
 				note.Size = UDim2.new(1, 0, 0, 0)
+			end
+
+			-- 4. What this client has been told to assume about this model by hand.
+			--
+			-- Every gateway relays ids this table has never heard of, and no endpoint
+			-- publishes capabilities, so "unknown" used to mean "no reasoning, no
+			-- badge, no effort" on exactly the models a user brings from elsewhere.
+			-- These two rows are the user's word: one declares the model thinks (which
+			-- turns the reasoning display and the effort setting on for it), the other
+			-- states its context window (which the badge shows and the context budget
+			-- slider can then be set against, 1M included).
+			local id = tostring(record.model or ""):lower()
+			if id ~= "" then
+				local claimRows = section(nextOrder(), "Declared by hand",
+					"for this model only")
+				local forcedReasoning = (config.get("agent.forceReasoning", {}) or {})[id] == true
+				pickRow(claimRows, {
+					name = "ForceReasoning",
+					title = "Reasoning support",
+					detail = forcedReasoning
+						and "thinking is asked for, and the effort setting is sent"
+						or "no thinking block is sent to this model",
+					selected = forcedReasoning,
+					layoutOrder = 1,
+					onClick = function()
+						local claims = config.get("agent.forceReasoning", {}) or {}
+						claims[id] = not forcedReasoning
+						config.set("agent.forceReasoning", claims)
+						notify()
+						render()
+					end,
+				})
+				local claimed = tonumber((config.get("agent.forceContext", {}) or {})[id])
+				local current = claimed or traits.contextWindow(record.model)
+				pickRow(claimRows, {
+					name = "ForceContext",
+					title = "Context window",
+					detail = current
+						and (util.formatCompact(current) .. " tokens"
+							.. (claimed and "  \194\183  declared by hand" or "  \194\183  documented"))
+						or "not known to this client",
+					selected = claimed ~= nil,
+					layoutOrder = 2,
+					onClick = function()
+						overlay.prompt({
+							title = "Declare the context window",
+							description = "Tokens this model can hold, as the provider documents it. "
+								.. "This is what the badge shows and the context budget slider works against. "
+								.. "Leave it empty to go back to what this client knows on its own.",
+							placeholder = "1000000",
+							value = claimed and tostring(claimed) or "",
+							confirmText = "Declare",
+							onConfirm = function(text)
+								local claims = config.get("agent.forceContext", {}) or {}
+								local clean = util.trim(text)
+								local number = tonumber(clean)
+								if clean == "" or not number or number <= 0 then
+									claims[id] = nil
+								else
+									claims[id] = math.floor(number)
+								end
+								config.set("agent.forceContext", claims)
+								notify()
+								if not modal.closed then render() end
+							end,
+						})
+					end,
+				})
 			end
 		end
 

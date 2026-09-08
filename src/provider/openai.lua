@@ -55,8 +55,9 @@ return function(env)
 			messages = M.wireMessages(request.messages),
 		}
 
-		-- Azure takes the model from the deployment in the URL and rejects the
-		-- field; everyone else requires it.
+		-- The classic Azure preview path takes the model from the deployment in the
+		-- URL and rejects the field; everyone else -- the Azure v1 surface included
+		-- -- requires it.
 		if record.preset ~= "azure" and util.trim(record.model) ~= "" then
 			body.model = record.model
 		end
@@ -255,6 +256,9 @@ return function(env)
 		if wanted == nil then wanted = config.get("agent.effort", "high") end
 		wanted = tostring(wanted or "")
 		if wanted == "" or wanted == "off" then return nil end
+		-- nearestEffort passes the level through for a model the user has manually
+		-- marked as a reasoner, and clamps it against the documented scale for one
+		-- the table knows -- which is the same contract as before, plus the override.
 		return traits.nearestEffort(record and record.model, wanted)
 	end
 
@@ -386,6 +390,7 @@ return function(env)
 
 		local url = registry.endpoint(record, "/chat/completions")
 		local headers = registry.authHeaders(record)
+		for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
 		for key, value in pairs(record.headers or {}) do headers[key] = value end
 		headers["Accept"] = wantStream and "text/event-stream" or "application/json"
 

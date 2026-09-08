@@ -144,10 +144,12 @@ return function(env)
 			end
 		end
 
-		local function revealAgent(text)
+		-- Progressive reveal. Live only, never on replay: an old message re-typed
+		-- out on open is a replay of the interface rather than of the conversation.
+		local function revealAgent(text, animate)
 			local handle = message.agent(scroll.instance, "", nextOrder())
 			view.agentHandle = handle
-			if responsive.reduceMotion then
+			if not animate or responsive.reduceMotion then
 				handle.setText(text)
 				follow()
 				return handle
@@ -249,14 +251,17 @@ return function(env)
 				local into, order = target()
 				message.reasoning(into, event.text, order)
 				follow()
-			elseif event.kind == "assistant:text" then
-				if util.trim(event.text) ~= "" then
-					stopReveal(true)
-					clearWorking()
-					closeRun()
-					revealAgent(event.text)
-					follow()
-				end
+		elseif event.kind == "assistant:text" then
+			if util.trim(event.text) ~= "" then
+				stopReveal(true)
+				clearWorking()
+				closeRun()
+				-- The reveal is for a reply that is landing now. A message replayed out
+				-- of the log arrived long ago and goes up whole, or reopening a panel
+				-- would re-type the entire conversation.
+				revealAgent(event.text, view.replaying ~= true)
+				follow()
+			end
 			elseif event.kind == "tool:call" then
 				-- The working row deliberately survives a tool call: it is the "this
 				-- turn is still running" indicator and it sorts last, so it stays put

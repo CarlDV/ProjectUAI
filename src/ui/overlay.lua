@@ -422,6 +422,7 @@ return function(env)
 		if not modal then return nil end
 
 		local field = P.field(modal.content, {
+			name = "PromptField",
 			placeholder = props.placeholder or "",
 			text = props.value or "",
 			layoutOrder = 1,

@@ -553,6 +553,12 @@ return function(env)
 			layoutOrder = order or 0,
 		})
 		byline(holder, { name = localName(), layoutOrder = 1 })
+		-- The accent rule down the left edge is what marks the turn as sent. At the
+		-- bubble's own corner radius it was a straight orange spike sticking out past
+		-- the rounded top and bottom -- so a message that was otherwise a soft card
+		-- opened with a hard nail driven through it. The rule is rounded to match, and
+		-- it is inset a hairline on both axes so it sits inside the stroke rather
+		-- than on top of it.
 		local body = ruled(holder, {
 			name = "Bubble",
 			bg = theme.color.bubbleUser,
@@ -561,7 +567,7 @@ return function(env)
 			color = theme.color.accent,
 			width = theme.stroke.focus,
 			ruleAt = theme.space.hair,
-			ruleRadius = theme.radius.pill,
+			ruleRadius = math.max(theme.radius.md - theme.space.hair, 0),
 			inset = theme.space.md,
 			padRight = theme.space.md,
 			padY = theme.space.sm,

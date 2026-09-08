@@ -73,6 +73,14 @@ return function(env)
 			-- moved, and "off" sends no field at all. Clamped per model, because the
 			-- scales differ by generation -- "xhigh" did not exist before Opus 4.7.
 			effort = "high",
+			-- Manual capability claims, keyed by lowercased model id. No endpoint
+			-- publishes what a relayed id can do, so this is the user's word against
+			-- nothing: `forceReasoning` makes the adapters ask a model to think, and
+			-- `forceContext` states its window, which both the badge and the context
+			-- budget slider then read. Effort follows reasoning: a model forced to
+			-- think gets the effort scale even where the table documents none.
+			forceReasoning = {},
+			forceContext = {},
 			maxTokens = 4096,
 			-- Characters, not tokens, and it is the last word on how much of a tool
 			-- result reaches the model. Eight thousand rather than four so that the

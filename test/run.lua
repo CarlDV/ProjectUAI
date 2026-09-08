@@ -39,6 +39,11 @@ local function truthy(label, value, detail)
 	report(value and true or false, label, (not value) and (detail or "value was falsy") or nil)
 end
 
+-- The negative of truthy, for asserting an absence rather than a presence.
+local function falsy(label, value)
+	report(not value, label, value ~= nil and ("got " .. tostring(value)) or nil)
+end
+
 local function contains(label, haystack, needle)
 	local found = type(haystack) == "string" and haystack:find(needle, 1, true) ~= nil
 	report(found, label, found and nil
@@ -123,7 +128,7 @@ local function bootWith(opts)
 	harness.settle(1)
 
 	if opts.provider ~= false then
-		local record = handle.providers.blank("custom")
+		local record = handle.providers.blank(opts.preset or "custom")
 		record.label = opts.label or "Harness"
 		record.baseUrl = opts.baseUrl or "https://harness.test/v1"
 		record.apiKey = "sk-harness-key-1234"
@@ -2847,6 +2852,70 @@ scenario("reasoning arrives open, sized, and answers its switch", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+-- 23b. Hand-declared capabilities ----------------------------------------
+
+-- No endpoint publishes what a relayed model id can do, so before this the honest
+-- answer for every unknown id was "no reasoning, no badge, no effort" -- on exactly
+-- the models a user brings from a gateway. The two manual claims are the user's
+-- word against that silence, and they have to reach the wire.
+scenario("reasoning and a context window can be declared by hand", function()
+	local requests = {}
+	local harness, handle = bootWith({
+		model = "relay/unknown-large-model",
+		handler = function(entry)
+			if tostring(entry.url):find("/chat/completions") then
+				requests[#requests + 1] = json.decode(entry.body)
+				return { StatusCode = 200, Body = chatBody({ content = "Fine." }) }
+			end
+			return { StatusCode = 404, Body = "{}" }
+		end,
+	})
+	local traits = handle.env.require("provider/traits")
+
+	falsy("an unknown id documents nothing", traits.thinkingStyle("relay/unknown-large-model"))
+	falsy("and earns no badge", traits.badge("relay/unknown-large-model"))
+	falsy("so no effort is sent to it", requests[1] and requests[1].reasoning_effort)
+
+	-- The claim lives in the model picker, the surface behind the composer's chip.
+	harness.click(harness.byName("ModelChip"))
+	harness.settle(2)
+	truthy("the picker states it is a guess-free list",
+		harness.byName("NoEffort") ~= nil, harness.dump())
+
+	local claim = harness.byName("ForceReasoning")
+	truthy("a model row offers a reasoning claim", claim ~= nil, harness.dump())
+	harness.click(claim)
+	harness.settle(2)
+	check("which is recorded against this model",
+		handle.config.get("agent.forceReasoning")["relay/unknown-large-model"], true)
+	check("and read back as a thinking style",
+		traits.thinkingStyle("relay/unknown-large-model"), "adaptive")
+	check("so the effort setting now goes out",
+		traits.nearestEffort("relay/unknown-large-model", "high"), "high")
+
+	-- A declared context window is what the badge shows and the slider works against.
+	local window = harness.byName("ForceContext")
+	truthy("and a context claim", window ~= nil, harness.dump())
+	harness.click(window)
+	harness.settle(2)
+	local fieldBox = harness.byName("PromptField")
+	local box = fieldBox and fieldBox:FindFirstChildOfClass("TextBox")
+	truthy("the claim opens a field", box ~= nil)
+	box.Text = "1000000"
+	if box.__signals and box.__signals.FocusLost then
+		box.__signals.FocusLost:Fire(true)
+	end
+	harness.settle(2)
+	check("the window is remembered",
+		handle.config.get("agent.forceContext")["relay/unknown-large-model"], 1000000)
+	check("and read back by the traits module",
+		traits.contextWindow("relay/unknown-large-model"), 1000000)
+	check("with the badge to match", traits.badge("relay/unknown-large-model"), "1M")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 -- 24. Quick chat ----------------------------------------------------------
 
 scenario("quick chat opens on a keypress and sends to the same conversation", function()
@@ -3674,8 +3743,18 @@ scenario("a phone can still reach every panel and conversation", function()
 	contains("listing the panels", text, "Providers")
 	contains("a new conversation", text, "New conversation")
 	contains("and the conversations themselves", text, "the first one")
+	contains("with the exit a phone has no other road to", text, "Unload UAI")
 
+	-- A conversation row is a folder of actions on a phone, because a phone has no
+	-- sidebar and therefore no ellipsis: the same open / rename / delete the desktop
+	-- row offers, one level deep.
 	harness.click(harness.byName("Option_session:" .. tostring(first)))
+	harness.settle(1)
+	local actions = harness.byName("MenuLayer")
+	truthy("the row opens its own actions", actions ~= nil)
+	contains("offering a rename", harness.textOf(actions), "Rename")
+	contains("and a delete", harness.textOf(actions), "Delete")
+	harness.click(harness.byName("Option_open"))
 	harness.settle(1)
 	check("one of which can be opened", handle.sessions.activeId, first)
 
@@ -4954,6 +5033,120 @@ scenario("OpenRouter requests carry Project UAI app attribution and disable Clau
 	check("stainless lang header is suppressed", headers["X-Stainless-Lang"], nil)
 	check("stainless runtime header is suppressed", headers["X-Stainless-Runtime"], nil)
 	check("stainless package header is suppressed", headers["X-Stainless-Package-Version"], nil)
+end)
+
+-- OpenCode Zen: the relay meters and routes by the session headers the OpenCode
+-- TUI sends, and answers MissingSessionID without them. The headers belong to the
+-- Zen record alone -- nowhere else in the client do they appear, because a header
+-- a relay never asked for is one more thing to explain in a rejection.
+scenario("an OpenCode Zen record presents the identity the relay expects", function()
+	local requests = {}
+	local harness, handle = bootWith({
+		preset = "zen",
+		baseUrl = "https://opencode.ai/zen/v1",
+		handler = function(entry)
+			if tostring(entry.url):find("/chat/completions") then
+				requests[#requests + 1] = { headers = entry.headers, body = json.decode(entry.body) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "From Zen." }) }
+		end,
+	})
+	local record = handle.providers.active()
+
+	handle.sessions.current().send("test zen")
+	harness.settle(6)
+
+	check("one request was sent", #requests, 1)
+	local headers = requests[1] and requests[1].headers or {}
+	contains("carrying a session id the relay accepts",
+		tostring(headers["x-opencode-session"] or ""), "ses_")
+	truthy("a per-request id",
+		tostring(headers["x-opencode-request"] or ""):find("^req_") ~= nil)
+	check("naming the client the relay gates on", headers["x-opencode-client"], "opencode")
+	contains("with the OpenCode user agent",
+		tostring(headers["User-Agent"] or ""), "opencode/")
+	-- The preset turns the Claude Code identity off for this record, so what is on
+	-- the wire is the OpenCode TUI and nothing else.
+	check("the record carries no claude identity flag", record.claudeUa, false)
+	check("the claude cli marker header is absent", headers["x-app"], nil)
+	check("the stainless language header is absent", headers["X-Stainless-Lang"], nil)
+
+	-- The session id is sticky: the relay hashes it to pick an upstream, so a new
+	-- one per request would scatter one conversation across every provider it has.
+	local first = headers["x-opencode-session"]
+	handle.sessions.current().send("a second turn")
+	harness.settle(6)
+	local second = requests[2] and requests[2].headers["x-opencode-session"]
+	check("the second turn keeps the same session", second, first)
+
+	-- The gate is the base URL, not the preset: a custom record pointed at the
+	-- relay by hand -- the shape a config saved before the preset existed has --
+	-- has to carry the same headers, or the relay rejects it with MissingSessionID
+	-- exactly the way it rejected this client before the headers existed.
+	local hand = handle.providers.blank("custom")
+	hand.label = "Hand-typed Zen"
+	hand.baseUrl = "https://opencode.ai/zen/v1"
+	hand.apiKey = "sk-hand"
+	hand.model = "m"
+	hand.models = { "m" }
+	handle.providers.save(hand)
+	harness.settle(2)
+	handle.providers.setActive(hand.id)
+	handle.sessions.current().send("typed by hand")
+	harness.settle(6)
+	local third = requests[3] and requests[3].headers or {}
+	contains("a hand-typed record carries the session header too",
+		tostring(third["x-opencode-session"] or ""), "ses_")
+	check("with the client the relay gates on", third["x-opencode-client"], "opencode")
+
+	-- And nowhere else: the same client talking to an unrelated host sends none
+	-- of these, because a header a relay never asked for is one more thing to
+	-- explain in a rejection.
+	local other = handle.providers.blank("custom")
+	other.label = "Somewhere else"
+	other.baseUrl = "https://harness.test/v1"
+	other.apiKey = "sk-other"
+	other.model = "m"
+	other.models = { "m" }
+	handle.providers.save(other)
+	harness.settle(2)
+	handle.providers.setActive(other.id)
+	handle.sessions.current().send("not zen")
+	harness.settle(6)
+	local fourth = requests[4] and requests[4].headers or {}
+	check("an unrelated host gets no session header", fourth["x-opencode-session"], nil)
+	check("and no opencode client header", fourth["x-opencode-client"], nil)
+end)
+
+-- Azure AI Foundry: the v1 endpoint of a Foundry resource, which speaks plain
+-- chat completions with the api-key header the classic Azure preset already used.
+scenario("an Azure AI Foundry preset exists and authenticates the Azure way", function()
+	local catalog = nil
+	local harness, handle = bootWith({
+		preset = "azure-foundry",
+		baseUrl = "https://my-resource.openai.azure.com/openai/v1",
+		handler = function(entry)
+			return { StatusCode = 200, Body = chatBody({ content = "From Foundry." }) }
+		end,
+	})
+	catalog = handle.env.require("provider/catalog")
+
+	local preset = catalog.get("azure-foundry")
+	truthy("the preset exists", preset ~= nil)
+	contains("pointing at the v1 surface", preset.baseUrl, "/openai/v1")
+	check("authenticating with the api-key header", preset.authStyle, "api-key")
+
+	local record = handle.providers.active()
+	handle.sessions.current().send("test foundry")
+	harness.settle(6)
+	local requests = chatRequests(harness)
+	check("one request was sent", #requests, 1)
+	local headers = requests[1] and requests[1].headers or {}
+	check("with the Azure key header", headers["api-key"], "sk-harness-key-1234")
+	-- The v1 surface takes the model from the body like every OpenAI-compatible
+	-- endpoint, unlike the per-deployment preview path.
+	local body = requests[1] and json.decode(requests[1].body) or {}
+	check("and the model in the body", body.model, "harness-model")
 end)
 
 print(("="):rep(72))

@@ -635,12 +635,14 @@ return function(env)
 				end
 				-- The effort actually sent, which is the setting clamped to what this
 				-- model offers -- "Max" on a model whose scale stops at high is high, and
-				-- saying Max would be reporting the setting rather than the request.
+				-- saying Max would be reporting the setting rather than the request. A
+				-- model marked by hand as a reasoner has no documented scale to clamp
+				-- against, so the setting is the request exactly as it stands.
 				local wanted = tostring(config.get("agent.effort", "high"))
 				local levels = traits.effortLevels(model)
 				local sending = wanted
 				if levels then sending = traits.nearestEffort(model, wanted) or wanted end
-				if levels == nil and model ~= "" then
+				if levels == nil and model ~= "" and not traits.thinkingStyle(model) then
 					effortLabel.Text = ""
 				else
 					effortLabel.Text = (sending:gsub("^%l", string.upper))

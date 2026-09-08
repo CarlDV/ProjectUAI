@@ -11,6 +11,8 @@
 -- every one of them. Only families this client has a documented fact about appear;
 -- an unknown id resolves to an empty trait set, which means "behave as before".
 return function(env)
+	local config = env.require("runtime/config")
+
 	local M = {}
 
 	-- context  the input window, in tokens.
@@ -56,6 +58,25 @@ return function(env)
 
 	local EMPTY = {}
 
+	-- What the user has told this client to assume about a model id, in place of
+	-- what this table documents. Gateways relay ids this table has never heard of
+	-- -- "openrouter/qwen3-235b", a relay's own spelling of a frontier model -- and
+	-- the honest answer to those used to be "no reasoning, no badge", when the user
+	-- knows perfectly well the model behind the id thinks and holds a million tokens.
+	-- `agent.forceReasoning` / `agent.forceContext` are those two claims, keyed by
+	-- the lowercased model id. A forced context also feeds what the sliders clamp
+	-- against, which is what makes a 1M setting real rather than decorative.
+	local function forced(model)
+		local id = tostring(model or ""):lower()
+		if id == "" then return nil end
+		local reasoning = config.get("agent.forceReasoning", {}) or {}
+		local contexts = config.get("agent.forceContext", {}) or {}
+		return {
+			thinking = reasoning[id] == true and "adaptive" or nil,
+			context = tonumber(contexts[id]) or nil,
+		}
+	end
+
 	function M.of(model)
 		local id = tostring(model or ""):lower()
 		if id == "" then return EMPTY end
@@ -69,7 +90,9 @@ return function(env)
 	end
 
 	function M.contextWindow(model)
-		return M.of(model).context
+		local id = tostring(model or ""):lower()
+		local over = tonumber((config.get("agent.forceContext", {}) or {})[id])
+		return over or M.of(model).context
 	end
 
 	function M.maxOutput(model)
@@ -98,7 +121,13 @@ return function(env)
 
 	function M.nearestEffort(model, wanted)
 		local levels = M.effortLevels(model)
-		if not levels then return nil end
+		-- A model with no documented scale but a manual reasoning claim has no
+		-- levels to clamp against, so the wanted level passes through: the user
+		-- said it reasons, and this client has no basis to round them down.
+		if not levels then
+			if M.thinkingStyle(model) then return tostring(wanted or "") ~= "" and wanted or nil end
+			return nil
+		end
 		local target = RANK[tostring(wanted or ""):lower()]
 		if not target then return nil end
 		local best
@@ -113,6 +142,10 @@ return function(env)
 	end
 
 	function M.thinkingStyle(model)
+		local id = tostring(model or ""):lower()
+		if (config.get("agent.forceReasoning", {}) or {})[id] == true then
+			return "adaptive"
+		end
 		return M.of(model).thinking
 	end
 
@@ -121,7 +154,8 @@ return function(env)
 	end
 
 	-- A short badge for the model pickers: "1M", "200K". Nil when unknown, so a
-	-- row for an id this table has never heard of simply has no badge.
+	-- row for an id this table has never heard of simply has no badge. A manually
+	-- declared context is a fact the user stated, so it earns the same badge.
 	function M.badge(model)
 		local context = M.contextWindow(model)
 		if not context then return nil end

@@ -743,9 +743,17 @@ return function(env)
 		options[#options + 1] = { divider = true }
 		options[#options + 1] = { label = "New conversation", value = "new", icon = "plus" }
 		options[#options + 1] = { label = "Search conversations", value = "search", icon = "search" }
+		-- The one thing a phone has no other road to: with no sidebar there is no
+		-- profile row, and Settings is several taps deeper. Unload is offered here
+		-- so every layout mode can reach the same exit.
+		options[#options + 1] = { label = "Unload UAI", value = "unload", icon = "signOut", tone = "bad" }
 
 		-- With no sidebar there is nowhere else the conversation list can be, and a
 		-- phone is exactly where someone is most likely to be picking up an older one.
+		-- Every conversation carries the same actions its sidebar row has -- open,
+		-- rename, delete -- because a phone without them is a phone that can look at
+		-- its history but never manage it. The submenu is one level deep, opened from
+		-- the row it belongs to, rather than a fourth flat option per conversation.
 		if not M.sidebarVisible() then
 			local recent = sessions.list()
 			if #recent > 0 then options[#options + 1] = { divider = true } end
@@ -757,21 +765,93 @@ return function(env)
 					detail = session.placeName,
 					selected = session.id == sessions.activeId,
 					icon = "circleHollow",
+					chevron = true,
 				}
 			end
+		end
+
+		-- A conversation row with a chevron opens its own menu: the same actions the
+		-- sidebar's ellipsis offers, from the place a phone has them. Renaming and
+		-- deleting are not desktop-only features; a phone is where the history is
+		-- most likely to need pruning.
+		local function sessionActions(session, target)
+			overlay.menu({
+				target = target,
+				width = theme.size.menu,
+				options = {
+					{ isHeader = true, title = session.title, subtitle = session.placeName },
+					{ label = "Open", value = "open", icon = "arrowRight" },
+					{ label = "Rename", value = "rename", icon = "document" },
+					{ label = "Delete", value = "delete", icon = "trash", tone = "bad" },
+				},
+				onSelect = function(value)
+					if value == "open" then
+						M.openSession(session.id)
+					elseif value == "rename" then
+						overlay.prompt({
+							title = "Rename this conversation",
+							description = "The transcript is untouched; only what the list calls it changes.",
+							placeholder = "a short title",
+							value = session.title,
+							confirmText = "Rename",
+							onConfirm = function(text)
+								local ok, why = session.rename(text)
+								if not ok then overlay.toast(tostring(why), "warn", 2) end
+							end,
+						})
+					elseif value == "delete" then
+						overlay.confirm({
+							title = "Delete this conversation?",
+							description = "The transcript and its file are both removed. This cannot be undone.",
+							confirmText = "Delete",
+							danger = true,
+							onConfirm = function()
+								sessions.remove(session.id)
+								M.openSession(sessions.current().id)
+							end,
+						})
+					end
+				end,
+			})
 		end
 
 		overlay.menu({
 			target = target,
 			width = theme.size.menuWide,
 			options = options,
-			onSelect = function(value)
+			onSelect = function(value, option)
 				if value == "new" then
 					M.openSession(sessions.newThread().id)
 				elseif value == "search" then
 					M.showSearch()
+				elseif value == "unload" then
+					overlay.confirm({
+						title = "Unload UAI?",
+						description = "Stops the current turn, drains every timer and input handler, "
+							.. "saves your settings and removes the interface. Run the loader again to come back.",
+						confirmText = "Unload",
+						danger = true,
+						onConfirm = function()
+							local globals = (type(getgenv) == "function") and getgenv() or nil
+							local live = globals and globals.UAI
+							if live and live.destroy then
+								live.destroy()
+							else
+								dispose.drain()
+								pcall(function() M.screen:Destroy() end)
+							end
+						end,
+					})
 				elseif util.startsWith(tostring(value), "session:") then
-					M.openSession(tostring(value):sub(9))
+					local id = tostring(value):sub(9)
+					local session = sessions.threads[id]
+					-- A row with a chevron is a folder of actions rather than a straight
+					-- open; the menu it opens is anchored to this one, so it has a target.
+					if session and option and option.chevron and target then
+						sessionActions(session, target)
+					else
+						M.openSession(id)
+					end
 				else
 					M.show(value)
 				end
@@ -788,6 +868,9 @@ return function(env)
 			name = env.plr.Name
 		end
 		local record = providers.active()
+		-- Unload is a full client feature, not a desktop one: a phone has no sidebar
+		-- and therefore no profile row, so without it here the only way off the
+		-- screen on mobile was to close the window and leave everything running.
 		overlay.menu({
 			target = target,
 			width = theme.size.menuWide,

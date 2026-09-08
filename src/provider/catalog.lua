@@ -41,6 +41,33 @@ return function(env)
 			note = "Lists several hundred models. Fetch them and pick, or type the id shown on openrouter.ai.",
 		},
 		{
+			id = "zen",
+			label = "OpenCode Zen",
+			baseUrl = "https://opencode.ai/zen/v1",
+			authStyle = "bearer",
+			keyHint = "public or a key from opencode.ai/zen",
+			docs = "https://opencode.ai/zen",
+			-- The relay routes and meters by the session headers OpenCode's own TUI
+			-- sends, and answers MissingSessionID without them. They are applied by URL
+			-- detection in provider/registry, so any record pointing at opencode.ai
+			-- carries them -- this preset, a pasted URL, a record from before it existed.
+			-- The relay expects the OpenCode TUI, so the Claude Code identity is not sent
+			-- to it either.
+			claudeUa = false,
+			note = "OpenCode's relay. 'public' as the key uses the free anonymous tier; a key from opencode.ai/zen lifts the limits.",
+		},
+		{
+			id = "azure-foundry",
+			label = "Azure AI Foundry",
+			-- The v1 surface rather than the per-deployment preview path: it speaks
+			-- /chat/completions and /models, so this client needs no adapter of its own.
+			-- The resource name is part of the URL the user has to edit.
+			baseUrl = "https://YOUR-RESOURCE.openai.azure.com/openai/v1",
+			authStyle = "api-key",
+			docs = "https://learn.microsoft.com/azure/ai-foundry/",
+			note = "The v1 endpoint of an Azure AI Foundry resource. Replace YOUR-RESOURCE, then fetch models or type a deployment name.",
+		},
+		{
 			id = "anthropic-messages",
 			label = "Anthropic (Messages API)",
 			baseUrl = "https://api.anthropic.com/v1",

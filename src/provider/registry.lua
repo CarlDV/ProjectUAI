@@ -74,6 +74,47 @@ return function(env)
 		return { ["Authorization"] = "Bearer " .. key }
 	end
 
+	-- The identity OpenCode's own TUI presents to the Zen relay, and whether this
+	-- record is talking to it.
+	--
+	-- Detection is by base URL rather than by a field the record carries, because a
+	-- record can reach the relay without the preset: a base URL pasted by hand, a
+	-- record saved before the preset existed. `opencode.ai` is the relay's host and
+	-- nothing else this client knows about answers there, which is the same basis
+	-- the OpenRouter detection in net/http uses.
+	function M.isOpencode(record)
+		local base = tostring(record and record.baseUrl or ""):lower()
+		return base:find("opencode.ai", 1, true) ~= nil
+	end
+
+	-- The headers themselves. Scoped by isOpencode, so no other endpoint sees them.
+	--
+	-- The session id is stable per record on purpose: the relay's sticky-provider
+	-- routing hashes it, so a fresh id per request would scatter one conversation
+	-- across every upstream it has. It is stored in the record so a restart keeps the
+	-- same affinity rather than starting a new one mid-conversation. This client has
+	-- no uuid4; a hex string from the clock is an id the relay never inspects beyond
+	-- its last four characters.
+	function M.opencodeHeaders(record)
+		if not M.isOpencode(record) then return {} end
+		local version = "1.0.118"
+		if type(record.opencode) == "table" and record.opencode.version then
+			version = tostring(record.opencode.version)
+		end
+		if util.trim(record.opencodeSession or "") == "" then
+			record.opencodeSession = string.format("ses_%08x%04x",
+				math.floor((tonumber(tostring(os.time())) or 0) % 4294967296),
+				math.floor(clock.ms() % 65536))
+			M.save(record, { quiet = true })
+		end
+		return {
+			["x-opencode-session"] = record.opencodeSession,
+			["x-opencode-request"] = string.format("req_%08x", math.floor(clock.ms() % 4294967296)),
+			["x-opencode-client"] = "opencode",
+			["User-Agent"] = "opencode/" .. version,
+		}
+	end
+
 	-- A record always has every field, so no consumer needs a nil check.
 	function M.blank(presetId)
 		local preset = catalog.get(presetId or "custom") or catalog.get("custom")
@@ -92,8 +133,12 @@ return function(env)
 			headers = util.deepCopy(preset.headers or {}),
 			params = util.deepCopy(preset.params or {}),
 			query = util.deepCopy(preset.query or {}),
+
 			stream = true,
-			claudeUa = preset.claudeUa ~= nil and preset.claudeUa or true,
+			-- `~= false` rather than an and/or chain: `(x == false) and false or true`
+			-- is still true when x is false, which is the trap both forms of this line
+			-- fell into. A preset's deliberate `false` has to survive the copy.
+			claudeUa = preset.claudeUa ~= false,
 			enabled = true,
 			order = 0,
 			wsUrl = "",

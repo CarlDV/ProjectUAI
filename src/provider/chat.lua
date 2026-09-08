@@ -42,7 +42,9 @@ return function(env)
 	function M.headers(record)
 		local adapter = M.adapterFor(record)
 		if adapter.headers then return adapter.headers(record) end
-		local headers = env.require("provider/registry").authHeaders(record)
+		local registry = env.require("provider/registry")
+		local headers = registry.authHeaders(record)
+		for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
 		for key, value in pairs(record.headers or {}) do headers[key] = value end
 		return headers
 	end
