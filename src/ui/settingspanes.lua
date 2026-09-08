@@ -166,6 +166,11 @@ return function(env)
 			hint = "The greeting and the counters an empty conversation opens with.",
 			path = "ui.showActivity",
 		})
+		R.toggle(appearance, {
+			label = "Notify while minimized",
+			hint = "A toast when a turn finishes, fails or is stopped with the window closed -- from any conversation. The count on the launcher appears either way.",
+			path = "ui.notifications",
+		})
 
 		-- Built here rather than after the section below it, because nothing in this
 		-- card sets a layout order: the rows appear in the order they are created, and a

@@ -100,6 +100,10 @@ return function(env)
 		end
 
 		local filter = ""
+		-- Whether the model list is narrowed to ids that name themselves free. A
+		-- gateway's catalogue is enormous -- Zen and OpenRouter both serve hundreds of
+		-- ids -- and "free" is the substring the free ones reliably carry.
+		local freeOnly = false
 		local render
 
 		-- A section: a quiet heading with a count beside it, then the rows under it.
@@ -297,7 +301,11 @@ return function(env)
 			local shown = {}
 			local needle = util.trim(filter):lower()
 			for _, id in ipairs(known) do
-				if needle == "" or tostring(id):lower():find(needle, 1, true) then
+				if needle ~= "" and not tostring(id):lower():find(needle, 1, true) then
+					-- skip
+				elseif freeOnly and not tostring(id):lower():find("free", 1, true) then
+					-- skip
+				else
 					shown[#shown + 1] = id
 				end
 			end
@@ -326,33 +334,49 @@ return function(env)
 						pcall(field.focus)
 					end)
 				end
-			end
 
-			if #known == 0 then
-				local note = P.text(modelRows, {
-					name = "NoModels",
-					text = "Nothing known yet. Ask the endpoint for its list, or add an id by hand -- "
-						.. "this client never guesses one.",
-					role = "caption",
-					color = theme.color.textTertiary,
-					wrap = true,
-					auto = "Y",
-					padding = { x = theme.space.sm, y = theme.space.xs },
-					layoutOrder = 1,
-				})
-				note.Size = UDim2.new(1, 0, 0, 0)
-			elseif #shown == 0 then
-				local note = P.text(modelRows, {
-					name = "NoMatch",
-					text = "Nothing matched " .. util.trim(filter) .. ".",
-					role = "caption",
-					color = theme.color.textTertiary,
-					wrap = true,
-					auto = "Y",
-					padding = { x = theme.space.sm, y = theme.space.xs },
-					layoutOrder = 1,
-				})
-				note.Size = UDim2.new(1, 0, 0, 0)
+				-- The free-only toggle, beside the filter it narrows further. A chip rather
+				-- than a menu item because it is a view of the same list, not an action on
+				-- it -- and it says how much it is hiding, so the count is not a surprise.
+				local freeCount = 0
+				for _, id in ipairs(known) do
+					if tostring(id):lower():find("free", 1, true) then freeCount = freeCount + 1 end
+				end
+				if freeCount > 0 then
+					local chipRow = P.row(modelRows, {
+						name = "FreeChipRow",
+						size = UDim2.new(1, 0, 0, 0),
+						auto = "Y",
+						layoutOrder = 0,
+					})
+					local chip = P.rowButton(chipRow, {
+						name = "FreeOnly",
+							auto = "X",
+						height = theme.size.chip,
+						size = UDim2.fromOffset(0, theme.size.chip),
+						bg = freeOnly and theme.color.accentSurface or theme.color.surface,
+						stroke = true,
+						strokeColor = freeOnly and theme.color.accentBorder or theme.color.borderSubtle,
+						radius = theme.radius.sm,
+						gap = theme.space.xxs,
+						padding = { x = theme.space.xs },
+						onClick = function()
+							freeOnly = not freeOnly
+							render()
+						end,
+					})
+					chip.icon("circleHollow", 1,
+						freeOnly and theme.color.accentHot or theme.color.textTertiary,
+						theme.size.icon - theme.space.hair)
+					P.text(chip.row, {
+						name = "FreeOnlyLabel",
+						text = string.format("free only  %d of %d", freeCount, #known),
+						role = "caption",
+						color = freeOnly and theme.color.accentHot or theme.color.textSecondary,
+						auto = "X",
+						layoutOrder = 2,
+					})
+				end
 			end
 
 			for index, id in ipairs(shown) do
@@ -528,12 +552,38 @@ return function(env)
 					end)
 				end,
 			})
+			-- Keep only the ids that name themselves free. A fetched catalogue is a
+			-- cache, not a commitment: this prunes the record's own list to the free
+			-- ids so the picker opens short next time, and the ids dropped were never
+			-- saved -- only fetched -- so a later fetch brings the full list back.
+			local freeIds = {}
+			for _, id in ipairs(models.list(record)) do
+				if tostring(id):lower():find("free", 1, true) then freeIds[#freeIds + 1] = id end
+			end
+			if #freeIds > 0 then
+				P.button(modal.footer, {
+					name = "KeepFreeModels",
+					text = "Keep only free",
+					variant = "ghost",
+					size = "sm",
+					layoutOrder = 2,
+					onClick = function()
+						record.models = util.deepCopy(freeIds)
+						record.model = freeIds[1]
+						providers.save(record, { force = true })
+						notify()
+						overlay.toast(string.format("Kept %s -- the rest were only fetched, never saved",
+							util.pluralise(#freeIds, "free model")), "good", 3)
+						if not modal.closed then render() end
+					end,
+				})
+			end
 			P.button(modal.footer, {
 				name = "AddModel",
 				text = "Add an id",
 				variant = "ghost",
 				size = "sm",
-				layoutOrder = 2,
+				layoutOrder = 3,
 				onClick = function()
 					overlay.prompt({
 						title = "Add a model to " .. record.label,
@@ -557,7 +607,7 @@ return function(env)
 			text = "Manage",
 			variant = "ghost",
 			size = "sm",
-			layoutOrder = 3,
+			layoutOrder = 4,
 			onClick = function()
 				modal.close()
 				env.require("ui/app").show("providers")
@@ -568,7 +618,7 @@ return function(env)
 			text = "Done",
 			variant = "primary",
 			size = "sm",
-			layoutOrder = 4,
+			layoutOrder = 5,
 			onClick = function() modal.close() end,
 		})
 

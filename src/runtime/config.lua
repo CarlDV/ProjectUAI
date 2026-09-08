@@ -46,6 +46,10 @@ return function(env)
 			sidebarExpanded = false,
 			showActivity = true,
 			activityRange = "all",
+			-- Whether a minimized client still gets toasts when a turn finishes, fails
+			-- or is stopped. The launcher badge happens either way; this is only the
+			-- floating text.
+			notifications = true,
 			window = { width = 0, height = 0, x = 0, y = 0, maximised = false, placed = false },
 			mobilePanel = { width = 0, height = 0, x = 0, y = 0, placed = false },
 			launcher = { x = 0, y = 0, placed = false },

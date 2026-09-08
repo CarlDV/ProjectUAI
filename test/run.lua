@@ -2916,6 +2916,83 @@ scenario("reasoning and a context window can be declared by hand", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+-- 23c. Notifications while minimized --------------------------------------
+
+-- The window can be closed for a whole turn and the only sign anything happened
+-- was a dot already pulsing while it ran. A finished answer, a failure and a stop
+-- are the three outcomes someone minimized is waiting on, from any conversation.
+scenario("a minimized client is told when a turn finishes", function()
+	local harness, handle = bootWith({
+		handler = function()
+			return { StatusCode = 200, Body = chatBody({ content = "All done, here is your answer." }) }
+		end,
+	})
+
+	-- Minimized, a turn runs to completion.
+	handle.app.hide()
+	harness.settle(1)
+	truthy("the window is closed", not handle.app.window.visible)
+	handle.sessions.current().send("a long question")
+	-- Short: the toast lives 4.5s and the mock settles until nothing is pending,
+	-- which includes the toast's own timer -- a long settle would wait for it to
+	-- close and the check below would race exactly the thing it asserts.
+	harness.settle(2)
+
+	-- The toast: the overlay layer lives on the ScreenGui, not the window, so it
+	-- shows over the game with the window closed.
+	contains("a toast announced the answer", harness.textOf(), "All done")
+	contains("naming what happened", harness.textOf(), "answered")
+	harness.settle(10)
+
+	-- The badge: the count on the launcher, which survives however long the user
+	-- takes to look.
+	local badge = harness.byName("LauncherBadge")
+	truthy("the launcher carries a badge", badge ~= nil, harness.dump())
+	check("and it is visible", badge and badge.Visible, true)
+	check("counting one missed notification", harness.byName("LauncherBadgeCount").Text, "1")
+	-- And the durable record of what was missed, which is what a future history of
+	-- these notifications would be built from.
+	local noted = handle.app.notifications and handle.app.notifications[1]
+	contains("recording the reply", noted and noted.text or "", "All done")
+	check("from this conversation", noted and noted.sessionId, handle.sessions.activeId)
+
+	-- Opening the window is reading them, so they clear.
+	handle.app.show()
+	harness.settle(2)
+	truthy("the badge is gone once the window opens",
+		harness.byName("LauncherBadge") == nil or harness.byName("LauncherBadge").Visible == false)
+	check("and the list with it", #(handle.app.notifications or {}), 0)
+
+	-- With the window open there is no toast: the transcript is the notification,
+	-- and a toast on top of it is the same information twice.
+	local before = #chatRequests(harness)
+	handle.sessions.current().send("another question while open")
+	harness.settle(10)
+	truthy("the turn ran", #chatRequests(harness) > before)
+	contains("and answered on screen", harness.textOf(), "All done")
+
+	-- A failure while minimized is its own kind of notification.
+	handle.app.hide()
+	harness.settle(1)
+	handle.sessions.current().send("this one will fail")
+	harness.settle(10)
+	check("the badge counts it", harness.byName("LauncherBadgeCount").Text, "1")
+
+	-- The setting turns the toasts off; the badge still happens, because the
+	-- launcher is where "something happened while you were away" belongs.
+	handle.config.set("ui.notifications", false)
+	handle.app.show()
+	harness.settle(2)
+	handle.app.hide()
+	harness.settle(1)
+	handle.sessions.current().send("a quiet one")
+	harness.settle(10)
+	truthy("the badge still appears", harness.byName("LauncherBadge").Visible == true)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
 -- 24. Quick chat ----------------------------------------------------------
 
 scenario("quick chat opens on a keypress and sends to the same conversation", function()

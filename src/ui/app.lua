@@ -155,6 +155,63 @@ return function(env)
 			M.syncNav()
 		end), "app.busyPulse")
 
+		-- Notifications for the minimized client ---------------------------------
+		--
+		-- The window can be closed for the whole of a long turn, and until now the only
+		-- sign anything happened was a dot that was already pulsing while it ran. A
+		-- finished answer, a failed request and a stopped turn are the three things
+		-- someone minimized is waiting on, and they can come from any conversation --
+		-- switching away does not stop the one you left.
+		--
+		-- Two outputs: a toast (the overlay layer sits on the ScreenGui, not the window,
+		-- so it shows over the game with the window closed) and a count on the launcher
+		-- that survives however long the user takes to look.
+		M.notifications = {}
+		local function note(kind, text, tone, session)
+			local entry = {
+				kind = kind,
+				text = text,
+				tone = tone,
+				-- The conversation it came from, so opening it is one tap from wherever
+			-- these are shown. Nil for things that are not a conversation's.
+				sessionId = session and session.id or nil,
+				at = clock.ms(),
+			}
+			M.notifications[#M.notifications + 1] = entry
+			-- Bounded, same reasoning as the request history: an overnight session
+			-- would otherwise pile hundreds onto a list nobody scrolls.
+			while #M.notifications > 30 do table.remove(M.notifications, 1) end
+			M.setLauncherBadge(#M.notifications)
+			if config.get("ui.notifications", true) ~= false then
+				local from = session and session.title and (session.title .. "  ") or ""
+				overlay.toast(from .. text, tone, 4.5)
+			end
+			return entry
+		end
+
+		local function notificationFor(session, event)
+			local kind = event.kind
+			if kind == "turn:end" then
+				local reply = util.trim(tostring(event.text or ""))
+				local short = util.ellipsis(reply ~= "" and reply or "the turn finished", 120)
+				note("turn", "answered: " .. short, "good", session)
+			elseif kind == "error" then
+				note("error", "a turn failed: " .. util.ellipsis(tostring(event.message or "error"), 120),
+				"bad", session)
+			elseif kind == "abort" then
+				note("stop", "a turn was stopped", "warn", session)
+			end
+		end
+
+		dispose.add(sessions.anyEvent:connect(function(session, event)
+			if not M.window then return end
+			-- Only while minimized. With the window open the transcript is the
+			-- notification -- a toast on top of it is the same information twice.
+			if M.window.visible then return end
+			if not session or session.headless then return end
+			notificationFor(session, event)
+		end), "app.notifications")
+
 		-- The prompt watch is client-wide and starts with the interface, so a
 		-- conversation that asks for permission before anything has been opened is still
 		-- answered.
@@ -208,6 +265,30 @@ return function(env)
 		})
 		pulse.Visible = false
 
+		-- The missed-notification count, on the edge the pulse is not: a small filled
+		-- pill with the number in it, which says "three things happened" where a dot
+		-- says only "something did". Built here so it exists before the first note
+		-- lands, and hidden until there is a count to show.
+		local badge = P.frame(button, {
+			name = "LauncherBadge",
+			bg = theme.color.danger,
+			radius = theme.radius.pill,
+			anchor = Vector2.new(0, 1),
+			position = UDim2.new(0, -theme.space.hair, 1, theme.space.hair),
+			size = UDim2.fromOffset(0, 0),
+			zIndex = theme.z.raised + 2,
+		})
+		local badgeCount = P.text(badge, {
+			name = "LauncherBadgeCount",
+			text = "",
+			role = "caption",
+			line = theme.line.tight,
+			color = theme.color.textOnAccent,
+			size = UDim2.new(1, 0, 1, 0),
+			align = "Center",
+		})
+		badge.Visible = false
+
 		-- The orb both drags and clicks, and Roblox fires Activated on release even
 		-- after a drag, so a moved orb must not also open the window.
 		local dragging, moved, origin, startPosition = false, false, nil, nil
@@ -260,6 +341,27 @@ return function(env)
 
 		M.launcher = button
 		M.launcherPulse = pulse
+		M.launcherBadge = badge
+		M.launcherBadgeCount = badgeCount
+	end
+
+	-- The missed-notification count on the launcher. Called whenever the list grows;
+	-- cleared by `show`, because opening the window is the act of catching up.
+	function M.setLauncherBadge(count)
+		if not M.launcherBadge then return end
+		local n = math.floor(tonumber(count) or 0)
+		if n <= 0 then
+			M.launcherBadge.Visible = false
+			return
+		end
+		-- Sized to the digits: a one-digit pill is a circle, a two-digit one a pill,
+		-- and "9+" is where a count stops meaning anything precise.
+		local shown = n > 9 and "9+" or tostring(n)
+		local height = math.max(theme.size.dot * 2, theme.text.caption.height + theme.space.xxs)
+		local width = (#shown > 1) and (height + theme.space.xs) or height
+		M.launcherBadge.Size = UDim2.fromOffset(width, height)
+		if M.launcherBadgeCount then M.launcherBadgeCount.Text = shown end
+		M.launcherBadge.Visible = true
 	end
 
 	-- A dot named "pulse" that had never pulsed: the only thing on screen saying a
@@ -609,6 +711,11 @@ return function(env)
 		M.showPanel(id or M.panel)
 		M.window.show()
 		M.setLauncherBusy(false)
+		-- Opening the window is reading the notifications, so they are cleared
+		-- rather than counted forever. The history of what happened is the
+		-- transcript's, not the badge's.
+		M.notifications = {}
+		M.setLauncherBadge(0)
 	end
 
 	function M.hide()
