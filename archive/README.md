@@ -1,0 +1,34 @@
+-- Archived: the shared code editor (the "Code" tab).
+--
+-- These three modules implemented a multi-tab Luau editor the agent and the user
+-- could both work in -- a tab strip, a gutter, a run button, and a tool set
+-- (code_write, code_read, code_edit, code_search, code_run) operating on the same
+-- state. The design is sound and the tool contract worked end to end, but the
+-- rendering was not there yet: no syntax highlighting, run output that copied
+-- correctly but displayed wrongly, and scrolling that misbehaved on long files.
+--
+-- Rather than ship it broken, it is parked here, outside src/ entirely so neither
+-- the checker nor the bundler sees it. Nothing in the main tree requires these
+-- files.
+--
+-- To revive:
+--   1. Move these back:
+--        code_panel.lua     -> src/ui/panels/code.lua
+--        code_store.lua     -> src/ui/panels/code_store.lua
+--        coding_tools.lua   -> src/tools/coding.lua
+--   2. Restore the "code" entry in src/ui/app.lua's PANELS and BUILDERS.
+--   3. Restore the third modeButton in src/ui/sidebar.lua's mode switch.
+--   4. Restore the "coding" group in src/tools/init.lua's GROUPS.
+--   5. Restore the "coding" label in src/agent/registry.lua's GROUP_LABELS.
+--   6. Restore the two code-tab scenarios in test/run.lua (search "Archived").
+--
+-- What to fix before it comes back:
+--   * Syntax highlighting -- the panel has a checkSyntax gate but no colouring;
+--     the reference client (refer/IYAI-main) tokenises into RichText with a
+--     keyword/string/number/comment palette, which is the approach to copy.
+--   * Run output rendering -- the overlay.code viewer shows the text but the
+--     modal's scroll region clips it; the content is intact when copied.
+--   * Scrolling -- the editor's TextBox does not scroll with the gutter on long
+--     files; the gutter is a separate TextLabel and needs to follow the box's
+--     scroll offset, or both need to live inside one scrolling frame.
+--   * The tools and the store were verified working; keep their contract as is.

@@ -107,6 +107,11 @@ return function(env)
 		-- is the one thing in this client that is genuinely two people in one
 		-- conversation -- and "Code" is the conversation itself. Both are real surfaces,
 		-- so this selects a panel rather than setting a flag nothing reads.
+		--
+		-- Archived: the shared code editor segment. The editor's rendering is being
+		-- reworked (syntax highlighting, output display, scrolling), so the segment
+		-- that selected it is parked with it -- see archive/README.md. Restore the
+		-- third modeButton line to bring it back.
 		local modeRow = P.row(sidebar, {
 			name = "ModeSwitcher",
 			size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget())),
@@ -149,6 +154,8 @@ return function(env)
 		end
 		modeButton("cowork", "Cowork", "terminal", 1)
 		modeButton("chat", "Code", "code", 2)
+		-- Archived with the code editor panel:
+		-- modeButton("code", "Code", "terminal", 3)
 
 		-- New conversation. A real thread rather than a wipe of the current one: the
 		-- list below is what makes the difference visible, and clearing in place is what
@@ -556,15 +563,22 @@ return function(env)
 			line = theme.line.tight,
 			color = theme.color.text,
 			auto = "X",
+			truncate = true,
 			layoutOrder = 2,
 		})
+		-- Fills and truncates rather than auto-sizing. The provider name is the
+		-- one piece of text in the sidebar a user does not control the length of,
+		-- and an auto-width label pushed the chevron off the end of the row -- the
+		-- arrow misaligning whenever the provider name was long was exactly this.
 		local profileDetail = P.text(profile.row, {
 			name = "ProfileProvider",
 			text = "",
 			role = "caption",
 			line = theme.line.tight,
 			color = theme.color.textTertiary,
-			auto = "X",
+			size = UDim2.new(0, 0, 0, theme.text.caption.height),
+			flex = "Fill",
+			truncate = true,
 			layoutOrder = 3,
 		})
 		P.spacer(profile.row, { grow = true, layoutOrder = 4 })

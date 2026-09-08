@@ -10,6 +10,7 @@ return function(env)
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
 	local dispose = env.require("runtime/dispose")
+	local caps = env.require("runtime/caps")
 	local P = env.require("ui/primitives")
 	local icons = env.require("ui/icons")
 
@@ -450,6 +451,63 @@ return function(env)
 				modal.close()
 				if props.onConfirm then pcall(props.onConfirm, value) end
 			end,
+		})
+		return modal
+	end
+
+	-- A read-only code viewer: monospace, scrolled, with a copy action in the
+	-- footer. Used for the code tab's run output, where the transcript's own
+	-- rendering is the wrong surface -- the user pressed Run and wants the result
+	-- as a block they can scroll and copy, not a turn in the conversation.
+	function M.code(props)
+		props = props or {}
+		local modal = M.modal({
+			title = props.title or "Output",
+			width = props.width or theme.size.modalWide,
+			height = props.height or 420,
+			scroll = true,
+		})
+		if not modal then return nil end
+
+		local body = P.frame(modal.content, {
+			name = "CodeBody",
+			size = UDim2.new(1, 0, 0, 0),
+			bg = theme.color.codeSurface,
+			clip = true,
+		})
+
+		P.text(body, {
+			name = "CodeText",
+			text = tostring(props.code or ""),
+			role = "monoSmall",
+			line = theme.line.normal,
+			color = theme.color.codeText,
+			size = UDim2.new(1, 0, 0, 0),
+			wrap = false,
+			auto = "Y",
+			alignX = "Left",
+			padding = { x = theme.space.md, y = theme.space.sm },
+		})
+
+		if caps.clipboard then
+			P.button(modal.footer, {
+				text = "Copy",
+				variant = "secondary",
+				size = "sm",
+				layoutOrder = 1,
+				onClick = function()
+					local ok = pcall(caps.fn.clipboard, tostring(props.code or ""))
+					M.toast(ok and "Copied" or "Could not reach the clipboard",
+						ok and "good" or "warn", 2)
+				end,
+			})
+		end
+		P.button(modal.footer, {
+			text = "Close",
+			variant = "ghost",
+			size = "sm",
+			layoutOrder = 2,
+			onClick = function() modal.close() end,
 		})
 		return modal
 	end

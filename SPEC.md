@@ -327,11 +327,26 @@ allowed -- a `UIScale` there re-lays-out rather than resampling -- but each one 
 exactly 1 on `Completed`, because an interrupted tween otherwise leaves the surface
 laid out at 98% of its own metrics for as long as it is open.
 
+The window shell itself is a `CanvasGroup` only on pointer layouts. On touch devices the
+engine caps CanvasGroup texture resolution, and a window covering most of a phone screen
+is over the cap -- the texture is drawn resampled and every glyph goes soft, while the
+small Frame-based modals beside it stay sharp. On `touch`, `sheet` and `panel` the shell
+is a plain `Frame` with no group fade; it loses a tenth of a second of fade and stays
+legible.
+
 Breakpoints: `xs < 520`, `sm < 900`, `md < 1280`, `lg < 1700`, `xl`. Layout modes:
 `sheet` (xs), `panel` (sm, and any portrait orientation), `window` (md+), plus `tv`
 when `GuiService:IsTenFootInterface()`. Minimum touch target is 44px on a touch
 device, 28px with a pointer, 48px on a console. Navigation is reachable in every
 mode: the sidebar in `window`, the app menu in the header everywhere else.
+
+The Code panel was a shared multi-tab Luau editor whose state lived in a store module
+(`ui/panels/code_store`) so the `coding` tool group could operate on the same tabs the
+user saw. The design and tool contract were verified end to end, but the rendering was
+not usable yet (no syntax highlighting, run output that copied but displayed wrongly,
+broken scrolling), so it is archived in `archive/` -- outside `src/`, disconnected from
+the panel list, the mode switch, and the tool groups -- with revival steps and the list
+of what to fix in `archive/README.md`.
 
 ## 8. Build and verification
 

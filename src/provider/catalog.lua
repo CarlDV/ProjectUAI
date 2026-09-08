@@ -15,6 +15,19 @@ return function(env)
 	--   RequestAsync refuses loopback and private addresses.
 	M.presets = {
 		{
+			id = "hcnsec",
+			label = "HCNSEC",
+			baseUrl = "https://api.hcnsec.cn/v1",
+			authStyle = "bearer",
+			keyHint = "sk-...",
+			-- The sign-up address, referral parameter included exactly as provided.
+			docs = "https://api.hcnsec.cn/sign-up?aff=drd9",
+			-- Featured: shown at the top of the providers panel as the recommended
+			-- place to start, so a first-run user has one obvious road.
+			featured = true,
+			note = "An OpenAI-compatible relay. Featured because it is the recommended starting point: create an account, paste the key, fetch models.",
+		},
+		{
 			id = "openai",
 			label = "OpenAI",
 			baseUrl = "https://api.openai.com/v1",

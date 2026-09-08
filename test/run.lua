@@ -4011,6 +4011,13 @@ scenario("a provider can be added without leaving the editor", function()
 	truthy("the editor has a model control", picker ~= nil, harness.dump())
 	contains("saying one is still needed", harness.textOf(picker), "Choose a model")
 
+	-- The preset's docs address is rendered in full with a copy control beside it,
+	-- so a person can get from here to a key without leaving the client.
+	local keyUrl = harness.byName("KeyLinkUrl", form)
+	check("the key address is shown",
+		keyUrl and keyUrl.Text, "https://platform.openai.com/api-keys")
+	truthy("with a copy control", harness.byName("CopyKeyLink", form) ~= nil)
+
 	harness.click(picker)
 	truthy("which offers a fetch", harness.byName("Option_fetch") ~= nil, harness.dump())
 	harness.click(harness.byName("Option_fetch"))
@@ -5224,6 +5231,225 @@ scenario("an Azure AI Foundry preset exists and authenticates the Azure way", fu
 	-- endpoint, unlike the per-deployment preview path.
 	local body = requests[1] and json.decode(requests[1].body) or {}
 	check("and the model in the body", body.model, "harness-model")
+end)
+
+--[[ Archived with the code editor panel (src/archive). Restore the module and
+-- these scenarios together.
+
+-- The code tab: a shared editor whose tabs the agent can operate through tools,
+-- persisted so a draft survives an unload. The state lives in a module because a
+-- tool cannot reach a closure -- which is the whole reason the store exists.
+scenario("the code tab is a shared, tooled editor", function()
+	local harness, handle = bootWith({ provider = false })
+	handle.config.set("permissions.mode", "full")
+	local store = handle.env.require("ui/panels/code_store")
+	local context = handle.sessions.current().toolContext()
+
+	local function call(name, args)
+		return handle.tools.dispatch({ id = "c", ["function"] = {
+			name = name, arguments = json.encode(args or {}),
+		} }, context)
+	end
+
+	-- The panel builds like every other panel.
+	handle.app.show("code")
+	harness.settle(1)
+	truthy("the code panel built", handle.app.panels.code ~= nil)
+	truthy("with a real text box", harness.byName("Editor") ~= nil)
+
+	-- A fresh install has one tab.
+	local listing = call("code_tabs")
+	contains("the default tab is listed", listing.text, "Tab 1")
+
+	-- The agent writes without switching the user's view.
+	local written = call("code_write", { code = "return 1 + 1" })
+	contains("the write is confirmed", written.text, "Wrote 1 line")
+	check("and marked as failed when it was not", written.ok, true)
+
+	-- A named tab is created on demand and targeted by name.
+	local created = call("code_write", {
+		code = "local x = 2\nreturn x * 3", new = true, name = "Helper",
+	})
+	contains("the new tab is named as asked", created.text, "Helper")
+	local read = call("code_read", { tab = "Helper" })
+	contains("and read back by that name", read.text, "local x = 2")
+
+	-- Line-ranged edits and search, the reference client's two cheap operations.
+	local edited = call("code_edit", {
+		tab = "Helper", start = 1, finish = 1, code = "local x = 3",
+	})
+	contains("the edit lands", edited.text, "Replaced lines 1-1")
+	local found = call("code_search", { pattern = "local x" })
+	contains("search finds it", found.text, "Helper:1")
+
+	-- Running reports through the same contract as run_luau.
+	local run = call("code_run", { tab = "Helper" })
+	contains("the run happened", run.text, "Ran Helper")
+	contains("with the return value", run.text, "9")
+
+	-- A bad tab reference is a failure, not a crash.
+	local missing = call("code_read", { tab = "Nope" })
+	check("an unknown tab fails cleanly", missing.ok, false)
+
+	-- Tabs persist: a second read straight from the store sees the same code.
+	local stored = store.list()
+	check("two tabs are stored", #stored, 2)
+	check("the named one kept its name", stored[2].name, "Helper")
+	contains("and its code", stored[2].code, "local x = 3")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- The whole point of the code tab: a turn asks the agent to change code, the agent
+-- writes through the tool, and the editor the user has open shows it -- without the
+-- agent having to switch the user's view.
+scenario("an agent turn edits the code the user is looking at", function()
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			return { StatusCode = 200, Body = chatBody({
+				toolCalls = { toolCall("w1", "code_write", {
+					code = "print('hello from the agent')",
+					tab = "Tab 1",
+				}) },
+			}) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	-- The user is on the code panel with the editor open.
+	handle.app.show("code")
+	harness.settle(1)
+	local editor = harness.byName("CodeBox")
+	truthy("the editor is open", editor ~= nil, harness.dump(harness.byName("Code")))
+	check("and empty to start", editor.Text, "")
+
+	-- One turn: the model writes into Tab 1 by name.
+	handle.sessions.current().send("put hello world in tab one")
+	harness.settle(8)
+
+	-- The write landed in the store, and in the box the user is looking at -- the
+	-- panel was open, so the store's change signal reached it.
+	check("the editor shows the agent's code", editor.Text, "print('hello from the agent')")
+	local active = handle.env.require("ui/panels/code_store").active()
+	check("still on the tab the user had open", active.name, "Tab 1")
+
+	-- The transcript records the call like any other tool.
+	contains("the turn rendered its tool call",
+		harness.textOf(harness.byName("Transcript")), "code_write")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+]]
+
+-- A record born from a preset should carry that preset's name -- the "Custom
+-- endpoint" default belongs to the one preset that is genuinely custom.
+scenario("a preset-named provider starts with the preset's name", function()
+	local harness, handle = bootWith({ provider = false })
+	local blank = handle.providers.blank("openai")
+	check("a preset record carries the preset's label", blank.label, "OpenAI")
+	check("and the preset's base url", blank.baseUrl, "https://api.openai.com/v1")
+
+	local custom = handle.providers.blank("custom")
+	check("only the custom preset says custom", custom.label, "Custom endpoint")
+end)
+
+-- Adding a provider is one modal, not two. The preset is chosen inside the editor
+-- -- the Preset row there seeds the name, URL and auth style without discarding
+-- anything already typed -- so there is no picker in front of the form.
+scenario("adding a provider opens the editor directly", function()
+	local harness, handle = bootWith({ provider = false })
+	handle.app.show("providers")
+	harness.settle(1)
+
+	local add = harness.byName("AddProvider")
+	truthy("the add control is on screen", add ~= nil, harness.dump())
+	harness.click(add)
+	harness.settle(1)
+
+	-- The editor, not a preset menu: the form is up and there is no menu layer.
+	truthy("the editor form is open", harness.byName("Form") ~= nil, harness.dump())
+	falsy("no preset menu was interposed", harness.byName("MenuLayer") ~= nil)
+	truthy("with a preset row inside it", harness.byName("Preset") ~= nil)
+	contains("starting on the custom preset",
+		harness.textOf(harness.byName("Preset")), "Custom endpoint")
+
+	-- Picking a preset from that row fills the fields in place -- the flow the
+	-- pre-picker used to own, without the extra modal.
+	harness.click(harness.byName("Preset"))
+	harness.settle(1)
+	truthy("the preset menu opens from the row", harness.byName("MenuLayer") ~= nil)
+	harness.click(harness.byName("Option_openai"))
+	harness.settle(1)
+	contains("the button now names the preset",
+		harness.textOf(harness.byName("Preset")), "OpenAI")
+	local url = harness.byName("BaseUrl", harness.byName("Form"))
+	local box = url and url:FindFirstChildOfClass("TextBox")
+	check("and the url was filled in", box and box.Text, "https://api.openai.com/v1")
+
+	-- The name follows when it was never hand-edited, and every row derived from
+	-- the preset repaints: a form where half the rows still describe the previous
+	-- vendor reads as broken rather than as partially updated.
+	local nameRow = harness.byName("ProviderName", harness.byName("Form"))
+	local nameBox = nameRow and nameRow:FindFirstChildOfClass("TextBox")
+	check("the name field follows the preset", nameBox and nameBox.Text, "OpenAI")
+	local hint = harness.byName("KeyHint", harness.byName("Form"))
+	contains("the key hint follows", hint and hint.Text or "", "sk-")
+	local keyLink = harness.byName("KeyLinkUrl", harness.byName("Form"))
+	check("the docs link follows", keyLink and keyLink.Text, "https://platform.openai.com/api-keys")
+
+	-- Switching to a preset with a different auth style moves the segmented control
+	-- too: Anthropic authenticates with x-api-key, not bearer.
+	harness.click(harness.byName("Preset"))
+	harness.settle(1)
+	harness.click(harness.byName("Option_anthropic-messages"))
+	harness.settle(1)
+	check("the name followed the switch", nameBox and nameBox.Text, "Anthropic (Messages API)")
+	local linkAfter = harness.byName("KeyLinkUrl", harness.byName("Form"))
+	check("the docs link followed the switch",
+		linkAfter and linkAfter.Text, "https://console.anthropic.com/settings/keys")
+	local authRow = harness.byName("AuthStyle", harness.byName("Form"))
+	local selected = authRow and harness.byName("Segment_x-api-key", authRow)
+	truthy("the auth segment control follows", selected ~= nil, harness.dump(authRow))
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- The featured provider and the key links: a first-run client has one recommended
+-- road to a working key, and every preset's docs address is visible and copyable
+-- rather than hidden behind a "click here".
+scenario("a first-run client is pointed at the featured provider", function()
+	local harness, handle = bootWith({ provider = false })
+	handle.app.show("providers")
+	harness.settle(1)
+
+	local featured = harness.byName("Featured")
+	truthy("the featured card is shown", featured ~= nil, harness.dump())
+	check("naming HCNSEC", harness.byName("FeaturedName").Text, "HCNSEC")
+
+	-- The referral link, rendered in full and exactly as the catalog carries it.
+	local url = harness.byName("FeaturedUrl")
+	check("with the sign-up address", url and url.Text, "https://api.hcnsec.cn/sign-up?aff=drd9")
+	truthy("and a copy control beside it", harness.byName("CopyFeaturedLink") ~= nil)
+	truthy("and a setup button", harness.byName("FeaturedSetup") ~= nil)
+
+	-- The preset behind it resolves and carries its own docs address, which the
+	-- editor renders the same way.
+	local catalog = handle.env.require("provider/catalog")
+	local preset = catalog.get("hcnsec")
+	check("the preset exists", preset ~= nil and true or false, true)
+	check("pointing at the api host", preset.baseUrl, "https://api.hcnsec.cn/v1")
+	check("with the sign-up page as its docs", preset.docs, "https://api.hcnsec.cn/sign-up?aff=drd9")
+	check("and marked featured", preset.featured, true)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
 print(("="):rep(72))

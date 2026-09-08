@@ -75,6 +75,8 @@ return function(env)
 		agentself = "Agent",
 		instance = "Instance tree",
 		script = "Code",
+		-- Archived with the code editor panel and its tool group (archive/).
+		-- coding = "Code editor",
 		fs = "Files",
 		net = "HTTP",
 		web = "Web",

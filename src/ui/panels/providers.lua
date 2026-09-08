@@ -146,7 +146,13 @@ return function(env)
 		})
 
 		local problemLabel
-		local presetButton, urlField, keyRow
+		local presetButton, urlField, keyRow, nameField
+		local protocolControl, authControl, keyHintLabel
+		local docsRow, docsNoteRow, presetNoteRow
+		-- The form slot after the key row, where the hint, docs link and preset note
+		-- live. Declared here because refreshDocs -- which writes into it -- is
+		-- defined before the rows are built but only called once they have been.
+		local rowAfterKey = 0
 		-- Assigned with the model row below, called from applyPreset above it: a preset
 		-- change moves the endpoint, so anything a previous fetch turned up belongs to a
 		-- different server and must not still be on offer.
@@ -159,11 +165,17 @@ return function(env)
 			return ok
 		end
 
+		-- Rows carry explicit, sequential orders: the form also holds the key hint and
+		-- the preset's docs link and note, which are rebuilt on a preset change and
+		-- have to land back in their slots rather than at the end of whatever is there.
+		local rowOrder = 0
 		local function row(label, hint, build)
+			rowOrder = rowOrder + 1
 			local column = P.column(form, {
 				size = UDim2.new(1, 0, 0, 0),
 				auto = "Y",
 				gap = theme.space.xs,
+				layoutOrder = rowOrder * 10,
 			})
 			P.text(column, { text = tostring(label), role = "label", color = theme.color.text })
 			local handle = build(column)
@@ -188,6 +200,62 @@ return function(env)
 		-- wrong vendor. Only the fields the preset actually describes move; the label is
 		-- carried over when it still matches the old preset's own name, which is the case
 		-- where it was never edited.
+		--
+		-- The docs link and the note are rebuilt rather than updated: they are whole
+		-- rows a preset may or may not have, so the row count itself changes with the
+		-- pick. Rebuilt into the same slots so the layout order they hold is kept.
+		local function refreshDocs()
+			if docsRow then docsRow:Destroy() docsRow = nil end
+			if docsNoteRow then docsNoteRow:Destroy() docsNoteRow = nil end
+			if presetNoteRow then presetNoteRow:Destroy() presetNoteRow = nil end
+			local presetRecord = catalog.get(editing.preset)
+			if not presetRecord then return end
+			if presetRecord.docs then
+				-- The full URL, selectable and copyable. Roblox cannot open a browser from
+				-- a client GUI, so "get a key here" has to be text a person can select or
+				-- one press away from the clipboard -- a "click here" label with the
+				-- destination hidden behind it is neither.
+				docsRow = P.row(form, {
+					name = "KeyLink",
+					size = UDim2.new(1, 0, 0, 0),
+					auto = "Y",
+					gap = theme.space.xs,
+					layoutOrder = rowAfterKey + 2,
+				})
+				local linkText = P.text(docsRow, {
+					name = "KeyLinkUrl",
+					text = tostring(presetRecord.docs),
+					role = "small",
+					color = theme.color.accent,
+					wrap = true,
+					auto = "Y",
+					size = UDim2.new(0, 0, 0, 0),
+					flex = "Fill",
+					layoutOrder = 1,
+				})
+				linkText.Size = UDim2.new(1, -(theme.size.controlSmall + theme.space.xs), 0, 0)
+				if caps.clipboard then
+					P.iconButton(docsRow, {
+						name = "CopyKeyLink",
+						icon = "copy",
+						diameter = theme.size.controlSmall,
+						layoutOrder = 2,
+						onClick = function()
+							local ok = pcall(caps.fn.clipboard, tostring(presetRecord.docs))
+							overlay.toast(ok and "Link copied" or "Could not reach the clipboard",
+								ok and "good" or "warn", 2)
+						end,
+					})
+				end
+				docsNoteRow = R.paragraph(form,
+					"Keys for this provider are issued at the address above.",
+					{ layoutOrder = rowAfterKey + 3 })
+			end
+			if presetRecord.note then
+				presetNoteRow = R.paragraph(form, presetRecord.note, { layoutOrder = rowAfterKey + 4 })
+			end
+		end
+
 		local function applyPreset(id)
 			local preset = catalog.get(id)
 			if not preset then return end
@@ -207,12 +275,26 @@ return function(env)
 			editing.requires = preset.requires
 			if presetButton then presetButton.setText(preset.label) end
 			if urlField then urlField.set(editing.baseUrl) end
+			-- The name follows when it was never hand-edited -- the same rule the label
+		-- above applies -- and every control derived from the preset repaints, because a
+		-- preset changes the protocol, the auth header, the key hint and the docs link,
+		-- and a form where half the rows still describe the previous vendor reads as
+			-- broken rather than as partially updated.
+			if nameField then nameField.set(editing.label) end
+			if protocolControl then protocolControl.set(chat.styleOf(editing)) end
+			if authControl then authControl.set(editing.authStyle) end
+			if keyHintLabel then
+				keyHintLabel.Text = preset.keyHint
+					and ("Key hint: " .. tostring(preset.keyHint))
+					or ""
+			end
+			refreshDocs()
 			if forgetFetchedModels then forgetFetchedModels() end
 			showProblems()
 		end
 
-		row("Preset", "A base URL and an auth style, nothing more. Picking one keeps the name and "
-			.. "the key you have already typed.", function(column)
+		row("Preset", "Pick a vendor to fill in the URL, the auth style and the key hint. Everything "
+			.. "you have already typed -- the name, a pasted key -- is kept.", function(column)
 			presetButton = P.button(column, {
 				name = "Preset",
 				text = (catalog.get(editing.preset) or {}).label or "Custom endpoint",
@@ -241,13 +323,14 @@ return function(env)
 		end)
 
 		row("Name", nil, function(column)
-			return P.field(column, {
+			nameField = P.field(column, {
 				name = "ProviderName",
 				text = editing.label,
 				placeholder = "My provider",
 				onChange = function(text) editing.label = text end,
 				onBlur = showProblems,
 			})
+			return nameField
 		end)
 
 		local normalisedNote
@@ -286,16 +369,17 @@ return function(env)
 		row("Protocol", "Chat completions is the universal one. Anthropic's own Messages API keeps "
 			.. "reasoning and tool calls in their real shape instead of translating them twice.",
 			function(column)
-				return C.segmented(column, {
+				protocolControl = C.segmented(column, {
 					name = "Protocol",
 					options = chat.STYLES,
 					value = chat.styleOf(editing),
 					onChange = function(value) editing.api = value end,
 				})
+				return protocolControl
 			end)
 
 		row("Auth header", nil, function(column)
-			return C.segmented(column, {
+			authControl = C.segmented(column, {
 				name = "AuthStyle",
 				options = AUTH_OPTIONS,
 				value = editing.authStyle,
@@ -304,6 +388,7 @@ return function(env)
 					showProblems()
 				end,
 			})
+			return authControl
 		end)
 
 		-- The key goes in through a prompt and never comes back out.
@@ -352,6 +437,25 @@ return function(env)
 			set.instance.LayoutOrder = 2
 			return keyLabel
 		end)
+
+		-- What a key for this preset looks like, when the preset knows. It is a hint,
+		-- not a field: the shape of an OpenAI key is not the shape of a Gemini key, and
+		-- the person pasting one wants to know they are pasting the right kind of thing
+		-- before the request fails on the far end. The docs link and the preset note sit
+		-- with it, in the slots after the key row, because all three are things the
+		-- preset decides and a preset change has to move together.
+		rowAfterKey = rowOrder * 10
+		keyHintLabel = P.text(form, {
+			name = "KeyHint",
+			text = (catalog.get(editing.preset) or {}).keyHint
+				and ("Key hint: " .. tostring((catalog.get(editing.preset) or {}).keyHint)) or "",
+			role = "caption",
+			color = theme.color.textTertiary,
+			wrap = true,
+			auto = "Y",
+			layoutOrder = rowAfterKey + 1,
+		})
+		keyHintLabel.Size = UDim2.new(1, 0, 0, 0)
 
 		-- Model.
 		--
@@ -517,15 +621,7 @@ return function(env)
 			setModelNote(DEFAULT_MODEL_NOTE, false)
 		end
 
-		-- Where the key comes from, when the preset knows. Thirteen of the seventeen
-		-- presets carry a docs URL and not one of them was ever rendered.
-		local presetRecord = catalog.get(editing.preset)
-		if presetRecord and presetRecord.docs then
-			R.paragraph(form, "Keys for this provider are issued at " .. presetRecord.docs .. ".")
-		end
-		if presetRecord and presetRecord.note then
-			R.paragraph(form, presetRecord.note)
-		end
+		refreshDocs()
 
 		problemLabel = P.text(modal.content, {
 			name = "Problem",
@@ -614,6 +710,145 @@ return function(env)
 		if adding then problemLabel.Visible = false end
 	end
 
+	-- The entry point for adding: the editor, directly. The preset row inside it
+	-- is where the vendor is chosen -- picking one there seeds the name, URL, auth
+	-- style and key hint without losing anything already typed -- so a separate
+	-- picker in front of the editor was a second modal for the same decision, and
+	-- the one a person had to dismiss before they could see a single field.
+	function M.add(onSaved)
+		M.editor(registry.blank("custom"), onSaved)
+	end
+
+	-- The featured provider card.
+	--
+	-- One recommended place to start, shown to a client with no provider configured:
+	-- the name, the sign-up address (selectable and copyable -- a client GUI cannot
+	-- open a browser, so the address has to be readable text, not a hidden
+	-- destination), and one button that opens the editor seeded from the preset.
+	-- The link keeps its referral parameter exactly as the catalog carries it.
+	function M.featuredCard(parent, onSetup, nextOrder)
+		local featured
+		for _, preset in ipairs(catalog.presets) do
+			if preset.featured then featured = preset break end
+		end
+		if not featured then return nil end
+
+		local card = P.card(parent, {
+			name = "Featured",
+			gap = theme.space.sm,
+			layoutOrder = type(nextOrder) == "function" and nextOrder() or 1,
+			-- The accent border is the one thing that says "start here" on a panel
+			-- that is otherwise all neutral surfaces; P.card has already drawn a
+			-- border, so this recolours it rather than adding a second stroke.
+			strokeColor = theme.color.accentBorder,
+		})
+
+		local head = P.row(card, {
+			name = "FeaturedHead",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.xs,
+			layoutOrder = 1,
+		})
+		local headText = P.column(head, {
+			name = "HeadText",
+			size = UDim2.new(0, 0, 0, 0),
+			auto = "Y",
+			flex = "Fill",
+			gap = 0,
+			layoutOrder = 1,
+		})
+		P.text(headText, {
+			name = "FeaturedTitle",
+			text = "Featured",
+			role = "overline",
+			color = theme.color.accent,
+			size = UDim2.new(1, 0, 0, theme.text.overline.height),
+			layoutOrder = 1,
+		})
+		P.text(headText, {
+			name = "FeaturedName",
+			text = tostring(featured.label),
+			role = "title",
+			color = theme.color.text,
+			size = UDim2.new(1, 0, 0, theme.text.title.height),
+			layoutOrder = 2,
+		})
+
+		if featured.note then
+			local note = P.text(card, {
+				name = "FeaturedNote",
+				text = tostring(featured.note),
+				role = "small",
+				color = theme.color.textSecondary,
+				wrap = true,
+				auto = "Y",
+				layoutOrder = 2,
+			})
+			note.Size = UDim2.new(1, 0, 0, 0)
+		end
+
+		-- The sign-up address. Copyable with one press, and visible in full so it
+		-- can be selected by hand or read onto another device.
+		if featured.docs then
+			local linkRow = P.row(card, {
+				name = "FeaturedLink",
+				size = UDim2.new(1, 0, 0, 0),
+				auto = "Y",
+				gap = theme.space.xs,
+				layoutOrder = 3,
+			})
+			local linkText = P.text(linkRow, {
+				name = "FeaturedUrl",
+				text = tostring(featured.docs),
+				role = "small",
+				color = theme.color.accent,
+				wrap = true,
+				auto = "Y",
+				size = UDim2.new(0, 0, 0, 0),
+				flex = "Fill",
+				layoutOrder = 1,
+			})
+			linkText.Size = UDim2.new(1, -(theme.size.controlSmall + theme.space.xs), 0, 0)
+			if caps.clipboard then
+				P.iconButton(linkRow, {
+					name = "CopyFeaturedLink",
+					icon = "copy",
+					diameter = theme.size.controlSmall,
+					layoutOrder = 2,
+					onClick = function()
+						local ok = pcall(caps.fn.clipboard, tostring(featured.docs))
+						overlay.toast(ok and "Link copied" or "Could not reach the clipboard",
+							ok and "good" or "warn", 2)
+					end,
+				})
+			end
+		end
+
+		local actions = P.row(card, {
+			name = "FeaturedActions",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.sm,
+			layoutOrder = 4,
+		})
+		P.button(actions, {
+			name = "FeaturedSetup",
+			text = "Set up " .. tostring(featured.label),
+			variant = "primary",
+			size = "sm",
+			fill = true,
+			layoutOrder = 1,
+			onClick = function()
+				local preset = catalog.get(featured.id)
+				if not preset then return end
+				M.editor(registry.blank(preset.id), onSetup)
+			end,
+		})
+
+		return card
+	end
+
 	-- List and detail ---------------------------------------------------------
 
 	function M.new(parent)
@@ -665,8 +900,8 @@ return function(env)
 				size = "sm",
 				fill = true,
 				layoutOrder = 2,
-				onClick = function()
-					M.editor(registry.blank("custom"), function(id) panel.select(id) end)
+				onClick = function(handle)
+					M.add(function(id) panel.select(id) end)
 				end,
 			})
 			addButton.instance.LayoutOrder = 2
@@ -763,8 +998,8 @@ return function(env)
 					variant = "secondary",
 					size = "sm",
 					layoutOrder = #list + 1,
-					onClick = function()
-						M.editor(registry.blank("custom"), function(id) panel.select(id) end)
+					onClick = function(handle)
+						M.add(function(id) panel.select(id) end)
 					end,
 				})
 				add.instance.LayoutOrder = #list + 1
@@ -844,6 +1079,15 @@ return function(env)
 			panel.__order = 0
 			local record = selected and registry.get(selected) or nil
 			if not record then
+				-- The featured card, shown only on a client with nothing configured:
+				-- one recommended provider, its sign-up address, and one button that
+				-- starts the setup. After the first provider exists the rail is the
+				-- interface and this stops being the loudest thing on the panel.
+				if registry.count() == 0 then
+					M.featuredCard(detail.instance, function(id)
+						panel.select(id)
+					end, order)
+				end
 				C.emptyState(detail.instance, {
 					title = registry.count() == 0 and "No provider configured"
 						or "Pick a provider on the left",
@@ -853,7 +1097,7 @@ return function(env)
 						or "Its endpoint, key, model and health are all edited here.",
 					action = registry.count() == 0 and "Add a provider" or nil,
 					onAction = function()
-						M.editor(registry.blank("custom"), function(id) panel.select(id) end)
+						M.add(function(id) panel.select(id) end)
 					end,
 					layoutOrder = order(),
 				})

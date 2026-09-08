@@ -57,6 +57,16 @@ return function(env)
 			end
 		end
 
+		-- Called when the window is shown again after being minimized. A hidden
+		-- scroll frame's canvas position is not trustworthy and `pinned` may have
+		-- been left false by a scroll that happened before the hide, so the newest
+		-- message would be off-screen and waiting for a manual scroll. Pinning and
+		-- jumping here is the "still at the bottom" the user left.
+		function view.repin()
+			view.pinned = true
+			scroll.toBottom()
+		end
+
 		scroll.instance:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
 			view.pinned = scroll.atBottom(theme.space.huge)
 		end)

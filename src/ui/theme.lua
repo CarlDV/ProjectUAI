@@ -131,6 +131,11 @@ return function(env)
 	-- *accepted* by the test harness, whose Enum proxy resolves anything asked of it --
 	-- so a typo would surface as a font option that exists only in the tests.
 	local INTERFACE_CANDIDATES = {
+		-- Montserrat leads: a contemporary geometric sans with a full weight axis,
+		-- which reads as a modern interface face at the sizes this project uses.
+		-- The order below is the fallback chain, so a client missing a family gets
+		-- the next most contemporary one rather than the last.
+		{ id = "montserrat", label = "Montserrat", regular = "Montserrat", medium = "MontserratMedium" },
 		{ id = "builder", label = "Builder Sans", regular = "BuilderSans", medium = "BuilderSansMedium" },
 		{ id = "arimo", label = "Arimo", regular = "Arimo", medium = "ArimoBold" },
 		{ id = "roboto", label = "Roboto", regular = "Roboto", medium = "Roboto" },

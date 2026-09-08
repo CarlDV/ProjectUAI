@@ -29,6 +29,12 @@ return function(env)
 	local PANELS = {
 		{ id = "chat", label = "Chat", icon = "code" },
 		{ id = "cowork", label = "Cowork", icon = "terminal" },
+		-- Archived: the code editor panel. The implementation lives on in
+		-- archive/code_panel.lua and archive/code_store.lua (see archive/README.md),
+		-- but it is not wired into the panel list or the builders while its rendering
+		-- (highlighting, output display, scrolling) is reworked. Re-add both halves
+		-- below to revive it.
+		-- { id = "code", label = "Code", icon = "terminal" },
 		{ id = "agents", label = "Subagents", icon = "spark" },
 		{ id = "providers", label = "Providers", icon = "sliders" },
 		{ id = "tools", label = "Tools", icon = "worktree" },
@@ -397,6 +403,18 @@ return function(env)
 		M.window.onLayout = function()
 			M.syncNav()
 		end
+		-- Returning to the conversation should land on the newest message. The
+		-- transcript pins itself only while it is at the bottom, and a hidden
+		-- scroll frame loses its canvas position to the engine -- so re-showing
+		-- the window with pinned stale read as "you were reading up" and the view
+		-- stayed wherever the engine left it. Re-pinning on show is the whole fix:
+		-- the user was at the bottom when they minimized, so they are at the
+		-- bottom when they come back.
+		M.window.onShow = function()
+			if M.chatPanel and M.chatPanel.view then
+				M.chatPanel.view.repin()
+			end
+		end
 	end
 
 	-- Config is the only source of truth for this.
@@ -480,12 +498,18 @@ return function(env)
 		-- 1.6 the pair measured 40px inside a 42px header, so the title sat one pixel
 		-- under the window's top edge and the subtitle one pixel above the transcript --
 		-- which is what "some stuff isn't aligned" looks like from the outside.
+		--
+		-- The column fills and both lines truncate, so a long provider name in the
+		-- subtitle eats its own label rather than the window controls beside it: the
+		-- right cluster is anchored to the header's edge, not to how wide the longest
+		-- line happened to measure.
 		local titleColumn = P.column(left, {
 			name = "Title",
 			size = UDim2.new(0, 0, 1, 0),
 			flex = "Fill",
 			gap = theme.space.hair,
 			alignY = "Center",
+			clip = true,
 			layoutOrder = 3,
 		})
 		M.titleLabel = P.text(titleColumn, {
@@ -515,6 +539,11 @@ return function(env)
 			auto = "X",
 			gap = theme.space.xxs,
 			layoutOrder = 3,
+			-- Anchors the control cluster to the header's right edge regardless of
+			-- what the title column beside it measures. Without it the row's own
+			-- auto-width order could hand the cluster's slot to whichever sibling
+			-- measured widest first.
+			alignX = "Right",
 		})
 
 		if responsive.mode == "window" then
@@ -663,6 +692,8 @@ return function(env)
 	local BUILDERS = {
 		chat = buildChatPanel,
 		cowork = function(parent) return env.require("ui/panels/cowork").new(parent) end,
+		-- Archived with the panel list entry above.
+		-- code = function(parent) return env.require("ui/panels/code").new(parent) end,
 		agents = function(parent) return env.require("ui/panels/agents").new(parent) end,
 		providers = function(parent) return env.require("ui/panels/providers").new(parent) end,
 		tools = function(parent) return env.require("ui/panels/tools").new(parent) end,

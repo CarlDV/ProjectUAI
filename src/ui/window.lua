@@ -26,11 +26,27 @@ return function(env)
 		local minWidth = props.minWidth or 320
 		local minHeight = props.minHeight or 280
 
-		local root = Instance.new("CanvasGroup", parent)
+		-- The shell is a CanvasGroup only where that is safe.
+		--
+		-- A CanvasGroup rasterizes its children into one offscreen texture and composites
+		-- that texture. On touch devices the engine caps the resolution of that texture,
+		-- and a window that covers most of the screen is over the cap -- so the texture
+		-- is drawn resampled and every glyph in the interface goes soft. The modals are
+		-- Frames and sit well under the cap, which is exactly why they stay sharp while
+		-- the window around them blurs. On a phone or a tablet the shell is therefore a
+		-- plain Frame: it loses the group fade, and gains being legible.
+		local fades = not (responsive.touch
+			or responsive.mode == "sheet" or responsive.mode == "panel")
+
+		local root
+		if fades then
+			root = Instance.new("CanvasGroup", parent)
+		else
+			root = Instance.new("Frame", parent)
+		end
 		root.Name = props.name or "Window"
 		root.BackgroundColor3 = theme.color.canvas
 		root.BorderSizePixel = 0
-		root.GroupTransparency = 1
 		root.Visible = false
 		root.Active = true
 		root.ZIndex = theme.z.raised
@@ -430,25 +446,31 @@ return function(env)
 			handle.visible = true
 			handle.layout("show")
 			root.Visible = true
-			-- Snapped to the goal on completion. An interrupted fade on a CanvasGroup
-			-- leaves the whole window part-transparent, and the group is the only thing
-			-- between the interface and the game behind it.
-			local fade = env.tween:Create(root, theme.tween("enter"), { GroupTransparency = 0 })
-			fade.Completed:Connect(function()
-				if handle.visible then root.GroupTransparency = 0 end
-			end)
-			fade:Play()
+			if fades then
+				-- Snapped to the goal on completion. An interrupted fade on a CanvasGroup
+				-- leaves the whole window part-transparent, and the group is the only thing
+				-- between the interface and the game behind it.
+				local fade = env.tween:Create(root, theme.tween("enter"), { GroupTransparency = 0 })
+				fade.Completed:Connect(function()
+					if handle.visible then root.GroupTransparency = 0 end
+				end)
+				fade:Play()
+			end
 			if handle.onShow then pcall(handle.onShow) end
 		end
 
 		function handle.hide()
 			if not handle.visible then return end
 			handle.visible = false
-			local fade = env.tween:Create(root, theme.tween("exit"), { GroupTransparency = 1 })
-			fade.Completed:Connect(function()
-				if not handle.visible then root.Visible = false end
-			end)
-			fade:Play()
+			if fades then
+				local fade = env.tween:Create(root, theme.tween("exit"), { GroupTransparency = 1 })
+				fade.Completed:Connect(function()
+					if not handle.visible then root.Visible = false end
+				end)
+				fade:Play()
+			else
+				root.Visible = false
+			end
 			if handle.onHide then pcall(handle.onHide) end
 		end
 

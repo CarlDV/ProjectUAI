@@ -311,13 +311,17 @@ local KNOWN = {
 	-- enum. The proxy resolves anything asked of it, so an incomplete list here turns a
 	-- correct probe into a test failure and would let a genuine typo through.
 	-- GothamSemibold is kept: it was removed from the engine but old code still names it.
+	-- Montserrat is real in the engine but not in this list, which made the theme's
+	-- new default family probe as unrecognised -- the exact false positive this
+	-- full list exists to avoid.
 	Font = "Legacy Arial ArialBold SourceSans SourceSansBold SourceSansLight SourceSansItalic"
 		.. " Bodoni Garamond Cartoon Code Highway SciFi Arcade Fantasy Antique SourceSansSemibold"
 		.. " Gotham GothamMedium GothamBold GothamBlack GothamSemibold AmaticSC Bangers Creepster"
 		.. " DenkOne Fondamento FredokaOne GrenzeGotisch IndieFlower JosefinSans Jura Kalam"
 		.. " LuckiestGuy Merriweather Michroma Nunito Oswald PatrickHand PermanentMarker Roboto"
 		.. " RobotoCondensed RobotoMono Sarpanch SpecialElite TitilliumWeb Ubuntu BuilderSans"
-		.. " BuilderSansMedium BuilderSansBold BuilderSansExtraBold Arimo ArimoBold Unknown",
+		.. " BuilderSansMedium BuilderSansBold BuilderSansExtraBold Arimo ArimoBold Montserrat"
+		.. " MontserratMedium MontserratBold MontserratExtraBold Unknown",
 	EasingStyle = "Linear Sine Back Quad Quart Quint Exponential Circular Elastic Bounce Cubic",
 	EasingDirection = "In Out InOut",
 	TextXAlignment = "Left Center Right",

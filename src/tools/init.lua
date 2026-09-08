@@ -8,6 +8,11 @@ local GROUPS = {
 	"agentself",
 	"instance",
 	"script",
+	-- Archived: the shared code editor's tool set. The tools themselves live on in
+	-- archive/coding_tools.lua, but the editor panel they target is disconnected
+	-- while its rendering is reworked, so the agent is not offered tools that write
+	-- to a surface the user cannot see. Restore this entry with the panel.
+	-- "coding",
 	"fs",
 	"net",
 	"web",
