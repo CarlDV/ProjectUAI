@@ -50,6 +50,20 @@ return function(env)
 		["permission:ask"] = true,
 		["subagent:start"] = true,
 		["subagent:done"] = true,
+		-- The running commentary around a turn. None of it is conversation, but the
+		-- browser's telemetry, latency readouts and live subagent cards are built
+		-- from exactly these.
+		["assistant:reasoning"] = true,
+		["request:start"] = true,
+		["request:retry"] = true,
+		["request:done"] = true,
+		["usage"] = true,
+		["turn:start"] = true,
+		["turn:end"] = true,
+		["compact"] = true,
+		["subagent:text"] = true,
+		["subagent:tool"] = true,
+		["subagent:tool:done"] = true,
 	}
 
 	-- Event payloads are not automatically safe to encode. `permission:ask` carries
@@ -159,6 +173,36 @@ return function(env)
 			if entry and type(entry.resolve) == "function" then
 				entry.resolve(command.allow == true, command.remember == true)
 			end
+		elseif kind == "provider" then
+			env.require("provider/registry").setActive(tostring(command.id or ""))
+		elseif kind == "model" then
+			env.require("provider/registry").setModel(tostring(command.provider or ""), tostring(command.model or ""))
+		elseif kind == "models:discover" then
+			-- Discovery is a network round trip, so it runs on its own thread: the
+			-- poller must not park behind it or the browser would stall for seconds.
+			local providers = env.require("provider/registry")
+			local record = providers.get(tostring(command.provider or ""))
+			if record then
+				clock.spawn(function()
+					local models = env.require("provider/models")
+					local ids, note = models.discover(record, { force = true })
+					local count = type(ids) == "table" and #ids or 0
+					log.info("bridge", "model discovery: " .. tostring(note) .. " (" .. count .. " models)")
+				end)
+			end
+		elseif kind == "thread" then
+			env.require("agent/session").switch(tostring(command.id or ""))
+		elseif kind == "thread:new" then
+			env.require("agent/session").newThread()
+		elseif kind == "thread:delete" then
+			env.require("agent/session").remove(tostring(command.id or ""))
+		elseif kind == "thread:rename" then
+			local target = env.require("agent/session").threads[tostring(command.id or "")]
+			if target and target.rename then target.rename(tostring(command.title or "")) end
+		elseif kind == "permission-mode" then
+			env.require("agent/permissions").setMode(tostring(command.mode or "ask"))
+		elseif kind == "subagent:stop" then
+			env.require("agent/subagent").stop(tostring(command.id or ""))
 		else
 			log.warn("bridge", "unknown command from the browser", kind)
 		end
@@ -186,9 +230,125 @@ return function(env)
 
 	local alive = false
 
+	-- The browser's panels are drawn from the same modules the in-game interface
+	-- reads, so nothing in the web UI is a guess: providers and their real model
+	-- lists, the tool registry, threads, subagents, usage and the host's
+	-- capabilities all arrive as they are. Pushed at most once a second and only
+	-- when the encoded form changed, so a still session costs nothing.
+	local function stateOf()
+		local sessions = env.require("agent/session")
+		local providers = env.require("provider/registry")
+		local models = env.require("provider/models")
+		local registry = env.require("agent/registry")
+		local subagents = env.require("agent/subagent")
+		local usage = env.require("agent/usage")
+		local permissions = env.require("agent/permissions")
+		local place = env.require("runtime/place")
+
+		pcall(function() registry.load() end)
+
+		local threads = {}
+		for _, session in ipairs(sessions.list()) do
+			threads[#threads + 1] = {
+				id = session.id,
+				title = session.title,
+				place = session.placeName,
+				busy = session.busy == true,
+				turns = session.turns or 0,
+				updatedAt = session.updatedAt or 0,
+				active = session.id == sessions.activeId,
+			}
+		end
+
+		local providerList = {}
+		for _, record in ipairs(providers.list()) do
+			local health = record.health or {}
+			providerList[#providerList + 1] = {
+				id = record.id,
+				label = record.label,
+				model = record.model,
+				models = models.list(record),
+				enabled = record.enabled ~= false,
+				health = {
+					ok = health.ok or 0,
+					fail = health.fail or 0,
+					lastError = health.lastError or "",
+				},
+				cooling = providers.cooling(record),
+			}
+		end
+
+		local tools = {}
+		for _, tool in ipairs(registry.list()) do
+			tools[#tools + 1] = {
+				name = tool.name,
+				group = tool.group,
+				description = tool.description,
+				risk = tool.risk or "write",
+			}
+		end
+
+		local subs = {}
+		for _, record in ipairs(subagents.list()) do
+			subs[#subs + 1] = {
+				id = record.id,
+				label = record.label,
+				task = record.task,
+				preset = record.preset,
+				status = record.status,
+				ms = record.ms,
+				messages = record.messages,
+				report = record.report and util.ellipsis(record.report, 600) or nil,
+			}
+		end
+
+		local activeRecord = providers.active()
+		local current = sessions.current()
+
+		return {
+			place = { id = place.id, name = place.label() },
+			caps = { executor = caps.executor, http = caps.http, summary = caps.summary() },
+			agent = {
+				status = current.status,
+				busy = current.busy == true,
+				provider = activeRecord and activeRecord.label or nil,
+				model = activeRecord and activeRecord.model or nil,
+			},
+			usage = {
+				prompt = usage.session.prompt,
+				completion = usage.session.completion,
+				total = usage.session.total,
+				cost = usage.session.cost,
+				requests = usage.session.requests,
+				estimated = usage.session.estimated == true,
+			},
+			permissions = { mode = permissions.mode(), pending = permissions.pendingCount() },
+			threads = threads,
+			providers = providerList,
+			activeProvider = activeRecord and activeRecord.id or nil,
+			tools = tools,
+			subagents = subs,
+		}
+	end
+
+	local lastStateJson, lastStateAt = nil, 0
+	local STATE_EVERY = 1
+
 	local function drain()
 		attach()
-		if #queue == 0 and snapshotPending == nil then return true end
+		local stateDue = nil
+		if clock.since(lastStateAt) >= STATE_EVERY then
+			lastStateAt = clock.ms()
+			local ok, built = pcall(stateOf)
+			if ok then
+				local encoded = util.encode(built)
+				if encoded ~= lastStateJson then
+					lastStateJson = encoded
+					stateDue = built
+				end
+			end
+		end
+		if #queue == 0 and snapshotPending == nil and stateDue == nil then return true end
 		local batch = queue
 		local snapshot = snapshotPending
 		queue = {}
@@ -197,7 +357,7 @@ return function(env)
 		local res, err = call({
 			url = base() .. "/api/agent/events",
 			method = "POST",
-			body = util.encode({ events = batch, snapshot = snapshot }),
+			body = util.encode({ events = batch, snapshot = snapshot, state = stateDue }),
 			timeout = 10,
 		})
 		if res and res.ok then return true end

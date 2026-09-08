@@ -56,6 +56,7 @@ const state = {
   subscribers: new Set(), // browser SSE responses
   backlog: [],      // events since the last snapshot, replayed to a new browser
   snapshot: null,   // the transcript as of the game's last (re)connect
+  agentState: null, // the game's last full state push: providers, models, threads, tools, usage
   lastSeen: 0,      // when the game last touched any /api/agent route
   connected: false,
 };
@@ -202,6 +203,10 @@ async function serveEvents(req, res) {
     state.backlog = [];
     broadcast({ kind: 'bridge:snapshot', events: payload.snapshot });
   }
+  if (payload.state && typeof payload.state === 'object') {
+    state.agentState = payload.state;
+    broadcast({ kind: 'bridge:state', state: payload.state });
+  }
   const events = Array.isArray(payload.events) ? payload.events : [];
   for (const event of events) {
     if (!event || typeof event !== 'object') continue;
@@ -225,6 +230,9 @@ function serveStream(req, res) {
   // conversation from the top instead of joining halfway through a sentence.
   if (state.snapshot) {
     res.write(`data: ${JSON.stringify({ kind: 'bridge:snapshot', events: state.snapshot })}\n\n`);
+  }
+  if (state.agentState) {
+    res.write(`data: ${JSON.stringify({ kind: 'bridge:state', state: state.agentState })}\n\n`);
   }
   for (const event of state.backlog) {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -337,6 +345,17 @@ const server = http.createServer(async (req, res) => {
         allow: body.allow === true,
         remember: body.remember === true,
       });
+      sendJson(res, 202, { queued: true });
+    } else if (route === '/api/command' && post) {
+      // A generic door for everything that is not a message: provider and model
+      // switching, thread management, permission mode, subagent control. The game
+      // decides what is allowed; this only delivers.
+      const body = await readJson(req);
+      if (!body || typeof body.type !== 'string') {
+        sendJson(res, 400, { error: 'no type' });
+        return;
+      }
+      enqueue(body);
       sendJson(res, 202, { queued: true });
     } else if (route === '/api/agent/inbox' && req.method === 'GET') {
       serveInbox(req, res);

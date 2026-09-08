@@ -219,5 +219,64 @@ return function(env)
 					H.pathOf(remote), #captured, waited, H.list(captured, wanted))
 			end,
 		},
+		{
+			name = "signal_watch",
+			risk = "read",
+			description = "Listen to any instance signal for a short window and report what fired, with argument shapes. Unlike remote_watch this works on ordinary RBXScriptSignals -- Touched, Changed, ChildAdded, MouseButton1Click -- so a game's wiring can be understood without firing anything at the server.",
+			parameters = {
+				type = "object",
+				properties = {
+					path = { type = "string", description = "Dotted path to the instance." },
+					signal = { type = "string", description = "Signal name, e.g. 'Touched', 'Changed', 'ChildAdded'." },
+					count = { type = "integer", description = "Events to capture, 1-10. Default 3.", minimum = 1, maximum = 10 },
+					timeout = { type = "number", description = "Seconds to wait, 1-20. Default 8.", minimum = 1, maximum = 20 },
+				},
+				required = { "path", "signal" },
+			},
+			run = function(args, ctx)
+				local instance, err = H.resolve(args.path)
+				if not instance then return H.fail(err) end
+
+				local signalName = util.trim(tostring(args.signal or ""))
+				if signalName == "" then return H.fail("no signal name given") end
+
+				local wanted = H.limit(args.count, 3, 10)
+				local limit = util.clamp(tonumber(args.timeout) or 8, 1, 20)
+				local captured = {}
+
+				-- Reading the signal is the risk-free half; connecting to it is where
+				-- hosts differ, so both the read and the connect are guarded.
+				local okSignal, target = pcall(function() return instance[signalName] end)
+				if not okSignal or not target then
+					return H.fail(instance.ClassName .. " has no signal named '" .. signalName .. "'")
+				end
+				local okConnect, connection = pcall(function()
+					return target:Connect(function(...)
+						if #captured >= wanted then return end
+						local parts = {}
+						for index = 1, select("#", ...) do
+							parts[#parts + 1] = string.format("%d: %s", index, H.show((select(index, ...))))
+						end
+						captured[#captured + 1] = #parts > 0 and table.concat(parts, ", ") or "(no arguments)"
+					end)
+				end)
+				if not okConnect or not connection then
+					return H.fail("could not connect to " .. signalName .. " on " .. H.pathOf(instance))
+				end
+
+				local waited = 0
+				while #captured < wanted and waited < limit do
+					if ctx and ctx.aborted and ctx.aborted() then break end
+					waited = waited + (clock.wait(0.1) or 0.1)
+				end
+				pcall(function() connection:Disconnect() end)
+
+				if #captured == 0 then
+					return string.format("%s.%s fired nothing in %.0f seconds.", H.pathOf(instance), signalName, waited)
+				end
+				return string.format("%s.%s fired %d time(s) in %.1fs:\n%s",
+					H.pathOf(instance), signalName, #captured, waited, H.list(captured, wanted))
+			end,
+		},
 	}
 end

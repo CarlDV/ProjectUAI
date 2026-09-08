@@ -2,8 +2,9 @@
 
 // ============================================================================
 // Project UAI Web Bridge Application
-// Sleek, minimalist chat interface inspired by Anywhere Relay (ai.davidcsl.me)
-// Dual-mode: Live loopback SSE bridge & Live Server simulation testing
+// Real-data chat interface over the loopback SSE bridge. Everything the panels
+// show -- providers, models, tools, threads, subagents, usage -- comes from the
+// game's own state pushes. Nothing is hardcoded and nothing is simulated.
 // ============================================================================
 
 const STORE_KEY = 'uai.token';
@@ -33,6 +34,9 @@ const scrollToBottomBtn = $('scrollToBottom');
 const clearBtn = $('clear');
 const activeModelLabel = $('activeModelLabel');
 const topTokenCount = $('topTokenCount');
+const permBanner = $('permBanner');
+const permBannerText = $('permBannerText');
+const permBannerMode = $('permBannerMode');
 
 // Composer pills & popups
 const composerToolsPill = $('composerToolsPill');
@@ -43,30 +47,20 @@ const quickPromptsMenu = $('quickPromptsMenu');
 
 // Drawer elements
 const sidebarToggle = $('sidebarToggle');
-const toolsDrawerBtn = $('toolsDrawerBtn');
 const telemetryDrawerBtn = $('telemetryDrawerBtn');
 const featuresDrawer = $('featuresDrawer');
 const drawerOverlay = $('drawerOverlay');
 const drawerCloseBtn = $('drawerCloseBtn');
 
 // State
-let isSimulationMode = false;
 let isBusy = false;
 let autoScroll = true;
-let currentModelName = 'Claude 3.7 Sonnet';
+let agentState = null; // the game's last full state push
 const transcriptEvents = [];
 const toolRows = new Map();
 const subagentRecords = new Map();
-
-// Telemetry Counters
-const stats = {
-  totalTokens: 0,
-  promptTokens: 0,
-  completionTokens: 0,
-  messages: 0,
-  tools: 0,
-  startTime: Date.now(),
-};
+let lastLatencyMs = null;
+let toolsRun = 0;
 
 // ============================================================================
 // API
@@ -81,6 +75,10 @@ function api(path, body) {
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+function command(type, fields) {
+  return api('/command', { type, ...(fields || {}) }).catch(() => {});
 }
 
 // ============================================================================
@@ -100,7 +98,6 @@ function renderMarkdown(rawText) {
   if (!rawText) return '';
   let text = String(rawText);
 
-  // Extract code blocks
   const codeBlocks = [];
   text = text.replace(/```([a-zA-Z0-9_\-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const placeholder = `__CODE_BLOCK_${codeBlocks.length}__`;
@@ -110,26 +107,16 @@ function renderMarkdown(rawText) {
 
   text = escapeHtml(text);
 
-  // Headers
   text = text.replace(/^### (.*$)/gim, '<h3>$1</h3>');
   text = text.replace(/^## (.*$)/gim, '<h2>$1</h2>');
   text = text.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-
-  // Blockquotes
   text = text.replace(/^\> (.*$)/gim, '<blockquote>$1</blockquote>');
-
-  // Bold & Italic
   text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
   text = text.replace(/\*(.*?)\*/g, '<em>$1</em>');
-
-  // Inline code
   text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-  // Lists
   text = text.replace(/^\s*[\-\*]\s+(.*$)/gim, '<li>$1</li>');
   text = text.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
 
-  // Paragraphs
   const paragraphs = text.split(/\n\s*\n/);
   text = paragraphs
     .map(p => {
@@ -142,7 +129,6 @@ function renderMarkdown(rawText) {
     })
     .join('');
 
-  // Re-insert code blocks with copy button
   codeBlocks.forEach((block, idx) => {
     const escapedCode = escapeHtml(block.code.trim());
     const blockHtml = `
@@ -166,7 +152,6 @@ function renderMarkdown(rawText) {
   return text;
 }
 
-// Copy Code Button Delegated Handler
 document.addEventListener('click', (ev) => {
   const btn = ev.target.closest('.copy-btn');
   if (!btn) return;
@@ -185,10 +170,6 @@ document.addEventListener('click', (ev) => {
     }
   }).catch(() => {});
 });
-
-// ============================================================================
-// DOM Utilities
-// ============================================================================
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -223,8 +204,12 @@ function place(node, eventData) {
 }
 
 // ============================================================================
-// Message Rendering (Matches Screenshot: YOU with left line, Model label)
+// Message Rendering
 // ============================================================================
+
+function currentModelName() {
+  return (agentState && agentState.agent && agentState.agent.model) || 'agent';
+}
 
 function say(who, text, extra) {
   const isUser = who.toLowerCase() === 'you' || extra === 'user';
@@ -233,14 +218,12 @@ function say(who, text, extra) {
 
   const row = el('div', `msg-row ${isUser ? 'user' : ''} ${isAgent ? 'agent' : ''} ${isError ? 'bad' : ''}`);
 
-  // Header: Tracked uppercase label (e.g. YOU or GPT 5.6 SOL or CLAUDE 3.7 SONNET)
-  let senderLabel = isUser ? 'YOU' : currentModelName.toUpperCase();
+  let senderLabel = isUser ? 'YOU' : currentModelName().toUpperCase();
   if (isError) senderLabel = 'SYSTEM ERROR';
 
   const header = el('div', 'msg-header', senderLabel);
   row.appendChild(header);
 
-  // Body
   if (isError) {
     const errBox = el('div', 'msg-error-box', text);
     row.appendChild(errBox);
@@ -249,13 +232,9 @@ function say(who, text, extra) {
     body.innerHTML = renderMarkdown(text);
     row.appendChild(body);
   } else {
-    // User message with white line indicator on left (from screenshot)
     const body = el('div', 'msg-body', text);
     row.appendChild(body);
   }
-
-  stats.messages++;
-  updateStatsDisplay();
 
   return place(row, { type: isUser ? 'user' : (isError ? 'bad' : 'agent'), text });
 }
@@ -288,7 +267,6 @@ function summarise(args) {
     .slice(0, 120);
 }
 
-// Collapsible Tool Accordion
 function openTool(event) {
   const box = el('details', 'tool-accordion');
   const head = el('summary');
@@ -300,7 +278,6 @@ function openTool(event) {
   head.appendChild(verdict);
   box.appendChild(head);
 
-  // Content
   const bodyDetails = el('div', 'tool-details-content');
   const argsPre = el('pre', null, typeof event.arguments === 'object' ? JSON.stringify(event.arguments, null, 2) : String(event.arguments || '{}'));
   bodyDetails.appendChild(argsPre);
@@ -308,9 +285,6 @@ function openTool(event) {
 
   place(box, { type: 'tool', name: event.name, args: event.arguments });
   if (event.id) toolRows.set(event.id, { box, verdict, bodyDetails });
-
-  stats.tools++;
-  updateStatsDisplay();
 
   return box;
 }
@@ -341,7 +315,6 @@ function closeTool(event, ok) {
   if (event.id) toolRows.delete(event.id);
 }
 
-// Subagent Card
 function renderSubagent(event) {
   const card = el('div', 'subagent-card');
   card.appendChild(el('div', 'subagent-card-title', '🤖 SUBAGENT DISPATCH'));
@@ -360,7 +333,6 @@ function renderSubagent(event) {
   return place(card, { type: 'subagent', data: event });
 }
 
-// Permission Card
 function askPermission(event) {
   const card = el('div', 'ask-card');
   const title = el('div', 'ask-title');
@@ -393,11 +365,6 @@ function askPermission(event) {
     noteEl.style.fontSize = '12px';
     noteEl.style.color = granted ? 'var(--color-green)' : 'var(--color-danger)';
     card.appendChild(noteEl);
-
-    if (isSimulationMode) {
-      note(`Permission ${granted ? 'granted' : 'denied'} for ${event.name}`);
-      return;
-    }
 
     api('/permission', {
       id: event.id,
@@ -434,6 +401,11 @@ function apply(event) {
       transcript.scrollTop = transcript.scrollHeight;
       break;
 
+    case 'bridge:state':
+      agentState = event.state || {};
+      applyState();
+      break;
+
     case 'bridge:game':
       if (event.connected) {
         dot.className = 'status-dot';
@@ -453,7 +425,13 @@ function apply(event) {
       say('uai', event.text || '', 'agent');
       break;
 
+    case 'assistant:reasoning':
+      note('Reasoning… ' + String(event.text || '').replace(/\s+/g, ' ').slice(0, 140));
+      break;
+
     case 'tool:call':
+      toolsRun++;
+      updateTelemetry();
       openTool(event);
       break;
 
@@ -499,27 +477,402 @@ function apply(event) {
 
     case 'provider:switch':
       note(`Switched provider to ${event.to || event.name || 'fallback'}`);
-      if (activeModelLabel && (event.to || event.name)) {
-        currentModelName = event.to || event.name;
-        activeModelLabel.textContent = currentModelName.toLowerCase();
+      break;
+
+    case 'request:start':
+      note(`→ ${event.provider || 'provider'}${event.model ? ' · ' + event.model : ''} · ${event.messages || 0} messages`);
+      break;
+
+    case 'request:done':
+      if (event.ms) {
+        lastLatencyMs = event.ms;
+        updateTelemetry();
       }
+      if (event.error) note(`✕ ${event.provider || 'provider'}: ${event.error}`);
+      break;
+
+    case 'request:retry':
+      note(`retry ${event.attempt || 1}/${event.attempts || '?'} on ${event.provider || 'provider'}`);
+      break;
+
+    case 'usage': {
+      const turn = event.turn || {};
+      if (turn.prompt || turn.completion) {
+        note(`Tokens this turn: ${turn.prompt || 0} in / ${turn.completion || 0} out`);
+      }
+      break;
+    }
+
+    case 'turn:start':
+      setBusy(true);
+      break;
+
+    case 'turn:end':
+      setBusy(false);
+      break;
+
+    case 'compact':
+      note(`Context compacted (${event.before || '?'} → ${event.after || '?'} tokens).`);
       break;
 
     case 'subagent:start':
       renderSubagent(event);
       break;
 
-    case 'subagent:done':
-      note(`Subagent completed.`);
+    case 'subagent:text':
+      if (event.text) note(`[subagent] ${event.text}`);
+      break;
+
+    case 'subagent:tool':
+      openTool({ ...event, name: event.name || 'subagent tool', id: event.id });
+      break;
+
+    case 'subagent:tool:done':
+      closeTool({ ...event, name: event.name || 'subagent tool', id: event.id }, event.ok !== false);
+      break;
+
+    case 'subagent:done': {
+      const ms = event.ms ? ` in ${(event.ms / 1000).toFixed(1)}s` : '';
+      note(`Subagent finished${ms}${event.messages ? ' · ' + event.messages + ' messages' : ''}.`);
       if (event.id && subagentRecords.has(event.id)) {
         subagentRecords.get(event.id).status = 'completed';
         renderDrawerSubagents();
       }
       break;
+    }
 
     default:
       break;
   }
+}
+
+// ============================================================================
+// State Application (real data from the game)
+// ============================================================================
+
+function applyState() {
+  const s = agentState;
+  if (!s) return;
+
+  if (activeModelLabel) {
+    const label = s.agent && s.agent.model ? s.agent.model : 'no model';
+    activeModelLabel.textContent = String(label).toLowerCase();
+  }
+
+  const mode = s.permissions && s.permissions.mode;
+  const pending = (s.permissions && s.permissions.pending) || 0;
+  if (permBanner) {
+    permBanner.hidden = mode !== 'ask';
+    if (permBannerText) permBannerText.textContent = pending > 0 ? `${pending} request(s) waiting for approval…` : 'Ask mode — risky tools need approval';
+    if (permBannerMode) permBannerMode.textContent = mode ? (mode + ' mode') : '';
+  }
+
+  updateTelemetry();
+  renderModelMenu();
+  renderDrawerTools();
+  renderDrawerSubagents();
+  renderThreads();
+  renderProviders();
+  renderDiagnostics();
+}
+
+function updateTelemetry() {
+  const u = agentState && agentState.usage;
+  const total = u ? (u.total || 0) : 0;
+  const cost = u ? (u.cost || 0) : 0;
+
+  const set = (id, value) => { const node = $(id); if (node) node.textContent = value; };
+
+  set('statTotalTokens', total.toLocaleString());
+  set('statPromptTokens', (u ? (u.prompt || 0) : 0).toLocaleString());
+  set('statCompletionTokens', (u ? (u.completion || 0) : 0).toLocaleString());
+  set('statRequests', u ? (u.requests || 0) : 0);
+  set('statCost', '$' + cost.toFixed(4));
+  set('statCostSub', u && u.estimated ? 'estimated (provider reports none)' : 'provider pricing');
+
+  const badge = $('usageBadge');
+  if (badge) {
+    badge.textContent = u && u.estimated ? 'estimated' : 'live';
+    badge.className = 'badge-' + (u && u.estimated ? 'warn' : 'success');
+  }
+
+  if (lastLatencyMs != null) {
+    set('statLatency', 'last request ' + lastLatencyMs + 'ms');
+  }
+
+  set('statTools', toolsRun);
+
+  if (topTokenCount) topTokenCount.textContent = `${total.toLocaleString()} tok`;
+}
+
+// Model menu: the provider's real model list, plus a discovery fetch
+function renderModelMenu() {
+  const list = $('modelMenuList');
+  const hint = $('modelMenuHint');
+  if (!list) return;
+
+  const providers = (agentState && agentState.providers) || [];
+  const activeId = agentState && agentState.activeProvider;
+  const activeRec = providers.find(p => p.id === activeId);
+
+  if (hint) {
+    hint.textContent = activeRec ? (activeRec.label + ' · ' + (activeRec.models ? activeRec.models.length : 0) + ' models') : 'no provider';
+  }
+
+  list.replaceChildren();
+
+  if (providers.length === 0) {
+    const empty = el('div', 'popup-menu-empty');
+    empty.textContent = 'No provider configured. Add one in-game.';
+    list.appendChild(empty);
+    return;
+  }
+
+  providers.forEach(provider => {
+    const header = el('div', 'popup-menu-group');
+    header.textContent = provider.label + (provider.cooling ? ' (cooling)' : '');
+    list.appendChild(header);
+
+    if (provider.models && provider.models.length > 0) {
+      provider.models.forEach(model => {
+        const item = el('div', 'popup-menu-item');
+        item.setAttribute('data-provider', provider.id);
+        item.setAttribute('data-model', model);
+        if (activeId === provider.id && provider.model === model) item.classList.add('active');
+        item.textContent = model;
+        item.addEventListener('click', () => {
+          closeMenus();
+          command('model', { provider: provider.id, model });
+          if (activeModelLabel) activeModelLabel.textContent = String(model).toLowerCase();
+        });
+        list.appendChild(item);
+      });
+    } else {
+      const empty = el('div', 'popup-menu-empty');
+      empty.textContent = 'no models yet — fetch below';
+      list.appendChild(empty);
+    }
+
+    const discover = el('button', 'popup-menu-discover');
+    discover.type = 'button';
+    discover.textContent = '↻ Fetch models from ' + provider.label;
+    discover.addEventListener('click', () => {
+      discover.disabled = true;
+      discover.textContent = 'Fetching…';
+      command('models:discover', { provider: provider.id });
+      setTimeout(() => {
+        discover.disabled = false;
+        discover.textContent = '↻ Fetch models from ' + provider.label;
+      }, 4000);
+    });
+    list.appendChild(discover);
+  });
+}
+
+// Tool catalog: the game's real registry, grouped by its own groups
+const GROUP_LABELS = {
+  agentself: 'Autonomous', instance: 'Instances', script: 'Scripts', fs: 'Filesystem',
+  net: 'Network', web: 'Web', players: 'Players', character: 'Character',
+  world: 'World', remotes: 'Remotes', gui: 'Interface', perf: 'Diagnostics',
+  meta: 'Metadata', chat: 'In-game chat', input: 'Virtual input',
+};
+
+let activeDrawerCategory = 'all';
+let drawerSearchQuery = '';
+
+function renderDrawerTools() {
+  const container = $('drawerToolsList');
+  const pills = $('drawerCategoryPills');
+  if (!container) return;
+
+  const tools = (agentState && agentState.tools) || [];
+
+  if (pills) {
+    const groups = [...new Set(tools.map(t => t.group))];
+    const signature = groups.join(',');
+    if (pills.getAttribute('data-groups') !== signature) {
+      pills.setAttribute('data-groups', signature);
+      pills.replaceChildren();
+      const all = el('button', 'cat-pill' + (activeDrawerCategory === 'all' ? ' active' : ''), 'All');
+      all.type = 'button';
+      all.setAttribute('data-cat', 'all');
+      all.addEventListener('click', () => { activeDrawerCategory = 'all'; renderDrawerTools(); });
+      pills.appendChild(all);
+      groups.forEach(group => {
+        const pill = el('button', 'cat-pill' + (activeDrawerCategory === group ? ' active' : ''), GROUP_LABELS[group] || group);
+        pill.type = 'button';
+        pill.setAttribute('data-cat', group);
+        pill.addEventListener('click', () => { activeDrawerCategory = group; renderDrawerTools(); });
+        pills.appendChild(pill);
+      });
+    }
+  }
+
+  const count = $('toolCount');
+  if (count) count.textContent = tools.length;
+
+  const filtered = tools.filter(t => {
+    const matchCat = activeDrawerCategory === 'all' || t.group === activeDrawerCategory;
+    const matchQ = !drawerSearchQuery || t.name.toLowerCase().includes(drawerSearchQuery) || (t.description || '').toLowerCase().includes(drawerSearchQuery);
+    return matchCat && matchQ;
+  });
+
+  container.replaceChildren();
+
+  if (tools.length === 0) {
+    const empty = el('div', 'drawer-empty');
+    empty.textContent = 'Waiting for the game to report its tools…';
+    container.appendChild(empty);
+    return;
+  }
+
+  filtered.forEach(tool => {
+    const card = el('div', 'drawer-tool-card');
+    card.innerHTML = `
+      <div class="drawer-tool-row">
+        <span class="drawer-tool-name">${escapeHtml(tool.name)}</span>
+        <span class="drawer-tool-group">${escapeHtml(GROUP_LABELS[tool.group] || tool.group)}</span>
+      </div>
+      <div class="drawer-tool-desc">${escapeHtml(tool.description || '')}</div>
+      <div class="drawer-tool-footer">
+        <span class="risk-chip risk-${escapeHtml(tool.risk || 'write')}">${escapeHtml(tool.risk || 'write')}</span>
+        <button type="button" class="drawer-tool-action">Insert prompt</button>
+      </div>
+    `;
+    card.querySelector('.drawer-tool-action').addEventListener('click', () => {
+      input.value = `Execute tool: ${tool.name} — ${tool.description || ''}`;
+      grow();
+      closeDrawer();
+      input.focus();
+    });
+    container.appendChild(card);
+  });
+}
+
+// Subagents: real records from the game
+function renderDrawerSubagents() {
+  const container = $('subagentsList');
+  const countBadge = $('activeSubagentsCount');
+  if (!container) return;
+
+  const list = (agentState && agentState.subagents) || [];
+  if (countBadge) countBadge.textContent = `${list.filter(s => s.status === 'running' || s.status === 'queued').length} active`;
+
+  container.replaceChildren();
+
+  const records = list.length > 0 ? list : Array.from(subagentRecords.values());
+  if (records.length === 0) {
+    const empty = el('div', 'drawer-empty');
+    empty.textContent = 'No subagents dispatched yet.';
+    container.appendChild(empty);
+    return;
+  }
+
+  records.forEach(rec => {
+    const live = rec.status === 'running' || rec.status === 'queued';
+    const item = el('div', 'drawer-tool-card');
+    const report = rec.report ? `<div class="drawer-tool-desc">${escapeHtml(String(rec.report).slice(0, 200))}</div>` : '';
+    item.innerHTML = `
+      <div class="drawer-tool-row">
+        <strong style="color:var(--color-coral); font-size:12px;">${escapeHtml(rec.label || rec.preset || 'subagent')}</strong>
+        <span class="sub-status sub-${escapeHtml(rec.status || 'running')}">${escapeHtml(rec.status || 'running')}</span>
+      </div>
+      <div style="font-size:12px; color:var(--text-primary); margin-top:2px;">${escapeHtml(rec.task || '')}</div>
+      ${report}
+      ${live ? '<button type="button" class="drawer-tool-action sub-stop">Stop</button>' : ''}
+    `;
+    const stopBtn = item.querySelector('.sub-stop');
+    if (stopBtn) stopBtn.addEventListener('click', () => command('subagent:stop', { id: rec.id }));
+    container.appendChild(item);
+  });
+}
+
+// Threads: the game's real conversation list
+function renderThreads() {
+  const container = $('threadsList');
+  const countEl = $('threadCount');
+  if (!container) return;
+
+  const threads = (agentState && agentState.threads) || [];
+  if (countEl) countEl.textContent = threads.length;
+
+  container.replaceChildren();
+
+  if (threads.length === 0) {
+    const empty = el('div', 'drawer-empty');
+    empty.textContent = 'No conversations yet.';
+    container.appendChild(empty);
+    return;
+  }
+
+  threads.forEach(thread => {
+    const item = el('div', 'thread-item' + (thread.active ? ' active' : ''));
+    item.innerHTML = `
+      <div class="thread-row">
+        <span class="thread-title">${escapeHtml(thread.title || 'untitled')}</span>
+        <span class="thread-meta">${thread.busy ? '● busy' : ''}</span>
+      </div>
+      <div class="thread-sub">${escapeHtml(thread.place || '')} · ${thread.turns || 0} turns</div>
+    `;
+    item.addEventListener('click', () => {
+      if (!thread.active) command('thread', { id: thread.id });
+    });
+    container.appendChild(item);
+  });
+}
+
+// Providers: real list with health
+function renderProviders() {
+  const container = $('providersList');
+  const countEl = $('providerCount');
+  if (!container) return;
+
+  const providers = (agentState && agentState.providers) || [];
+  const activeId = agentState && agentState.activeProvider;
+  if (countEl) countEl.textContent = providers.length;
+
+  container.replaceChildren();
+
+  if (providers.length === 0) {
+    const empty = el('div', 'drawer-empty');
+    empty.textContent = 'No providers configured. Add one in-game.';
+    container.appendChild(empty);
+    return;
+  }
+
+  providers.forEach(provider => {
+    const isActive = provider.id === activeId;
+    const health = provider.health || {};
+    const h = health.ok || 0;
+    const f = health.fail || 0;
+    const item = el('div', 'thread-item' + (isActive ? ' active' : ''));
+    item.innerHTML = `
+      <div class="thread-row">
+        <span class="thread-title">${escapeHtml(provider.label)}</span>
+        <span class="thread-meta">${provider.cooling ? 'cooldown' : (h + '✓/' + (h + f))}</span>
+      </div>
+      <div class="thread-sub">${escapeHtml(provider.model || 'no model')}${provider.enabled === false ? ' · disabled' : ''}</div>
+    `;
+    item.addEventListener('click', () => {
+      if (!isActive) command('provider', { id: provider.id });
+    });
+    container.appendChild(item);
+  });
+}
+
+function renderDiagnostics() {
+  const s = agentState || {};
+  const set = (id, value) => { const node = $(id); if (node) node.textContent = value; };
+  set('diagProvider', (s.agent && s.agent.provider) || '—');
+  set('diagModel', (s.agent && s.agent.model) || '—');
+  set('diagHost', (s.caps && (s.caps.executor || s.caps.http)) || '—');
+  set('diagPlace', (s.place && s.place.name) || '—');
+
+  // Permission mode segmented control
+  const mode = s.permissions && s.permissions.mode;
+  document.querySelectorAll('#permModeControl button').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);
+  });
 }
 
 // ============================================================================
@@ -539,11 +892,6 @@ async function submit() {
 
   closeMenus();
 
-  if (isSimulationMode) {
-    runSimulatedTurn(text);
-    return;
-  }
-
   say('you', text, 'user');
   const res = await api('/send', { text }).catch(() => null);
   if (!res || !res.ok) {
@@ -553,27 +901,11 @@ async function submit() {
 
 sendButton.addEventListener('click', submit);
 stopButton.addEventListener('click', () => {
-  if (isSimulationMode) {
-    note('Simulated turn interrupted.');
-    setBusy(false);
-    return;
-  }
   api('/abort', {}).catch(() => {});
+  setBusy(false);
 });
 
 clearBtn.addEventListener('click', () => {
-  if (isSimulationMode) {
-    transcript.replaceChildren();
-    transcriptEvents.length = 0;
-    if (welcomeState) {
-      welcomeState.hidden = false;
-      transcript.appendChild(welcomeState);
-    }
-    stats.messages = 0;
-    stats.tools = 0;
-    updateStatsDisplay();
-    return;
-  }
   api('/clear', {}).catch(() => {});
 });
 
@@ -585,7 +917,6 @@ input.addEventListener('keydown', (ev) => {
   }
 });
 
-// Scroll to bottom button
 transcript.addEventListener('scroll', updateScrollButton);
 if (scrollToBottomBtn) {
   scrollToBottomBtn.addEventListener('click', () => {
@@ -595,7 +926,7 @@ if (scrollToBottomBtn) {
 }
 
 // ============================================================================
-// Popups (Model Selector & Quick Prompts)
+// Popups
 // ============================================================================
 
 function closeMenus() {
@@ -627,18 +958,6 @@ document.addEventListener('click', (ev) => {
   }
 });
 
-// Model selection
-document.querySelectorAll('#modelSelectorMenu .popup-menu-item').forEach(item => {
-  item.addEventListener('click', () => {
-    document.querySelectorAll('#modelSelectorMenu .popup-menu-item').forEach(i => i.classList.remove('active'));
-    item.classList.add('active');
-    currentModelName = item.getAttribute('data-model') || 'Claude 3.7 Sonnet';
-    if (activeModelLabel) activeModelLabel.textContent = currentModelName.toLowerCase();
-    closeMenus();
-  });
-});
-
-// Quick prompt insertion
 document.querySelectorAll('#quickPromptsMenu .popup-menu-item').forEach(item => {
   item.addEventListener('click', () => {
     const prompt = item.getAttribute('data-prompt');
@@ -668,7 +987,6 @@ function openDrawer(tabName) {
       c.hidden = c.id !== ('drawerTab' + tabName.charAt(0).toUpperCase() + tabName.slice(1));
     });
   }
-  renderDrawerTools();
 }
 
 function closeDrawer() {
@@ -677,13 +995,11 @@ function closeDrawer() {
 }
 
 if (sidebarToggle) sidebarToggle.addEventListener('click', () => openDrawer('tools'));
-if (toolsDrawerBtn) toolsDrawerBtn.addEventListener('click', () => openDrawer('tools'));
 if (composerToolsPill) composerToolsPill.addEventListener('click', () => openDrawer('tools'));
 if (telemetryDrawerBtn) telemetryDrawerBtn.addEventListener('click', () => openDrawer('telemetry'));
 if (drawerOverlay) drawerOverlay.addEventListener('click', closeDrawer);
 if (drawerCloseBtn) drawerCloseBtn.addEventListener('click', closeDrawer);
 
-// Drawer tab switches
 document.querySelectorAll('.drawer-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     const target = tab.getAttribute('data-tab');
@@ -696,105 +1012,23 @@ document.querySelectorAll('.drawer-tab').forEach(tab => {
   });
 });
 
-// ============================================================================
-// In-Game 60+ Tool Catalog
-// ============================================================================
-
-const TOOLS_CATALOG = [
-  // Instance (7)
-  { name: 'instance_find', group: 'instance', desc: 'Find instances matching class name or parent hierarchy.' },
-  { name: 'instance_get', group: 'instance', desc: 'Read detailed properties, attributes and tags of an instance.' },
-  { name: 'instance_set', group: 'instance', desc: 'Set property values or attributes on a specific instance.' },
-  { name: 'instance_call', group: 'instance', desc: 'Invoke an allowed engine method on an instance.' },
-  { name: 'instance_tree', group: 'instance', desc: 'Generate an ASCII or structured JSON hierarchy tree.' },
-  { name: 'instance_delete', group: 'instance', desc: 'Destroy an instance and remove it from DataModel.' },
-  { name: 'instance_create', group: 'instance', desc: 'Instantiate a new Part, Model or Folder.' },
-
-  // Character (4)
-  { name: 'character_move', group: 'character', desc: 'Move local character to target 3D coordinates using MoveTo.' },
-  { name: 'character_jump', group: 'character', desc: 'Trigger the Humanoid Jump state.' },
-  { name: 'character_look_at', group: 'character', desc: 'Pivot character or camera to orient toward a point.' },
-  { name: 'character_equip', group: 'character', desc: 'Equip or unequip a Tool from Backpack to Character.' },
-
-  // Players (4)
-  { name: 'player_list', group: 'players', desc: 'Retrieve full list of active server players and UserIds.' },
-  { name: 'player_get', group: 'players', desc: 'Get leaderstats, team, character status and distance.' },
-  { name: 'player_teleport', group: 'players', desc: 'Teleport local character directly to target player.' },
-  { name: 'player_chat', group: 'players', desc: 'Send a message to public in-game TextChatService.' },
-
-  // World (3)
-  { name: 'world_raycast', group: 'world', desc: 'Cast a ray from origin to direction and return hit part.' },
-  { name: 'world_get_parts', group: 'world', desc: 'Find parts in a bounding box, sphere or radius.' },
-  { name: 'world_ambient', group: 'world', desc: 'Read Lighting ClockTime, Fog, and atmosphere data.' },
-
-  // Remotes (3)
-  { name: 'remote_fire', group: 'remotes', desc: 'Fire a RemoteEvent with arbitrary payload arguments.' },
-  { name: 'remote_invoke', group: 'remotes', desc: 'Invoke a RemoteFunction and return server response.' },
-  { name: 'remote_spy', group: 'remotes', desc: 'Log outbound network remote calls and signatures.' },
-
-  // Script (3)
-  { name: 'script_decomp', group: 'script', desc: 'Decompile a LocalScript or ModuleScript into Luau source.' },
-  { name: 'script_source', group: 'script', desc: 'Read script source accessible by executor capabilities.' },
-  { name: 'script_dump', group: 'script', desc: 'Disassemble bytecode constants and proto tables.' },
-
-  // Filesystem (3)
-  { name: 'fs_read', group: 'fs', desc: 'Read text or JSON configuration from local folder.' },
-  { name: 'fs_write', group: 'fs', desc: 'Write state to local executor storage.' },
-  { name: 'fs_list', group: 'fs', desc: 'List files and subdirectories in workspace.' },
-
-  // Performance (3)
-  { name: 'perf_fps', group: 'perf', desc: 'Measure client render framerate, delta time and hitch frequency.' },
-  { name: 'perf_memory', group: 'perf', desc: 'Query Stats:GetTotalMemoryUsageMb() by tag.' },
-  { name: 'perf_ping', group: 'perf', desc: 'Measure round-trip server network latency in ms.' },
-
-  // Subagents (3)
-  { name: 'dispatch_agent', group: 'agentself', desc: 'Spawn a nested autonomous subagent with goal and turns.' },
-  { name: 'agent_followup', group: 'agentself', desc: 'Resume a finished subagent session with follow-up task.' },
-  { name: 'subagent_status', group: 'agentself', desc: 'Query progress and active tool invocation of a child agent.' },
-];
-
-let activeDrawerCategory = 'all';
-let drawerSearchQuery = '';
-
-function renderDrawerTools() {
-  const container = $('drawerToolsList');
-  if (!container) return;
-  container.innerHTML = '';
-
-  const filtered = TOOLS_CATALOG.filter(t => {
-    const matchCat = activeDrawerCategory === 'all' || t.group === activeDrawerCategory;
-    const matchQ = !drawerSearchQuery || t.name.toLowerCase().includes(drawerSearchQuery) || t.desc.toLowerCase().includes(drawerSearchQuery);
-    return matchCat && matchQ;
-  });
-
-  filtered.forEach(tool => {
-    const card = el('div', 'drawer-tool-card');
-    card.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <span class="drawer-tool-name">${tool.name}</span>
-        <span style="font-size:10px; color:var(--text-tertiary); text-transform:uppercase;">${tool.group}</span>
-      </div>
-      <div class="drawer-tool-desc">${tool.desc}</div>
-      <button type="button" class="drawer-tool-action">Insert prompt</button>
-    `;
-    card.querySelector('.drawer-tool-action').addEventListener('click', () => {
-      input.value = `Execute tool: ${tool.name} to inspect ${tool.group}`;
-      grow();
-      closeDrawer();
-      input.focus();
-    });
-    container.appendChild(card);
-  });
-}
-
-document.querySelectorAll('#drawerCategoryPills .cat-pill').forEach(pill => {
-  pill.addEventListener('click', () => {
-    document.querySelectorAll('#drawerCategoryPills .cat-pill').forEach(p => p.classList.remove('active'));
-    pill.classList.add('active');
-    activeDrawerCategory = pill.getAttribute('data-cat') || 'all';
-    renderDrawerTools();
+// Permission mode segmented control
+document.querySelectorAll('#permModeControl button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.getAttribute('data-mode');
+    command('permission-mode', { mode });
+    document.querySelectorAll('#permModeControl button').forEach(b => b.classList.toggle('active', b === btn));
   });
 });
+
+if (permBannerMode) {
+  permBannerMode.addEventListener('click', () => openDrawer('settings'));
+}
+
+const btnNewThread = $('btnNewThread');
+if (btnNewThread) {
+  btnNewThread.addEventListener('click', () => command('thread:new'));
+}
 
 const drawerToolSearch = $('drawerToolSearch');
 if (drawerToolSearch) {
@@ -804,84 +1038,17 @@ if (drawerToolSearch) {
   });
 }
 
-// Subagents in Drawer
-function renderDrawerSubagents() {
-  const container = $('subagentsList');
-  const countBadge = $('activeSubagentsCount');
-  if (!container) return;
+// ============================================================================
+// Export
+// ============================================================================
 
-  const list = Array.from(subagentRecords.values());
-  if (countBadge) countBadge.textContent = `${list.filter(s => s.status === 'running').length} active`;
-
-  if (list.length === 0) {
-    container.innerHTML = '<div style="font-size:12px; color:var(--text-tertiary); padding:16px 0;">No active subagents.</div>';
-    return;
-  }
-
-  container.innerHTML = '';
-  list.forEach(rec => {
-    const item = el('div', 'drawer-tool-card');
-    item.innerHTML = `
-      <div style="display:flex; justify-content:space-between;">
-        <strong style="color:var(--color-coral); font-size:12px;">${rec.preset}</strong>
-        <span style="font-size:10px; text-transform:uppercase;">${rec.status}</span>
-      </div>
-      <div style="font-size:12px; color:var(--text-primary); margin-top:2px;">${rec.task}</div>
-    `;
-    container.appendChild(item);
-  });
-}
-
-// Telemetry in Drawer
-function updateStatsDisplay() {
-  const total = $('statTotalTokens');
-  const prompt = $('statPromptTokens');
-  const comp = $('statCompletionTokens');
-  const cost = $('statCost');
-  const msgs = $('statMessages');
-  const tools = $('statTools');
-
-  if (total) total.textContent = stats.totalTokens.toLocaleString();
-  if (prompt) prompt.textContent = stats.promptTokens.toLocaleString();
-  if (comp) comp.textContent = stats.completionTokens.toLocaleString();
-  if (msgs) msgs.textContent = stats.messages;
-  if (tools) tools.textContent = stats.tools;
-
-  if (topTokenCount) {
-    topTokenCount.textContent = `${stats.totalTokens.toLocaleString()} tok`;
-  }
-
-  const costVal = (stats.promptTokens * 0.000003) + (stats.completionTokens * 0.000015);
-  if (cost) cost.textContent = `$${costVal.toFixed(4)}`;
-}
-
-// Session Uptime
-setInterval(() => {
-  const uptimeEl = $('diagUptime');
-  if (!uptimeEl) return;
-  const sec = Math.floor((Date.now() - stats.startTime) / 1000);
-  const h = String(Math.floor(sec / 3600)).padStart(2, '0');
-  const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
-  const s = String(sec % 60).padStart(2, '0');
-  uptimeEl.textContent = `${h}:${m}:${s}`;
-}, 1000);
-
-// Setting Auto-Scroll
-const settingAutoScroll = $('settingAutoScroll');
-if (settingAutoScroll) {
-  settingAutoScroll.addEventListener('change', () => {
-    autoScroll = settingAutoScroll.checked;
-  });
-}
-
-// Export Markdown & JSON
 const btnExportMarkdown = $('btnExportMarkdown');
 if (btnExportMarkdown) {
   btnExportMarkdown.addEventListener('click', () => {
     let md = '# Project UAI Session Transcript\n\n';
     transcriptEvents.forEach(({ data }) => {
       if (data.type === 'user') md += `### YOU\n${data.text}\n\n`;
-      else if (data.type === 'agent') md += `### ${currentModelName.toUpperCase()}\n${data.text}\n\n`;
+      else if (data.type === 'agent') md += `### ${currentModelName().toUpperCase()}\n${data.text}\n\n`;
       else if (data.type === 'bad') md += `### ERROR\n${data.text}\n\n`;
     });
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
@@ -909,98 +1076,7 @@ if (btnExportJson) {
 }
 
 // ============================================================================
-// Live Server Simulation / Internal Testing Mode
-// ============================================================================
-
-function seedSampleTranscript() {
-  // User message (matches screenshot)
-  say('you', 'hello', 'user');
-
-  // Assistant error card (matches the exact red card from user screenshot!)
-  say(
-    'error',
-    `{"error":{"message":"Budget pool quota has been exhausted. Please ask an administrator to increase the limit or select another budget pool. (request id: 202609070135078033215317dbjtHvEZqNlh)","type":"bad_response_status_code"},"type":"error"}`,
-    'bad'
-  );
-
-  // Completed tool call example
-  openTool({
-    id: 'tool-sim-1',
-    name: 'instance_find',
-    arguments: { ClassName: 'Model', Parent: 'Workspace' },
-  });
-  closeTool({
-    id: 'tool-sim-1',
-    name: 'instance_find',
-    text: 'Found 3 models:\n- Workspace.Map\n- Workspace.Spawns\n- Workspace.LocalPlayerCharacter',
-  }, true);
-
-  // Permission prompt example
-  askPermission({
-    id: 'perm-sim-1',
-    name: 'remote_fire',
-    description: 'Agent requested firing "ClaimReward" RemoteEvent.',
-    arguments: { Remote: 'ClaimReward', Amount: 50 },
-  });
-
-  stats.promptTokens = 120;
-  stats.completionTokens = 85;
-  stats.totalTokens = 205;
-  updateStatsDisplay();
-}
-
-function runSimulatedTurn(userPrompt) {
-  say('you', userPrompt, 'user');
-  setBusy(true);
-  statusText.textContent = 'thinking…';
-
-  stats.promptTokens += Math.round(userPrompt.length / 3);
-  stats.totalTokens = stats.promptTokens + stats.completionTokens;
-  updateStatsDisplay();
-
-  setTimeout(() => {
-    const lower = userPrompt.toLowerCase();
-    let toolName = 'instance_find';
-    let toolArgs = { query: userPrompt };
-    let toolResult = 'Executed successfully in 35ms.';
-
-    if (lower.includes('player') || lower.includes('who')) {
-      toolName = 'player_list';
-      toolArgs = { includeStats: true };
-      toolResult = 'Active Players (3):\n- CarlDV (UserId: 18294102, Team: "Builders")\n- PlayerTwo (UserId: 9948201, Team: "Explorers")\n- GuestUser (UserId: 3381920, Team: "Neutral")';
-    } else if (lower.includes('move') || lower.includes('teleport') || lower.includes('spawn')) {
-      toolName = 'character_move';
-      toolArgs = { target: 'SpawnLocation', coordinates: [0, 10, 0] };
-      toolResult = 'Humanoid navigated to SpawnLocation (Vector3(0, 10, 0)).';
-    } else if (lower.includes('perf') || lower.includes('fps')) {
-      toolName = 'perf_fps';
-      toolArgs = { sampleInterval: 1.0 };
-      toolResult = 'Performance:\n- Client FPS: 60.0 fps\n- Memory: 408 MB\n- Ping: 24 ms';
-    }
-
-    const simId = 'sim-call-' + Date.now();
-    openTool({ id: simId, name: toolName, arguments: toolArgs });
-
-    setTimeout(() => {
-      closeTool({ id: simId, name: toolName, text: toolResult }, true);
-
-      const reply = `I executed \`${toolName}\` to handle your request:\n\n` +
-        `\`\`\`json\n${JSON.stringify({ status: 'ok', tool: toolName, result: toolResult }, null, 2)}\n\`\`\`\n\n` +
-        `Operations completed in client memory without errors.`;
-
-      say('uai', reply, 'agent');
-      setBusy(false);
-      statusText.textContent = 'bridge';
-
-      stats.completionTokens += Math.round(reply.length / 3);
-      stats.totalTokens = stats.promptTokens + stats.completionTokens;
-      updateStatsDisplay();
-    }, 800);
-  }, 500);
-}
-
-// ============================================================================
-// Real Bridge SSE Connection
+// Live Bridge SSE Connection
 // ============================================================================
 
 let stream = null;
@@ -1034,38 +1110,30 @@ async function accepted(candidate) {
   return false;
 }
 
-function enterApp(simulation) {
-  isSimulationMode = simulation;
+function enterApp() {
   if (gate) gate.hidden = true;
   if (app) app.hidden = false;
-
-  if (simulation) {
-    dot.className = 'status-dot simulation';
-    statusText.textContent = 'bridge (simulation)';
-    const diagMode = $('diagMode');
-    if (diagMode) diagMode.textContent = 'Live Server (Simulation)';
-    seedSampleTranscript();
-  } else {
-    dot.className = 'status-dot';
-    statusText.textContent = 'bridge';
-    connectBridgeStream();
-  }
-
+  dot.className = 'status-dot warn';
+  statusText.textContent = 'waiting for game';
+  // Paint the panels' empty states immediately rather than after the first
+  // state push, so a browser opened before the game connects shows structure.
+  renderDrawerTools();
+  renderDrawerSubagents();
+  renderThreads();
+  renderProviders();
+  renderDiagnostics();
+  connectBridgeStream();
   input.focus();
 }
 
 // Boot
 (async function boot() {
-  renderDrawerTools();
-
-  // Try token from URL fragment or localStorage
   if (token && (await accepted(token))) {
     localStorage.setItem(STORE_KEY, token);
-    enterApp(false);
+    enterApp();
     return;
   }
 
-  // Token is missing or invalid: show login screen (#gate)
   localStorage.removeItem(STORE_KEY);
   if (gate) gate.hidden = false;
   if (app) app.hidden = true;
@@ -1085,7 +1153,7 @@ function enterApp(simulation) {
       if (await accepted(candidate)) {
         token = candidate;
         localStorage.setItem(STORE_KEY, token);
-        enterApp(false);
+        enterApp();
         return;
       }
 
@@ -1094,13 +1162,6 @@ function enterApp(simulation) {
         err.textContent = 'That token was refused. Check the bridge console.';
         err.hidden = false;
       }
-    });
-  }
-
-  const demoBtn = $('gate-demo-btn');
-  if (demoBtn) {
-    demoBtn.addEventListener('click', () => {
-      enterApp(true);
     });
   }
 

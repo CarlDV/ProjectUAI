@@ -887,7 +887,7 @@ return function(env)
 			layoutOrder = 2,
 		})
 
-		local handle = { root = holder, rows = rows, calls = 0, settled = 0 }
+		local handle = { root = holder, rows = rows, calls = 0, settled = 0, names = {} }
 		local started = clock.ms()
 		local open = true
 		local folded = false
@@ -904,8 +904,27 @@ return function(env)
 		local function paint()
 			local waited = handle.ms or clock.since(started)
 			timing.Text = waited >= 1000 and util.formatDuration(waited) or ""
-			summary.Text = string.format("%s%s",
+			-- The summary names what ran, because a count alone cannot be reread:
+			-- "6 tools" tells someone scrolling back nothing about which six. The
+			-- names are deduplicated in arrival order and capped, so a run that
+			-- mixed two tools with four calls reads as the two tools it was.
+			local seen, names = {}, {}
+			for _, name in ipairs(handle.names or {}) do
+				if not seen[name] then
+					seen[name] = true
+					names[#names + 1] = name
+				end
+			end
+			-- Three names and a count reads better than a row of eight that
+			-- truncates into nothing. The label is a summary, not a listing.
+			if #names > 3 then
+				local rest = #names - 3
+				for index = #names, 4, -1 do names[index] = nil end
+				names[#names + 1] = "+" .. tostring(rest) .. " more"
+			end
+			summary.Text = string.format("%s%s%s",
 				util.pluralise(handle.calls, "tool"),
+				#names > 0 and ("  \194\183  " .. table.concat(names, ", ")) or "",
 				handle.settled < handle.calls
 					and string.format("  \194\183  %d done", handle.settled) or "")
 			-- The header earns its line once there is a run to fold. One call is a row,
@@ -936,6 +955,10 @@ return function(env)
 		-- Called by the view for each call it puts in here.
 		function handle.opened()
 			handle.calls = handle.calls + 1
+			if handle.pendingName then
+				handle.names[#handle.names + 1] = handle.pendingName
+				handle.pendingName = nil
+			end
 			paint()
 		end
 

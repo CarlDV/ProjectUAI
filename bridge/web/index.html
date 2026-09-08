@@ -43,7 +43,6 @@
       </div>
 
       <button type="submit" id="gate-submit" class="gate-btn">Connect Bridge</button>
-      <button type="button" id="gate-demo-btn" class="gate-demo-btn">Or continue in Demo / Simulation mode &rarr;</button>
 
       <p id="gate-error" class="gate-error" hidden></p>
     </form>
@@ -71,13 +70,6 @@
       </div>
 
       <div class="top-nav-right">
-        <button type="button" id="toolsDrawerBtn" class="top-action-btn" title="Open In-Game Tools Catalog">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
-          </svg>
-          <span>Tools (60+)</span>
-        </button>
-
         <button type="button" id="telemetryDrawerBtn" class="top-action-btn" title="Telemetry & Accounting">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="20" x2="18" y2="10"></line>
@@ -99,7 +91,7 @@
     <!-- Chat Scroll Area -->
     <main id="transcript" class="chat-stream" aria-live="polite">
       <!-- Welcome Empty State -->
-      <div id="welcomeState" class="empty-state" hidden>
+      <div id="welcomeState" class="empty-state">
         <div class="empty-spark-icon">
           <svg width="32" height="32" viewBox="0 0 512 512" fill="none">
             <rect width="512" height="512" rx="112" fill="#141416"/>
@@ -135,7 +127,13 @@
         <div class="composer-toolbar">
           <div class="composer-toolbar-left">
             <!-- Tools Action Pill -->
-            <button type="button" id="composerToolsPill" class="composer-pill" title="Browse in-game tools">
+            <Permission Banner (ask mode gate) -->
+        <div id="permBanner" class="perm-banner" hidden>
+          <span id="permBannerText">Waiting for approval…</span>
+          <button type="button" id="permBannerMode" class="perm-banner-mode">Ask mode</button>
+        </div>
+
+        <!-- button type="button" id="composerToolsPill" class="composer-pill" title="Browse in-game tools">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
               </svg>
@@ -146,24 +144,23 @@
             <div class="pill-wrapper">
               <button type="button" id="modelSelectorPill" class="composer-pill model-pill" title="Change active model">
                 <span class="pill-dot"></span>
-                <span id="activeModelLabel">claude 3.7 sonnet</span>
+                <span id="activeModelLabel">connecting…</span>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <polyline points="6 9 12 15 18 9"></polyline>
                 </svg>
               </button>
 
               <!-- Model Selector Popup Menu Anchored Directly Above -->
-              <div id="modelSelectorMenu" class="popup-menu" hidden>
-                <div class="popup-menu-header">Select Model</div>
-                <div class="popup-menu-item active" data-model="Claude 3.7 Sonnet">● Claude 3.7 Sonnet (Default)</div>
-                <div class="popup-menu-item" data-model="Gemini 2.5 Pro">● Gemini 2.5 Pro</div>
-                <div class="popup-menu-item" data-model="GPT-4o">● GPT-4o</div>
-                <div class="popup-menu-item" data-model="DeepSeek V3">● DeepSeek V3</div>
-                <div class="popup-menu-item" data-model="Claude 3.5 Haiku">● Claude 3.5 Haiku</div>
+              <div id="modelSelectorMenu" class="popup-menu model-menu" hidden>
+                <div class="popup-menu-header">
+                  <span>Model</span>
+                  <span id="modelMenuHint" class="popup-menu-hint">from provider</span>
+                </div>
+                <div id="modelMenuList" class="popup-menu-scroll"></div>
               </div>
             </div>
 
-            <!-- Quick Action Prompts Dropdown with Anchor Wrapper -->
+            <!-- Quick Prompts -->
             <div class="pill-wrapper">
               <button type="button" id="quickPromptsPill" class="composer-pill" title="Quick prompt shortcuts">
                 <span>Quick Prompts</span>
@@ -171,8 +168,6 @@
                   <polyline points="6 9 12 15 18 9"></polyline>
                 </svg>
               </button>
-
-              <!-- Quick Prompts Popup Menu Anchored Directly Above -->
               <div id="quickPromptsMenu" class="popup-menu" hidden>
                 <div class="popup-menu-header">Quick Actions</div>
                 <div class="popup-menu-item" data-prompt="Inspect Workspace and list top-level models and geometry">🔍 Inspect Workspace</div>
@@ -180,7 +175,6 @@
                 <div class="popup-menu-item" data-prompt="Check game performance, client FPS, memory usage and ping">⚡ Check Performance</div>
                 <div class="popup-menu-item" data-prompt="Find local character and report current Position and Humanoid state">📍 Character Status</div>
                 <div class="popup-menu-item" data-prompt="Scan for RemoteEvents and RemoteFunctions in ReplicatedStorage">📡 Scan Remotes</div>
-                <div class="popup-menu-item" data-prompt="Dispatch subagent to survey environment for hidden items">🤖 Dispatch Scout Subagent</div>
               </div>
             </div>
           </div>
@@ -226,21 +220,10 @@
         <!-- Tab 1: Tools Catalog -->
         <section id="drawerTabTools" class="drawer-tab-content active">
           <div class="drawer-section-title">
-            <span>In-Game Tool Catalog (60+)</span>
+            <span>Tool Catalog <span id="toolCount" class="count-chip">0</span></span>
             <input type="text" id="drawerToolSearch" class="drawer-search-input" placeholder="Search tools…">
           </div>
-          <div class="drawer-category-pills" id="drawerCategoryPills">
-            <button type="button" class="cat-pill active" data-cat="all">All</button>
-            <button type="button" class="cat-pill" data-cat="instance">Instance</button>
-            <button type="button" class="cat-pill" data-cat="character">Character</button>
-            <button type="button" class="cat-pill" data-cat="players">Players</button>
-            <button type="button" class="cat-pill" data-cat="world">World</button>
-            <button type="button" class="cat-pill" data-cat="remotes">Remotes</button>
-            <button type="button" class="cat-pill" data-cat="script">Script</button>
-            <button type="button" class="cat-pill" data-cat="fs">Filesystem</button>
-            <button type="button" class="cat-pill" data-cat="perf">Performance</button>
-            <button type="button" class="cat-pill" data-cat="agentself">Subagents</button>
-          </div>
+          <div class="drawer-category-pills" id="drawerCategoryPills"></div>
           <div id="drawerToolsList" class="drawer-tools-list"></div>
         </section>
 
@@ -258,7 +241,7 @@
         <section id="drawerTabTelemetry" class="drawer-tab-content" hidden>
           <div class="drawer-section-title">
             <span>Telemetry &amp; Token Accounting</span>
-            <span class="badge-success">Local Client</span>
+            <span id="usageBadge" class="badge-success">live</span>
           </div>
           <div class="telemetry-compact-grid">
             <div class="metric-box">
@@ -269,12 +252,12 @@
             <div class="metric-box">
               <div class="metric-label">Est. Cost</div>
               <div class="metric-val text-accent" id="statCost">$0.0000</div>
-              <div class="metric-sub">OpenRouter / Provider pricing</div>
+              <div class="metric-sub" id="statCostSub">provider pricing</div>
             </div>
             <div class="metric-box">
-              <div class="metric-label">Messages</div>
-              <div class="metric-val" id="statMessages">0</div>
-              <div class="metric-sub">Active session turns</div>
+              <div class="metric-label">Requests</div>
+              <div class="metric-val" id="statRequests">0</div>
+              <div class="metric-sub" id="statLatency">—</div>
             </div>
             <div class="metric-box">
               <div class="metric-label">Tools Run</div>
@@ -285,9 +268,17 @@
 
           <div class="drawer-card">
             <div class="drawer-card-title">Diagnostics</div>
-            <div class="diag-item"><span>Mode:</span> <strong id="diagMode">Live Server (Simulation)</strong></div>
-            <div class="diag-item"><span>Transport:</span> <strong>Loopback SSE</strong></div>
-            <div class="diag-item"><span>Session Uptime:</span> <strong id="diagUptime">00:00:00</strong></div>
+            <div class="diag-item"><span>Provider:</span> <strong id="diagProvider">—</strong></div>
+            <div class="diag-item"><span>Model:</span> <strong id="diagModel">—</strong></div>
+            <div class="diag-item"><span>Host:</span> <strong id="diagHost">—</strong></div>
+            <div class="diag-item"><span>Place:</span> <strong id="diagPlace">—</strong></div>
+            <div class="diag-item"><span>Transport:</span> <strong>loopback SSE</strong></div>
+          </div>
+
+          <div class="drawer-card">
+            <div class="drawer-card-title">Threads <span id="threadCount" class="count-chip">0</span></div>
+            <div id="threadsList" class="threads-list"></div>
+            <button type="button" id="btnNewThread" class="btn-sm-action" style="width:100%; margin-top:8px;">New conversation</button>
           </div>
         </section>
 
@@ -295,6 +286,18 @@
         <section id="drawerTabSettings" class="drawer-tab-content" hidden>
           <div class="drawer-section-title"><span>Preferences &amp; Export</span></div>
           <div class="drawer-card">
+            <div class="drawer-setting-row">
+              <div>
+                <div class="setting-name">Permission Mode</div>
+                <div class="setting-desc">How the agent asks before risky tools</div>
+              </div>
+              <div class="seg-control" id="permModeControl">
+                <button type="button" data-mode="readonly">Read</button>
+                <button type="button" data-mode="ask">Ask</button>
+                <button type="button" data-mode="auto">Auto</button>
+                <button type="button" data-mode="full">Full</button>
+              </div>
+            </div>
             <div class="drawer-setting-row">
               <div>
                 <div class="setting-name">Auto-Scroll</div>
@@ -316,6 +319,11 @@
               </div>
               <button type="button" id="btnExportJson" class="btn-sm-action">Export</button>
             </div>
+          </div>
+
+          <div class="drawer-card">
+            <div class="drawer-card-title">Providers <span id="providerCount" class="count-chip">0</span></div>
+            <div id="providersList" class="threads-list"></div>
           </div>
         </section>
       </div>

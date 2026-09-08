@@ -80,10 +80,13 @@ return function(env)
 		-- nothing, and putting a later row above an earlier one is not an option: the
 		-- block takes its layout order when it opens, so anything that has to sort after
 		-- the rows already in it has to go in it.
-		local function openRun()
+		local function openRun(name)
 			if not view.run then
 				view.run = message.toolRun(scroll.instance, nextOrder())
 			end
+			-- The run's header names the tools it holds, so the name of the call
+			-- about to be added travels with the opening of its row.
+			if name then view.run.pendingName = name end
 			return view.run
 		end
 
@@ -260,7 +263,7 @@ return function(env)
 				-- below the tool rows instead of being destroyed and rebuilt -- which
 				-- restarted the spinner's phase and left the following request with no
 				-- indicator at all.
-				local run = openRun()
+				local run = openRun(event.name)
 				local handle = message.toolCall(run.rows, event, run.slot())
 				handle.run = run
 				run.opened()

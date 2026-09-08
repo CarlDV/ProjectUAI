@@ -20,6 +20,8 @@ local GROUPS = {
 	"meta",
 	"chat",
 	"input",
+	"templates",
+	"screen",
 }
 
 return function(env)

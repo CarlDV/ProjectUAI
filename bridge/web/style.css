@@ -901,6 +901,285 @@ details.tool-accordion[open] .tool-arrow {
   color: #ffffff;
 }
 
+/* Model menu specifics */
+.model-menu {
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  white-space: normal;
+  min-width: 300px;
+}
+
+.popup-menu-hint {
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  margin-left: auto;
+  padding-left: 10px;
+}
+
+.popup-menu-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.popup-menu-group {
+  font-size: 10.5px;
+  color: var(--color-coral);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  padding: 8px 8px 4px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 4px;
+}
+
+.popup-menu-group:first-child { border-top: none; margin-top: 0; }
+
+.popup-menu-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 6px 8px;
+}
+
+.popup-menu-discover {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 6px 8px 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px dashed var(--border-bright);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.popup-menu-discover:hover:not(:disabled) {
+  border-color: var(--color-coral);
+  color: var(--color-coral);
+}
+
+.popup-menu-discover:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+/* Permission banner in composer */
+.perm-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 12px 0;
+  padding: 8px 12px;
+  background: var(--color-warn-bg);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--color-warn);
+}
+
+.perm-banner-mode {
+  background: transparent;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 5px;
+  color: var(--color-warn);
+  font-size: 10.5px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.perm-banner-mode:hover {
+  background: rgba(234, 179, 8, 0.12);
+}
+
+/* Drawer list items: threads, providers */
+.thread-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.12s ease;
+}
+
+.thread-item:hover {
+  background: #131316;
+}
+
+.thread-item.active {
+  background: rgba(226, 109, 70, 0.08);
+  border-color: rgba(226, 109, 70, 0.3);
+}
+
+.thread-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.thread-title {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.thread-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.threads-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Drawer shared bits */
+.count-chip {
+  display: inline-block;
+  background: #1f1f23;
+  border: 1px solid var(--border-medium);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  border-radius: 10px;
+  padding: 1px 7px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.drawer-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 14px 4px;
+  text-align: center;
+}
+
+.drawer-tool-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.drawer-tool-row .drawer-tool-name { color: var(--text-primary); }
+
+.drawer-tool-group {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.drawer-tool-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.risk-chip {
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border-bright);
+  color: var(--text-tertiary);
+}
+
+.risk-chip.risk-read {
+  color: var(--color-green);
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.06);
+}
+
+.risk-chip.risk-write {
+  color: var(--color-coral);
+  border-color: rgba(226, 109, 70, 0.35);
+  background: rgba(226, 109, 70, 0.06);
+}
+
+.sub-status {
+  font-size: 10px;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+.sub-status.sub-running, .sub-status.sub-queued { color: var(--color-warn); }
+.sub-status.sub-done { color: var(--color-green); }
+.sub-status.sub-failed, .sub-status.sub-stopped { color: var(--color-danger); }
+
+/* Segmented control (permission mode) */
+.seg-control {
+  display: inline-flex;
+  background: #131316;
+  border: 1px solid var(--border-medium);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.seg-control button {
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-family: var(--font-sans);
+}
+
+.seg-control button:hover {
+  color: var(--text-primary);
+}
+
+.seg-control button.active {
+  background: var(--color-coral);
+  color: #000000;
+  font-weight: 600;
+}
+
+.badge-warn {
+  background: var(--color-warn-bg);
+  color: var(--color-warn);
+  border-radius: 4px;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
 /* ==========================================================================
    Slide-Over Features Drawer (Tools, Subagents, Telemetry, Settings)
    ========================================================================== */

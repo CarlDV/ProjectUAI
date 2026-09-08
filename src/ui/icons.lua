@@ -47,7 +47,7 @@ return function(env)
 		globe = "globe",
 		book = "book-open",
 		signOut = "log-out",
-		ellipsis = "move-horizontal",
+		ellipsis = "ellipsis",
 	}
 
 	local assetCache = {}
@@ -751,9 +751,9 @@ return function(env)
 		local tint = colour or theme.color.textTertiary
 		local frame, custom = customOrHolder(parent, size, "IconEllipsis", "ellipsis", tint)
 		if custom then return frame end
-		for index, offset in ipairs({ 0.24, 0.5, 0.76 }) do
+		for index, offset in ipairs({ 0.2, 0.5, 0.8 }) do
 			bar(frame, {
-				size = UDim2.fromScale(0.16, 0.16), color = tint,
+				size = UDim2.fromScale(0.18, 0.18), color = tint,
 				position = UDim2.fromScale(offset, 0.5), zIndex = index + 1,
 			})
 		end

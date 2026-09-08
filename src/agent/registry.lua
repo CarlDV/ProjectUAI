@@ -87,6 +87,8 @@ return function(env)
 		meta = "Metadata",
 		chat = "In-game chat",
 		input = "Virtual input",
+		templates = "Templates",
+		screen = "Screen & aiming",
 	}
 
 	M.GROUP_LABELS = GROUP_LABELS

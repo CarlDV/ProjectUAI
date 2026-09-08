@@ -4534,6 +4534,17 @@ scenario("a place group folds and says what it is hiding", function()
 	check("and nothing is drawn in it",
 		#harness.byName("IconSlot", row):GetChildren(), 0)
 
+	-- The trailing menu button is three dots, not a move-horizontal arrow. The
+	-- Lucide name for the glyph was once mapped to the wrong icon -- "ellipsis"
+	-- pointed at move-horizontal's left-right arrow, so every conversation row
+	-- carried a <> on its right edge.
+	local menu = harness.byName("SessionMenu", row)
+	truthy("the row has its menu button", menu ~= nil, harness.dump(row))
+	local menuIcon = harness.byName("IconEllipsis", menu)
+	truthy("drawn as an ellipsis", menuIcon ~= nil, harness.dump(menu))
+	truthy("and not as an arrow",
+		harness.byName("IconArrowLeft", menu) == nil and harness.byName("IconArrowRight", menu) == nil)
+
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
