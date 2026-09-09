@@ -3,6 +3,7 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local clock = env.require("runtime/clock")
+	local config = env.require("runtime/config")
 	local state = env.require("agent/state")
 	local subagent = env.require("agent/subagent")
 	local H = env.require("tools/helpers")
@@ -124,7 +125,7 @@ return function(env)
 					preset = {
 						type = "string",
 						enum = { "read", "web", "game", "full" },
-						description = "Which tools it gets. 'read' (default) cannot change anything; 'full' can.",
+						description = "Which tools it gets. 'read' cannot change anything; 'full' can. Unset uses the configured default, which is 'full'.",
 					},
 					turns = { type = "integer", description = "Step limit, 1-30. Default 14.", minimum = 1, maximum = 30 },
 				},
@@ -137,7 +138,11 @@ return function(env)
 					-- feed under the row the user is already looking at.
 					callId = ctx and ctx.callId or nil,
 					task = args.task,
-					preset = args.preset or "read",
+					-- The default preset is a setting, so it can be widened or narrowed once
+					-- for every dispatch rather than only when the model names one. Permission
+					-- mode still gates what actually runs, and a prompt raised inside a child
+					-- is forwarded to the parent's stream.
+					preset = args.preset or config.get("agent.subagentPreset", "full"),
 					turns = args.turns,
 				})
 				if not result then return H.fail(err) end

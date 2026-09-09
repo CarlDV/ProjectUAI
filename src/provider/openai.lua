@@ -17,6 +17,54 @@ return function(env)
 
 	local M = {}
 
+	-- The executor's own transport wall, answered with a smaller ask. Some executors
+	-- hard-cap every HTTP request at sixty seconds and ignore the Timeout option
+	-- entirely, so no config value lifts that wall. What can change is the ask: a
+	-- model that thinks for ninety seconds finishes inside sixty when asked to think
+	-- less. One notch of effort down and the reply ceiling halved, and only when the
+	-- first attempt produced nothing at all -- a refusal with a body is a decision,
+	-- not a deadline, and retrying it smaller is not going to change the answer.
+	-- Returns the shrunk body and a one-line note, or nil when there is nothing left
+	-- to shrink.
+	local function smallerAsk(body)
+		local changes = {}
+		local lowered = util.copy(body)
+
+		local order = { "low", "medium", "high", "xhigh", "max" }
+		local current = 0
+		for index, level in ipairs(order) do
+			if level == tostring(body.reasoning_effort or "") then current = index break end
+		end
+		if current > 1 then
+			lowered.reasoning_effort = order[current - 1]
+			changes[#changes + 1] = "effort " .. lowered.reasoning_effort
+		end
+
+		local ceiling = tonumber(body.max_tokens or body.max_completion_tokens)
+		if ceiling and ceiling > 4000 then
+			local halved = math.floor(ceiling / 2)
+			if body.max_tokens then lowered.max_tokens = halved
+			else lowered.max_completion_tokens = halved end
+			changes[#changes + 1] = "max_tokens " .. halved
+		end
+
+		if #changes == 0 then return nil end
+		return lowered, table.concat(changes, ", ")
+	end
+
+	-- The wall the transport waits against. The default is a day and it is the
+	-- highest of any clock here on purpose: this is the one deadline nothing else can
+	-- rescue, because a tool or a subagent that runs out of time still gets its result
+	-- collected, while a request that times out is a turn spent for nothing. The
+	-- unlimited switch means the same day rather than a true infinity -- a request
+	-- nobody collects is indistinguishable from a hung client. Shared by both fire
+	-- paths in this adapter.
+	local function requestTimeout(request)
+		if request.timeout then return request.timeout end
+		if config.get("agent.requestUnlimited", false) then return 86400 end
+		return config.get("agent.requestTimeout", 86400)
+	end
+
 	-- Messages are rewritten into the wire shape rather than passed through, so a
 	-- field the context store finds useful (reasoning text, timing, ids) cannot
 	-- leak into a payload and trip a gateway that rejects unknown fields.
@@ -409,7 +457,9 @@ return function(env)
 					body = payload,
 					aborted = request.aborted,
 					onFrame = request.onFrame,
-					timeout = request.timeout or 120,
+					-- Same deadline as the HTTP path: a long think is not a failure, and the
+					-- socket only ends the exchange when this runs out.
+					timeout = requestTimeout(request),
 				})
 				if streamBody then
 					return { ok = true, status = 200, body = streamBody, via = "websocket", ms = clock.since(started) }
@@ -426,7 +476,9 @@ return function(env)
 				aborted = request.aborted,
 				onRetry = request.onRetry,
 				tag = "chat:" .. record.id,
-				timeout = request.timeout,
+				-- The one deadline that matters for a reasoning model: nothing arrives
+				-- until it finishes thinking, so this has to outlast the think.
+				timeout = requestTimeout(request),
 			})
 		end
 
@@ -450,6 +502,26 @@ return function(env)
 					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 400 })
 				end
 				res, err = fire(body)
+			end
+		end
+
+		-- The executor's transport wall: no body, no headers, an executor raise for
+		-- the error text, and no config value can lift that wall because the option
+		-- was never honoured. Retry once with a smaller ask -- less thinking, half the
+		-- reply ceiling -- so the model finishes inside the wall instead of dying at
+		-- it. Only when the first attempt produced nothing at all, only within a
+		-- minute of the cap, and only when the smaller ask is actually smaller: a
+		-- deadline on an already-minimal body would re-send the same prompt to the
+		-- same wall, and that is the one outcome this must not do.
+		local wallMs = clock.since(started)
+		if not res and err and err ~= "aborted" and wallMs >= 55000 and wallMs <= 70000 then
+			local lowered, note = smallerAsk(body)
+			if lowered and util.encode(lowered) ~= util.encode(body) then
+				log.info("provider", record.label .. ": hit the transport wall, retrying smaller (" .. note .. ")")
+				if request.onRetry then
+				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 0 })
+			end
+				res, err = fire(lowered)
 			end
 		end
 

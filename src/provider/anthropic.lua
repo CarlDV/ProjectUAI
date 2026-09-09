@@ -25,6 +25,48 @@ return function(env)
 
 	local M = {}
 
+	-- Same wall as the chat adapter, for the same reason: the default is a day, the
+	-- highest of any clock here, because a request that times out is a turn spent for
+	-- nothing and nothing else can rescue it. The unlimited switch means the same day
+	-- rather than a true infinity -- a request nobody collects is indistinguishable
+	-- from a hung client.
+	local function requestTimeout(request)
+		if request.timeout then return request.timeout end
+		if config.get("agent.requestUnlimited", false) then return 86400 end
+		return config.get("agent.requestTimeout", 86400)
+	end
+
+	-- The executor's transport wall, answered with a smaller ask. Same reasoning as
+	-- the chat adapter: some executors hard-cap every HTTP request at sixty seconds
+	-- and ignore the Timeout option entirely, so no config value lifts that wall. A
+	-- model that thinks for ninety seconds finishes inside sixty when asked to think
+	-- less. The effort lives in `output_config.effort` on this wire; the reply ceiling
+	-- is `max_tokens`, which is mandatory here.
+	local function smallerAsk(body)
+		local changes = {}
+		local lowered = util.copy(body)
+
+		local order = { "low", "medium", "high", "xhigh", "max" }
+		local current = 0
+		for index, level in ipairs(order) do
+			if level == tostring(body.output_config and body.output_config.effort or "") then current = index break end
+		end
+		if current > 1 then
+			lowered.output_config = { effort = order[current - 1] }
+			changes[#changes + 1] = "effort " .. order[current - 1]
+		end
+
+		local ceiling = tonumber(body.max_tokens)
+		if ceiling and ceiling > 4000 then
+			lowered.max_tokens = math.floor(ceiling / 2)
+			changes[#changes + 1] = "max_tokens " .. lowered.max_tokens
+		end
+
+		if #changes == 0 then return nil end
+		return lowered, table.concat(changes, ", ")
+	end
+
+
 	local VERSION = "2023-06-01"
 
 	-- Anthropic stop reasons mapped onto the finish reasons the loop already reads,
@@ -436,7 +478,9 @@ return function(env)
 				aborted = request.aborted,
 				onRetry = request.onRetry,
 				tag = "messages:" .. record.id,
-				timeout = request.timeout,
+				-- Same reasoning as the chat adapter: a thinking model emits nothing until
+				-- it answers, so the wall has to outlast the think.
+				timeout = requestTimeout(request),
 			})
 		end
 
@@ -462,6 +506,22 @@ return function(env)
 					end
 					res, err = fire(body)
 				end
+			end
+		end
+
+		-- The executor's transport wall: no body, no headers, an executor raise for
+		-- the error text. Same one smaller-ask retry as the chat adapter, so a model
+		-- that thinks for ninety seconds finishes inside sixty. Only within a minute
+		-- of the cap, and only when the smaller ask is actually smaller.
+		local wallMs = clock.since(started)
+		if not res and err and err ~= "aborted" and wallMs >= 55000 and wallMs <= 70000 then
+			local lowered, note = smallerAsk(body)
+			if lowered and util.encode(lowered) ~= util.encode(body) then
+				log.info("provider", record.label .. ": hit the transport wall, retrying smaller (" .. note .. ")")
+				if request.onRetry then
+					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 0 })
+				end
+				res, err = fire(lowered)
 			end
 		end
 
