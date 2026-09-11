@@ -8,6 +8,12 @@ return function(env)
 	local subagent = env.require("agent/subagent")
 	local H = env.require("tools/helpers")
 
+	-- How long ask_user waits for a person before giving up on them, in seconds.
+	-- Ten minutes rather than the permission prompt's three: a question is asked at
+	-- the start of a turn and the user may be mid-game, while a permission prompt
+	-- arrives during work they are already watching.
+	local ASK_TIMEOUT = 600
+
 	return {
 		{
 			name = "todo_write",
@@ -51,6 +57,95 @@ return function(env)
 				local block = state.todoBlock(ctx and ctx.session or nil)
 				if not block then return "The task list is empty." end
 				return block
+			end,
+		},
+		{
+			-- The model's side of a question it cannot answer from the world. A
+			-- permission prompt asks "may I" and the permission layer owns it; this
+			-- asks "which" or "what" and the answer is a fact, not a decision about
+			-- the agent's own conduct -- so it is a tool result like any other and
+			-- rides the same turn, rather than a modal the loop knows about.
+			--
+			-- Headless is refused in words rather than by omission: a subagent that
+			-- asks a question has misunderstood its brief -- nothing it writes reaches
+			-- the user directly -- and the message it gets back says so, which teaches
+			-- the next dispatch rather than costing it a turn to rediscover.
+			name = "ask_user",
+			risk = "read",
+			-- Not the generic tool timeout. A person is being waited on and people are
+			-- slower than any tool; the generic wall would report them as lost. This is
+			-- the wall the wait loop below honours, stated once here so the two cannot
+			-- drift apart -- the loop gives up a fraction before the registry kills the
+			-- call, so the model hears "nobody answered" rather than "did not finish".
+			timeout = ASK_TIMEOUT + 5,
+			description = "Ask the user one question and wait for their answer. Use when a request is genuinely ambiguous -- two ways to read it, a choice of targets, a preference you cannot infer -- and answering it wrong would waste work. Offer concrete options when the plausible answers are few; omit them for an open question. The answer comes back as this call's result. You cannot ask from a subagent.",
+			parameters = {
+				type = "object",
+				properties = {
+					question = {
+						type = "string",
+						description = "The question itself, one or two sentences, in the words you would use to the user.",
+					},
+					options = {
+						type = "array",
+						description = "The concrete answers to pick from, 2 to 4. Omit entirely for an open question.",
+						items = { type = "string" },
+					},
+				},
+				required = { "question" },
+			},
+			run = function(args, ctx)
+				local session = ctx and ctx.session or nil
+				if session and session.headless then
+					return H.fail("a subagent has no user to ask. Answer with your best reading of the task, or state what you could not determine.")
+				end
+				local question = util.trim(tostring(args.question or ""))
+				if question == "" then return H.fail("a question is required") end
+				local options = {}
+				for index, value in ipairs(type(args.options) == "table" and args.options or {}) do
+					local clean = util.trim(tostring(value))
+					if clean ~= "" then options[#options + 1] = clean end
+					if #options >= 4 then break end
+				end
+				if #options == 1 then options = {} end
+
+				-- The loop blocks on this thread for as long as the user takes, so the
+				-- answer has to come back through a channel the interface can reach: an
+				-- event carrying a resolve closure, exactly the shape the permission
+				-- prompt already uses. Nothing here trusts a listener to exist -- with
+				-- none, the wall is the timeout and the model is told nobody answered.
+				local answered, reply = false, nil
+				local function resolve(text)
+					if answered then return end
+					answered = true
+					reply = text
+				end
+
+				if ctx and ctx.emit then
+					ctx.emit("ask:user", {
+						question = question,
+						options = options,
+						resolve = resolve,
+					})
+				end
+
+				local waited = 0
+				while not answered and waited < (ASK_TIMEOUT) do
+					if ctx and ctx.aborted and ctx.aborted() then
+						resolve("The turn was stopped before you answered.")
+						return "The user stopped the turn. Ask again in a new message if the question still matters."
+					end
+					waited = waited + (clock.wait(0.1) or 0.1)
+				end
+
+				if not answered then
+					return "Nobody answered within ten minutes. Continue with your best reading of the request, and say you had to assume an answer."
+				end
+				local text = util.trim(tostring(reply or ""))
+				if text == "" then
+					return "The user dismissed the question without answering. Continue with your best reading, and say you had to assume an answer."
+				end
+				return "The user answered: " .. text
 			end,
 		},
 		{

@@ -5452,6 +5452,183 @@ scenario("a first-run client is pointed at the featured provider", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+-- 47. ask_user, custom instructions, copy prompt --------------------------------
+
+-- The ask tool end to end: the model calls it mid-turn, a modal reaches the surface
+-- it is rendered from, an option press resolves the waiting call, and the answer
+-- travels back as that call's tool result so the next request carries it. A dismissed
+-- question is the other path, and a subagent is refused in words rather than left to
+-- discover there is nobody to ask.
+scenario("ask_user asks, waits and answers", function()
+	local step = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			step = step + 1
+			if step == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("q1", "ask_user", {
+						question = "Which base do you want rebuilt?",
+						options = { "The skybase", "The one near spawn" },
+					}) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Rebuilding the skybase." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	local session = handle.sessions.current()
+	session.send("rebuild my base")
+	harness.settle(4)
+
+	-- The modal is up and the turn is parked on it.
+	contains("the question reached the screen", harness.textOf(), "Which base do you want rebuilt?")
+	contains("with its options as rows", harness.textOf(), "The one near spawn")
+	check("and the turn is waiting", session.busy, true)
+
+	-- Answering through an option row resolves the call.
+	local picked = harness.byName("AskOption1")
+	truthy("the first option is a control", picked ~= nil, harness.dump())
+	harness.click(picked)
+	harness.settle(8)
+
+	local toolResults = {}
+	for _, message in ipairs(session.ctx.messages) do
+		if message.role == "tool" then toolResults[#toolResults + 1] = message end
+	end
+	check("one tool result came back", #toolResults, 1)
+	contains("carrying the answer as the call's result", toolResults[1].content, "The skybase")
+	contains("labelled as the user's answer", toolResults[1].content, "The user answered")
+	check("so the model could finish the turn",
+		session.ctx.messages[#session.ctx.messages].content, "Rebuilding the skybase.")
+	check("and the turn ended", session.busy, false)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("a dismissed or typed ask is reported, and a subagent cannot ask", function()
+	local asked = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			-- The first request of a turn is the one whose last message is the user's:
+			-- keyed on that rather than on a running count, because the count spans
+			-- turns and the second ask would never fire.
+			local body = json.decode(entry.body)
+			local last = body.messages[#body.messages]
+			if last.role == "user" then
+				asked = asked + 1
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("q" .. tostring(asked), "ask_user", { question = "Open question?" }) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Carrying on with my best reading." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	local session = handle.sessions.current()
+	session.send("something ambiguous")
+	harness.settle(4)
+
+	-- No options, so the field is the only answer, and typing one submits it.
+	local shell = harness.byName("AskField")
+	truthy("an open question still has a field", shell ~= nil, harness.dump())
+	local fieldBox = shell and shell:FindFirstChildOfClass("TextBox")
+	truthy("with a text box in it", fieldBox ~= nil)
+	harness.type(fieldBox, "the one by the docks")
+	harness.settle(8)
+	local toolResults = {}
+	for _, message in ipairs(session.ctx.messages) do
+		if message.role == "tool" then toolResults[#toolResults + 1] = message end
+	end
+	contains("a typed answer travels back", toolResults[1].content, "the one by the docks")
+
+	-- A dismissal is a fact the model can work with, not an error.
+	session.send("another ambiguous thing")
+	harness.settle(4)
+	local dismiss = harness.byName("AskDismiss")
+	truthy("the dismissal control is there", dismiss ~= nil)
+	harness.click(dismiss)
+	harness.settle(8)
+	local dismissed
+	for _, message in ipairs(session.ctx.messages) do
+		if message.role == "tool" then dismissed = message.content end
+	end
+	contains("a dismissal says so", dismissed or "", "dismissed the question")
+
+	-- And the headless refusal, checked directly rather than through a dispatch: the
+	-- words are what the next dispatch reads.
+	local headless = handle.sessions.create({ headless = true })
+	local outcome = handle.tools.dispatch({ id = "h", ["function"] = {
+		name = "ask_user",
+		arguments = json.encode({ question = "anyone there?" }),
+	} }, headless.toolContext())
+	check("a subagent's ask fails", outcome.ok, false)
+	contains("with the reason in words", outcome.text, "no user to ask")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- The custom instructions block: a textarea in the Behaviour pane, read back
+-- verbatim into the system prompt after the built-in rules, and only then -- a
+-- user who writes "always answer in Spanish" has beaten the style block, which is
+-- the point of having the block at all.
+scenario("custom instructions reach the system prompt", function()
+	local sent = {}
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			sent[#sent + 1] = json.decode(entry.body)
+			return { StatusCode = 200, Body = chatBody({ content = "Fine." }) }
+		end,
+	})
+
+	handle.config.set("permissions.mode", "auto")
+	handle.sessions.current().send("hello")
+	harness.settle(6)
+	falsy("without instructions the prompt has no block",
+		tostring(sent[1].messages[1].content):find("Your user's instructions", 1, true) ~= nil)
+
+	-- The pane renders the textarea, and blurring it writes the config path.
+	handle.show("settings")
+	harness.settle(2)
+	local box = harness.byName("CustomInstructions")
+	truthy("the textarea is in the Behaviour pane", box ~= nil, harness.dump())
+	local field = box and box:FindFirstChildOfClass("TextBox")
+	truthy("with a text box", field ~= nil)
+	harness.type(field, "Always answer in Spanish. Keep it short.")
+	check("and the value was written", handle.config.get("agent.customInstructions"),
+		"Always answer in Spanish. Keep it short.")
+
+	handle.sessions.current().send("hello again")
+	harness.settle(6)
+	local promptText = tostring(sent[#sent].messages[1].content)
+	contains("the block is in the prompt", promptText, "Your user's instructions")
+	contains("carrying the text verbatim", promptText, "Always answer in Spanish. Keep it short.")
+	truthy("after the built-in rules, so it wins",
+		promptText:find("Style:", 1, true) ~= nil
+			and promptText:find("Style:", 1, true) < promptText:find("Your user's instructions", 1, true))
+
+	-- The copy action puts the same assembled prompt on the clipboard.
+	local copy = harness.byName("CopySystemPrompt")
+	truthy("the copy control is beside it", copy ~= nil)
+	harness.click(copy)
+	harness.settle(1)
+	contains("and the clipboard holds the assembled prompt",
+		tostring(harness.sandbox.__clipboard), "You are UAI")
+	contains("including the custom block", tostring(harness.sandbox.__clipboard), "Always answer in Spanish")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+	check("no property type errors", #harness.instanceState.typeErrors, 0,
+		table.concat(harness.instanceState.typeErrors, "\n"))
+end)
+
 print(("="):rep(72))
 print(string.format("%d scenarios, %d checks passed, %d failed",
 	suite.scenarios, suite.passed, suite.failed))if suite.failed > 0 then

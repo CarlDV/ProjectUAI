@@ -222,6 +222,9 @@ return function(env)
 		-- conversation that asks for permission before anything has been opened is still
 		-- answered.
 		env.require("ui/panels/permission").watch()
+		-- Same shape, same reason: a question can arrive from a conversation nobody is
+		-- looking at, and the turn it belongs to is parked until it is answered.
+		env.require("ui/panels/ask").watch()
 
 		log.info("app", "interface mounted in " .. tostring(container.Name) .. " as " .. responsive.mode)
 		return M
@@ -1227,6 +1230,7 @@ return function(env)
 		-- Starts the client-wide prompt watch. It is not per-session any more: a
 		-- conversation left running in the background still has to be able to ask.
 		env.require("ui/panels/permission").watch()
+		env.require("ui/panels/ask").watch()
 
 		if M.sessionUnsubscribe then M.sessionUnsubscribe() end
 		M.sessionUnsubscribe = session.events:connect(function(event)

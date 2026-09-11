@@ -214,6 +214,20 @@ Style:
 			parts[#parts + 1] = hostPrompt
 		end
 
+		-- The user's own standing instructions, last of all. Last is deliberate: the
+		-- mutable blocks sit closest to the conversation, and of those this is the one
+		-- that is allowed to contradict the built-in rules -- a user who writes "always
+		-- answer in Spanish" has beaten the style block, and a user who writes
+		-- "shorter answers" has beaten it too. The system prompt itself stays fixed:
+		-- this block is the whole of what is personal, so what it says is on record
+		-- rather than smeared through wording nobody can diff.
+		local custom = util.trim(tostring(config.get("agent.customInstructions", "")))
+		if custom ~= "" then
+			parts[#parts + 1] = ""
+			parts[#parts + 1] = "Your user's instructions, which take precedence over the style rules above:"
+			parts[#parts + 1] = custom
+		end
+
 		return table.concat(parts, "\n")
 	end
 

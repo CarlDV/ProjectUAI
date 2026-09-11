@@ -396,6 +396,32 @@ return function(env)
 		return field
 	end
 
+	-- A multiline field bound to a config path, written on blur. Not folded into
+	-- R.field behind a `multiline` prop: a textarea is a different control -- taller,
+	-- top-aligned, Enter inserts a newline -- and every caller so far wants exactly
+	-- one of the two. The custom instructions box is the first textarea in the client.
+	function R.textarea(parent, props)
+		if props.label then
+			P.text(parent, { text = props.label, role = "small", layoutOrder = props.layoutOrder })
+		end
+		local field = P.field(parent, {
+			name = props.name,
+			multiline = true,
+			height = props.height or 96,
+			text = tostring(props.value ~= nil and props.value or config.get(props.path, "")),
+			placeholder = props.placeholder,
+			layoutOrder = props.layoutOrder and (props.layoutOrder + 1) or nil,
+			-- Written on blur rather than per keystroke, same as R.field: the value is
+			-- read by the next request, not this frame.
+			onBlur = function(text)
+				if props.path then config.set(props.path, tostring(text or "")) end
+				if props.onChange then pcall(props.onChange, tostring(text or "")) end
+			end,
+		})
+		if props.hint then R.paragraph(parent, props.hint) end
+		return field
+	end
+
 	-- A row of buttons. Actions rather than settings: a reset, a clear, an unload.
 	function R.actions(parent, list, props)
 		props = props or {}

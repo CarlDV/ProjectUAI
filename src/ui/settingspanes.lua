@@ -1106,6 +1106,48 @@ return function(env)
 			path = "agent.replyLanguage",
 			placeholder = "Japanese",
 		})
+
+		-- The user's own standing instructions. This is the personal half of the prompt;
+		-- the built-in half is fixed on purpose, and the copy action below is how it is
+		-- inspected -- read-only, on the record, diffable between versions.
+		local custom = build.section("Custom instructions",
+			"Added to the system prompt every turn, after the built-in rules, so they win "
+			.. "when the two disagree. The rest of the prompt is not editable: it is this "
+			.. "client's own behaviour, and what is yours is kept separate from it so you "
+			.. "can always tell which is which.")
+		R.textarea(custom, {
+			name = "CustomInstructions",
+			path = "agent.customInstructions",
+			height = 108,
+			placeholder = "e.g. Reply short. I build obby games. My alt account is DaveAlt99 -- ignore it when counting players.",
+			hint = "Written when the box loses focus. Applies from the next turn, including "
+				.. "subagents, which inherit it with the rest of the brief.",
+		})
+		R.actions(custom, { {
+			name = "CopySystemPrompt",
+			text = "Copy system prompt",
+			variant = "ghost",
+			onClick = function()
+				-- The assembled thing rather than the module's constants, so what is on
+				-- the clipboard is what the next request will carry: the environment
+				-- block, the permission line, this pane's own instructions included.
+				local providers = env.require("provider/registry")
+				local prompt = env.require("agent/prompt")
+				local record = providers.active()
+				local body = prompt.build({
+					model = record and record.model or nil,
+					provider = record and record.label or nil,
+				})
+				if caps.clipboard then
+					local ok = pcall(caps.fn.clipboard, body)
+					overlay.toast(ok and "System prompt copied" or "Could not reach the clipboard",
+						ok and "good" or "warn", 2)
+				else
+					log.info("prompt", body)
+					overlay.toast("No clipboard here, so it went to the log", "info", 3)
+				end
+			end,
+		} })
 	end
 
 	-- Permissions -------------------------------------------------------------

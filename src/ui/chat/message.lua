@@ -750,7 +750,7 @@ return function(env)
 	-- none of its meaning: `{"path":"notes/plan.txt","content":"# Pl`.
 	local SUMMARY_KEYS = {
 		"path", "file", "query", "url", "class", "property", "name", "id",
-		"command", "task", "key", "value",
+		"command", "task", "question", "key", "value",
 	}
 
 	local function langForPath(path)

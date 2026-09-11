@@ -156,6 +156,12 @@ return function(env)
 			-- that half -- runtime/clock formats with a hardcoded en-us and English month
 			-- names -- so ten of the eleven tiles did one thing and advertised two.
 			replyLanguage = "",
+			-- The user's own standing instructions, appended to the system prompt each
+			-- turn. Empty means none. The system prompt itself is not editable -- it is
+			-- this client's behaviour, and a prompt a user can silently rewrite is one
+			-- nobody can debug -- so this is the whole of the personal half: one block,
+			-- read back verbatim, placed after the built-in rules so it wins on conflict.
+			customInstructions = "",
 		},
 		permissions = {
 			mode = "ask",
