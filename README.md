@@ -35,7 +35,10 @@ this session's step limit before finishing".
 Presets exist for the common hosts, and "Custom endpoint" takes anything that
 speaks `/v1/chat/completions` -- a relay, a self-hosted vLLM, Ollama on
 localhost. Model lists are never guessed: they come from `GET /v1/models` or from
-you typing one in.
+you typing one in. Local presets (`127.0.0.1`) only work when the executor host and
+the model server are the same machine; if your executor runs elsewhere, expose your
+server on a reachable LAN/public URL and use **Custom endpoint** instead of
+localhost.
 
 **The Claude Code identity.** Every inference request carries
 `User-Agent: claude-cli/<version> (external, cli)`, `x-app: cli` and the
