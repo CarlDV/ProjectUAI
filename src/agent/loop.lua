@@ -213,7 +213,11 @@ return function(env)
 
 			local request = {
 				messages = ctx.wire(systemText),
-				tools = registry.definitions({ only = session.toolFilter, groups = session.toolGroups }),
+				tools = registry.definitions({
+					only = session.toolFilter,
+					groups = session.toolGroups,
+					exclude = session.toolExclude,
+				}),
 				stream = session.stream,
 				onFrame = session.onFrame,
 			}

@@ -537,6 +537,11 @@ return function(env)
 			headless = true,
 			maxTurns = turns,
 			toolGroups = M.PRESETS[opts.preset or "read"],
+			-- A child has no user to ask, so the tool that asks is absent from its
+			-- catalogue entirely rather than described-and-refused. The brief also
+			-- says so, because a model that knows it cannot ask writes a complete
+			-- report instead of stopping at a question.
+			toolExclude = { ask_user = true },
 			-- Streaming is left to the provider and the Ask-for-streams setting, the
 			-- same as the main conversation. It used to be refused here, on the reading
 			-- that a child with no interface has nothing to stream into -- but no Roblox

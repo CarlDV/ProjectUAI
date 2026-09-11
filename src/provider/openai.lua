@@ -396,6 +396,23 @@ return function(env)
 				end
 			end,
 		},
+		{
+			-- Gateways relaying to reasoning models reject the classic system role and
+			-- name the newer one in the message. Rewriting the first system message to
+			-- `developer` is the documented mapping, and it is remembered on the record
+			-- like every other repair so only the first turn pays for the lesson.
+			match = "developer",
+			apply = function(body)
+				local renamed = false
+				for _, message in ipairs(body.messages or {}) do
+					if type(message) == "table" and message.role == "system" then
+						message.role = "developer"
+						renamed = true
+					end
+				end
+				if renamed then return "rewrote system messages as developer" end
+			end,
+		},
 	}
 
 	local function repair(body, message)

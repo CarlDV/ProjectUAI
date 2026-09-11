@@ -1227,12 +1227,20 @@ return function(env)
 			preview.Text = util.ellipsis(text:gsub("[\n\r]+", " "), ARG_PREVIEW)
 			preview.TextColor3 = result.ok and theme.color.textTertiary or theme.color.danger
 
+			-- An ask's result is the user's own answer, and the one thing on a finished
+			-- row worth reading at a glance: "You answered: X" on the header rather
+			-- than the same mono styling a tool's output gets. Anything the ask tool
+			-- reports starts with "The user", which is the cheap and stable tell.
+			local isAnswer = info.name == "ask_user" and result.ok
+				and util.startsWith(text, "The user answered:")
 			resultHolder.Visible = true
 			local label = P.text(resultHolder, {
 				name = "ResultLabel",
-				text = result.ok and "result" or "failed",
+				text = isAnswer and "You answered"
+				or (result.ok and "result" or "failed"),
 				role = "label",
-				color = result.ok and theme.color.textTertiary or theme.color.danger,
+				color = isAnswer and theme.color.accent
+					or (result.ok and theme.color.textTertiary or theme.color.danger),
 				auto = "Y",
 				layoutOrder = 1,
 			})
@@ -1248,9 +1256,12 @@ return function(env)
 				})
 			else
 				local body = P.text(resultHolder, {
-					text = text,
-					role = "monoSmall",
-					color = result.ok and theme.color.textSecondary or theme.color.danger,
+					-- The answer itself, with the tool's prefix dropped: the label above
+					-- has already said whose words these are.
+					text = isAnswer and util.trim(text:sub(#"The user answered:" + 1)) or text,
+					role = isAnswer and "small" or "monoSmall",
+					color = isAnswer and theme.color.text
+						or (result.ok and theme.color.textSecondary or theme.color.danger),
 					wrap = true,
 					auto = "Y",
 					layoutOrder = 2,

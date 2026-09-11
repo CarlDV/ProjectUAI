@@ -60,6 +60,110 @@ return function(env)
 			end,
 		},
 		{
+			-- Reading other conversations. A user who has discussed a build in three
+			-- threads this week should not have to re-explain it in the fourth, and the
+			-- agent should not have to re-derive it. Read-only by construction: it
+			-- searches the session store, and the transcripts it reads are the durable
+			-- ones on disk as well as the live ones.
+			name = "conversation_search",
+			risk = "read",
+			description = "Search this user's other conversations for something they or the agent said earlier. Use it when the current request refers to earlier work -- 'like last time', 'the script you fixed', 'my usual setup' -- and the facts are not in this conversation. Returns the matching lines with which conversation they came from. This conversation is not searched; you already have it.",
+			parameters = {
+				type = "object",
+				properties = {
+					query = {
+						type = "string",
+						description = "The words to look for, as the user would have written them.",
+					},
+					limit = {
+						type = "integer",
+						description = "Maximum matches. Default 5.",
+						minimum = 1,
+						maximum = 12,
+					},
+				},
+				required = { "query" },
+			},
+			run = function(args, ctx)
+				local sessions = env.require("agent/session")
+				local current = ctx and ctx.session or nil
+				local needle = util.trim(tostring(args.query or "")):lower()
+				if needle == "" then return H.fail("a query is required") end
+				local limit = util.clamp(tonumber(args.limit) or 5, 1, 12)
+
+				local lines, seen = {}, {}
+
+				-- Pasted material first: a script the user pasted last week is often the
+				-- thing "that code I sent you" refers to, and it lives in files rather
+				-- than in any conversation's context -- the conversation holds only the
+				-- pointer.
+				local fsx = env.require("runtime/fsx")
+				if fsx.enabled then
+					for _, entry in ipairs(fsx.list("", { scope = "pastes" })) do
+						if not entry.isDir and #lines < limit then
+							local body = fsx.read(entry.path, { scope = "pastes" })
+							if body then
+								local at = body:lower():find(needle, 1, true)
+								if at then
+									lines[#lines + 1] = string.format("pasted in pastes/%s: %s",
+										entry.name, util.ellipsis(body:sub(math.max(at - 60, 1)), 320))
+								end
+							end
+						end
+					end
+				end
+
+				-- All conversation text: the context the model saw plus the transcript
+				-- the user read. The transcript is where a restored conversation keeps
+				-- everything -- a context that has been compacted holds a summary, not
+				-- the words -- so searching only ctx.messages would silently miss old
+				-- threads.
+				for _, session in ipairs(sessions.list()) do
+					if session ~= current and not session.headless then
+						local entries = {}
+						for _, message in ipairs(session.ctx.messages or {}) do
+							local role = message.role == "user" and "the user"
+								or (message.role == "assistant" and "you" or nil)
+							if role then
+								entries[#entries + 1] = { role = role, text = tostring(message.content or "") }
+							end
+						end
+						for _, event in ipairs(session.log or {}) do
+							if (event.kind == "user" or event.kind == "assistant:text")
+								and type(event.text) == "string" then
+								entries[#entries + 1] = {
+									role = event.kind == "user" and "the user" or "you",
+									text = event.text,
+								}
+							end
+						end
+						for _, entry in ipairs(entries) do
+							if #lines >= limit then break end
+							local at = entry.text:lower():find(needle, 1, true)
+							if at then
+								-- One line per conversation, the first match, stated once:
+								-- a thread that mentioned the term six times is one
+								-- lead, not six results.
+								if seen[session.id] then break end
+								seen[session.id] = true
+								lines[#lines + 1] = string.format('%s in "%s": %s',
+									entry.role, session.title,
+									util.ellipsis(entry.text:sub(math.max(at - 60, 1)), 320))
+								break
+							end
+						end
+					end
+					if #lines >= limit then break end
+				end
+
+				if #lines == 0 then
+					return string.format("No other conversation or paste mentions '%s'. The user may be thinking of something from before this client kept threads, or of work in this conversation.", tostring(args.query))
+				end
+				return string.format("%d match%s elsewhere:\n%s",
+					#lines, #lines == 1 and "" or "es", table.concat(lines, "\n"))
+			end,
+		},
+		{
 			-- The model's side of a question it cannot answer from the world. A
 			-- permission prompt asks "may I" and the permission layer owns it; this
 			-- asks "which" or "what" and the answer is a fact, not a decision about

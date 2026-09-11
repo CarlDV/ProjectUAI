@@ -251,7 +251,9 @@ return function(env)
 
 		local function attachMenu(target)
 			local options = {}
-			local files = fsx.enabled and fsx.list("") or {}
+			-- The agent's workspace, which is where the model's own files live and where
+			-- an attached note is expected to be.
+			local files = fsx.enabled and fsx.list("", { scope = "files" }) or {}
 			for _, entry in ipairs(files) do
 				if not entry.isDir then
 					options[#options + 1] = {
@@ -280,7 +282,12 @@ return function(env)
 				options = options,
 				onSelect = function(value)
 					local function attachFile(path)
-						local body, err = fsx.read(path)
+						-- The agent's workspace first, then pastes, so a path the toast
+						-- just showed ("pastes/composer-...") is attachable as-is.
+						local body, err = fsx.read(path, { scope = "files" })
+						if not body then
+							body, err = fsx.read(path, { scope = "pastes" })
+						end
 						if not body then
 							overlay.toast(tostring(err), "warn", 3)
 							return
@@ -304,7 +311,7 @@ return function(env)
 					elseif value == "path" then
 						overlay.prompt({
 							title = "Attach a file",
-							description = "A path inside " .. fsx.root .. ". Its contents travel with the message.",
+						description = "A path inside " .. fsx.root .. "/files. Its contents travel with the message.",
 							placeholder = "notes/plan.txt",
 							confirmText = "Attach",
 							onConfirm = function(path)
@@ -428,22 +435,50 @@ return function(env)
 		-- for room, and that is the mode where the extra lines can actually be typed
 		-- into.
 		local function buildField(carried)
-			return P.field(fieldHolder, {
-				name = "Prompt",
-				bare = true,
-				placeholder = props.placeholder or "Describe a task or ask a question",
-				multiline = composer.expanded,
-				height = composer.expanded and (theme.text.body.height * 5 + theme.space.md) or nil,
-				text = carried,
-				onFocus = function() paintFocus(true) end,
-				onBlur = function() paintFocus(false) end,
-				onSubmit = function()
-					if not composer.expanded then submit() end
-				end,
-			})
-		end
-
-		composer.field = buildField(nil)
+-- The length before the current change, so a paste can be told from typing.
+-- A paste arrives as one jump past the cap; typing crosses it one character
+-- at a time. Only the jump is filed away -- clearing the field under someone
+-- mid-sentence is worse than the wall of text it was avoiding, and the
+-- submit-time path in session.send catches the typed case gracefully.
+local previousLength = #(carried or "")
+return P.field(fieldHolder, {
+name = "Prompt",
+bare = true,
+placeholder = props.placeholder or "Describe a task or ask a question",
+multiline = composer.expanded,
+height = composer.expanded and (theme.text.body.height * 5 + theme.space.md) or nil,
+text = carried,
+onFocus = function() paintFocus(true) end,
+onBlur = function() paintFocus(false) end,
+onChange = function(text)
+if type(text) ~= "string" then return end
+local cap = sessions.PASTE_CAP
+-- The jump, not the crossing: the change itself has to be bigger
+-- than the cap, which a keystroke never is and a paste always is.
+local jumped = #text > cap and (#text - previousLength) > cap
+previousLength = #text
+if not (jumped and fsx.enabled) then return end
+local stamp = os.date("!%Y%m%d-%H%M%S")
+local path = "composer-" .. stamp .. "-" .. util.uid("p") .. ".txt"
+if fsx.write(path, text, { scope = "pastes" }) then
+composer.attachments[#composer.attachments + 1] = {
+label = "pastes/" .. path .. " (" .. tostring(#text) .. " chars)",
+path = path,
+text = util.truncate(text, ATTACH_CAP,
+"the full text is in this file; read it with file_read"),
+}
+renderAttachments()
+composer.field.clear()
+previousLength = 0
+overlay.toast("Long paste saved to pastes/" .. path .. " and attached", "good", 3)
+end
+end,
+onSubmit = function()
+if not composer.expanded then submit() end
+end,
+})
+end
+composer.field = buildField(nil)
 
 		local sendButton = P.iconButton(inputRow, {
 			name = "Send",

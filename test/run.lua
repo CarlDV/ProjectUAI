@@ -1225,7 +1225,8 @@ scenario("file tools stay inside the agent folder", function()
 		arguments = json.encode({ path = "notes/plan.txt", content = "step one" }),
 	} }, context)
 	truthy("a write succeeds", write.ok, write.text)
-	check("it landed in the agent folder", harness.files["UAI/notes/plan.txt"], "step one")
+	check("it landed in the agent's workspace", harness.files["UAI/files/notes/plan.txt"], "step one")
+	falsy("and not in the client's own root", harness.files["UAI/notes/plan.txt"] ~= nil)
 
 	local read = tools.dispatch({ id = "2", ["function"] = {
 		name = "file_read", arguments = json.encode({ path = "notes/plan.txt" }),
@@ -1238,6 +1239,19 @@ scenario("file tools stay inside the agent folder", function()
 	check("a path traversal is refused", escape.ok, false)
 	contains("with a reason", escape.text, "..")
 	check("and nothing was written outside", harness.files["../../escape.txt"], nil)
+
+	-- The client's own files are not in the workspace, which is the point of the
+	-- split: the model's file_list must not offer config.json or a session file.
+	local session = handle.sessions.current()
+	session.send("hello")
+	harness.settle(4)
+	handle.sessions.persist(session)
+	local listed = tools.dispatch({ id = "4", ["function"] = {
+		name = "file_list", arguments = json.encode({}),
+	} }, context)
+	falsy("the workspace does not list the client's config", tostring(listed.text):find("config.json", 1, true) ~= nil)
+	falsy("nor its conversations", tostring(listed.text):find("sessions/", 1, true) ~= nil)
+	contains("but does list what was written", tostring(listed.text), "notes/plan.txt")
 end)
 
 -- 15. Responsiveness -------------------------------------------------------
@@ -5627,6 +5641,351 @@ scenario("custom instructions reach the system prompt", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 	check("no property type errors", #harness.instanceState.typeErrors, 0,
 		table.concat(harness.instanceState.typeErrors, "\n"))
+end)
+
+-- 48. Long pastes, cross-conversation search, subagent brief ------------------
+
+-- A pasted script is reference material, not a message. Over the cap it becomes a
+-- file under pastes/ and the conversation carries the user's words plus a pointer,
+-- so the model reads it with file_read instead of drowning the turn's context.
+scenario("a long paste becomes a file, not a wall of context", function()
+	local sent = {}
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			sent[#sent + 1] = json.decode(entry.body)
+			return { StatusCode = 200, Body = chatBody({ content = "Got the reference." }) }
+		end,
+	})
+
+	-- A short message is untouched.
+	handle.sessions.current().send("quick one")
+	harness.settle(6)
+	falsy("a short message goes whole",
+		tostring(sent[1].messages[2].content):find("was long, so it was saved", 1, true) ~= nil)
+
+	-- A long one: the script ends up on disk, the conversation carries a pointer,
+	-- and the file tools can read it back by the name the pointer gave.
+	local script = "-- a big pasted script\n"
+	for index = 1, 900 do
+		script = script .. "local value" .. tostring(index) .. " = " .. tostring(index) .. "\n"
+	end
+	local long = "what is wrong with this script?\n\n" .. script
+	handle.sessions.current().send(long)
+	harness.settle(6)
+
+	local carried = tostring(sent[2].messages[#sent[2].messages].content)
+	contains("the conversation says where it went", carried, "was long, so it was saved")
+	contains("naming the file", carried, "pastes/")
+	falsy("and does not carry the whole script",
+		carried:find("local value500", 1, true) ~= nil)
+
+	local savedOne = false
+	for path in pairs(harness.files) do
+		if path:find("^UAI/pastes/") and path:find("%.txt$") then savedOne = true end
+	end
+	truthy("the paste is on disk", savedOne)
+
+	local context = handle.sessions.current().toolContext()
+	local read = handle.tools.dispatch({ id = "r", ["function"] = {
+		name = "file_read",
+		arguments = (function()
+			local name
+			for path in pairs(harness.files) do
+				if path:find("^UAI/pastes/") and path:find("%.txt$") then
+					name = path:gsub("^UAI/pastes/", "")
+					break
+				end
+			end
+			return json.encode({ path = name, limit = 20000 })
+		end)(),
+	} }, context)
+	truthy("file_read finds it by bare name", read.ok, read.text)
+	-- The result the model receives is itself capped by agent.resultCap, so the
+	-- assertion is on a line inside that window rather than one deep in the file:
+	-- the point is that the whole body is reachable, and the file reports its full
+	-- size on the first line.
+	contains("with the body", read.text, "local value50")
+	contains("and its true size stated", read.text, "18739 characters")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- The other conversations are the user's own history: "like last time" is a fact
+-- the agent can look up rather than ask about.
+scenario("conversation_search reads other threads", function()
+	local harness, handle = bootWith({
+		handler = function()
+			return { StatusCode = 200, Body = chatBody({ content = "Noted." }) }
+		end,
+	})
+
+	local first = handle.sessions.current()
+	first.rename("The raft job")
+	first.send("the raft spawns at the wrong place, fix the SpawnLocation")
+	harness.settle(6)
+
+	handle.app.openSession(handle.sessions.newThread().id)
+	local second = handle.sessions.current()
+	second.send("remember the raft fix from before?")
+	harness.settle(6)
+
+	local context = second.toolContext()
+	local found = handle.tools.dispatch({ id = "s", ["function"] = {
+		name = "conversation_search",
+		arguments = json.encode({ query = "raft" }),
+	} }, context)
+	truthy("the search succeeds", found.ok, found.text)
+	contains("and finds the older conversation", found.text, "The raft job")
+	contains("with the line that matched", found.text, "SpawnLocation")
+	falsy("but not the conversation it ran from", found.text:find("remember the raft fix", 1, true) ~= nil)
+
+	local none = handle.tools.dispatch({ id = "n", ["function"] = {
+		name = "conversation_search",
+		arguments = json.encode({ query = "quantum submarine" }),
+	} }, context)
+	truthy("a miss is reported, not an error", none.ok, none.text)
+	contains("saying nothing was found", none.text, "No other conversation or paste")
+end)
+
+-- The subagent's own catalogue must not contain ask_user, and its brief has to say
+-- what it is: a delegated worker nobody can answer.
+scenario("a subagent has no ask tool and knows what it is", function()
+	local harness, handle = bootWith({
+		handler = function()
+			return { StatusCode = 200, Body = chatBody({ content = "Done." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	local child = handle.env.require("agent/subagent")
+	-- A dispatch whose child session we can inspect directly. The dispatch returns
+	-- its report, so the session is read from the register it keeps.
+	local dispatched = child.dispatch({
+		task = "inspect nothing",
+		preset = "full",
+		turns = 1,
+	})
+	harness.settle(4)
+	truthy("the dispatch came back", dispatched ~= nil)
+
+	local register = child.list()
+	local session = register[1] and register[1].session or nil
+	truthy("the child exists", session ~= nil)
+	if session then
+		local definitions = handle.tools.definitions({
+			only = session.toolFilter,
+			groups = session.toolGroups,
+			exclude = session.toolExclude,
+		})
+		local names = {}
+		for _, definition in ipairs(definitions) do
+			names[definition["function"].name] = true
+		end
+		falsy("the child is not offered ask_user", names["ask_user"] ~= nil)
+		-- The main conversation still is, which is what makes it an exclusion and
+		-- not the tool having vanished everywhere.
+		local main = handle.tools.definitions({})
+		local mainNames = {}
+		for _, definition in ipairs(main) do
+			mainNames[definition["function"].name] = true
+		end
+		truthy("while the main conversation keeps it", mainNames["ask_user"] ~= nil)
+	end
+
+	-- The brief states the identity and the no-asking rule in words.
+	local brief = handle.env.require("agent/prompt").subagent("a task", {})
+	contains("it says what it is", brief, "subagent of UAI")
+	contains("and that nobody can answer it", brief, "no user to ask")
+	contains("with what to do instead", brief, "state both readings")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- The prompt blocks: denial handling, the date, and ask-early are all in the
+-- assembled prompt the next request carries.
+scenario("the system prompt teaches denials, dates and asking early", function()
+	local sent = {}
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then
+				return { StatusCode = 404, Body = "{}" }
+			end
+			sent[#sent + 1] = json.decode(entry.body)
+			return { StatusCode = 200, Body = chatBody({ content = "Fine." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "auto")
+	handle.sessions.current().send("hello")
+	harness.settle(6)
+
+	local promptText = tostring(sent[1].messages[1].content)
+	contains("a denial is the user's answer", promptText, "the user's answer")
+	contains("which must not be retried", promptText, "Do not repeat the call")
+	contains("asking early beats asking late", promptText, "Ask early, not after")
+	-- The date comes from the real clock rather than the mock's virtual one, so the
+	-- assertion is on the shape of the line rather than a fixed date.
+	truthy("the date is stated", promptText:find("Date: %d%d%d%d%-%d%d%-%d%d %d%d:%d%d UTC") ~= nil,
+		"no Date line in the prompt")
+	contains("and quotes must be exact", (promptText:gsub("\n%s+", " ")), "character for character")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- 49. Migration, sweeps, answers, inherited instructions ---------------------
+
+-- A returning user's older files sat at the app root; after the workspace split the
+-- tools no longer saw them. The migration moves them into files/ once, leaves the
+-- client's own state alone, and is idempotent.
+scenario("legacy files migrate into the workspace", function()
+	local harness, handle = bootWith({ provider = false })
+	local fsx = handle.env.require("runtime/fsx")
+
+	-- The pre-split state, planted by hand: agent files at the root, one in a folder
+	-- the agent made, and the client's own files beside them.
+	fsx.write("old-notes.txt", "kept note")
+	fsx.write("builds/raft.lua", "local raft = true")
+	fsx.write("config.json", "{\"fake\":true}")
+	fsx.ensure("sessions")
+
+	local moved = fsx.migrate()
+	check("two agent files moved", moved, 2)
+	truthy("the root note moved", harness.files["UAI/files/old-notes.txt"] == "kept note")
+	truthy("and the folder's file moved", harness.files["UAI/files/builds/raft.lua"] == "local raft = true")
+	falsy("the root copy is gone", harness.files["UAI/old-notes.txt"] ~= nil)
+	falsy("config.json was left alone", harness.files["UAI/config.json"] == nil)
+
+	-- Idempotent: the second sweep finds nothing to move.
+	local again = fsx.migrate()
+	check("a second sweep moves nothing", again, 0)
+
+	-- And the tools see the migrated files.
+	handle.config.set("permissions.mode", "full")
+	local listed = handle.tools.dispatch({ id = "l", ["function"] = {
+		name = "file_list", arguments = json.encode({}),
+	} }, handle.sessions.current().toolContext())
+	contains("including the migrated note", listed.text, "old-notes.txt")
+	contains("and the folder", listed.text, "builds/")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- Stopping a turn mid-ask closes the question: answering a dead turn is answering
+-- nobody, and the modal left up was exactly that.
+scenario("stopping a turn closes its question", function()
+	local step = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			step = step + 1
+			if step == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("q1", "ask_user", { question = "Which one?" }) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Carrying on." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	local session = handle.sessions.current()
+	session.send("do the ambiguous thing")
+	harness.settle(4)
+	truthy("the question is up", harness.byName("AskSend") ~= nil)
+
+	session.abort()
+	harness.settle(4)
+	check("the turn stopped", session.busy, false)
+	check("and the modal went with it", harness.byName("AskSend"), nil)
+
+	local told
+	for _, message in ipairs(session.ctx.messages) do
+		if message.role == "tool" then told = message.content end
+	end
+	truthy("the model was told the turn stopped rather than left waiting", told ~= nil)
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- An ask's answer is the user's own words, and the finished row says so at a glance
+-- rather than styling them as tool output.
+scenario("an answered question reads as answered", function()
+	local step = 0
+	local harness, handle = bootWith({
+		handler = function(entry)
+			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+			step = step + 1
+			if step == 1 then
+				return { StatusCode = 200, Body = chatBody({
+					toolCalls = { toolCall("q1", "ask_user", {
+						question = "Which base?",
+						options = { "The skybase", "The one near spawn" },
+					}) },
+				}) }
+			end
+			return { StatusCode = 200, Body = chatBody({ content = "Rebuilding." }) }
+		end,
+	})
+	handle.config.set("permissions.mode", "full")
+
+	handle.sessions.current().send("rebuild")
+	harness.settle(4)
+	harness.click(harness.byName("AskOption1"))
+	harness.settle(8)
+
+	local shown = harness.textOf()
+	contains("the row says who answered", shown, "You answered")
+	contains("with the answer itself", shown, "The skybase")
+
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+	check("no property type errors", #harness.instanceState.typeErrors, 0,
+		table.concat(harness.instanceState.typeErrors, "\n"))
+end)
+
+-- A subagent reports to the parent, not the user -- but the user's standing
+-- instructions are context about the work, and a report written without them is a
+-- report written for someone else.
+scenario("subagents inherit the user's standing instructions", function()
+	local harness, handle = bootWith({ provider = false })
+	local prompt = handle.env.require("agent/prompt")
+
+	local bare = prompt.subagent("a task", {})
+	falsy("without instructions there is no block",
+		bare:find("standing instructions", 1, true) ~= nil)
+
+	handle.config.set("agent.customInstructions", "I only build obby games.")
+	local with = prompt.subagent("a task", {})
+	contains("the brief carries them", with, "standing instructions")
+	contains("verbatim", with, "I only build obby games.")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- A paste is a thing the user said, in a file -- "that script I sent you" should
+-- find it.
+scenario("conversation_search also scans pastes", function()
+	local harness, handle = bootWith({ provider = false })
+	local fsx = handle.env.require("runtime/fsx")
+	handle.config.set("permissions.mode", "full")
+
+	fsx.write("the-gui-script.txt", "local ScreenGui = Instance.new('ScreenGui')",
+		{ scope = "pastes" })
+
+	local found = handle.tools.dispatch({ id = "p", ["function"] = {
+		name = "conversation_search",
+		arguments = json.encode({ query = "ScreenGui" }),
+	} }, handle.sessions.current().toolContext())
+	truthy("the search succeeds", found.ok, found.text)
+	contains("and finds the paste", found.text, "pastes/")
+	contains("with the line that matched", found.text, "Instance.new")
 end)
 
 print(("="):rep(72))

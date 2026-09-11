@@ -193,6 +193,11 @@ return function(env)
 			if permissions.ruleFor(name) == "deny" then allow = false end
 			if not M.groupEnabled(tool.group) then allow = false end
 			if opts.only and not opts.only[name] then allow = false end
+			-- A tool that must not exist for this conversation at all -- ask_user in a
+			-- subagent, which has no user to ask. Omission rather than refusal: a model
+			-- shown a tool will use it, and a turn spent learning the tool says no is a
+			-- wasted turn, which is the same reasoning as a missing capability.
+			if opts.exclude and opts.exclude[name] then allow = false end
 			if opts.groups and not opts.groups[tool.group] then allow = false end
 			if allow then
 				out[#out + 1] = {

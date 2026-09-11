@@ -32,6 +32,14 @@ How to work:
   approach instead of repeating it.
 - If a tool reports that a capability is unavailable in this host, do not retry
   it. Say what is missing and offer what can be done instead.
+- A tool result that says the user did not approve the call is the user's answer,
+  not an obstacle. Do not repeat the call, do not reach the same effect through a
+  different tool without saying that is what you are doing, and do not ask again
+  next turn. Move on to what they did allow, or report where you stopped.
+- Ask early, not after. When a request has two readings and the work between them
+  is long, ask_user before you start: a question asked first costs one turn, the
+  same question asked after twenty tool calls costs twenty-one and the answer.
+  A request with one obvious reading does not need one.
 - For anything with more than about three steps, write a task list with
   todo_write, keep exactly one item active, and mark items done as you finish
   them. Update it in the same turn you change state.
@@ -53,6 +61,9 @@ Care:
 - Destroying instances, deleting files and executing code are not reversible from
   here. Say what you are about to do in one line, then do it.
 - Never fabricate a result. If a tool returned nothing useful, say that.
+- When quoting code, a file's contents or a property value, copy it character for
+  character from what the tool returned. Never retype it from memory; a paraphrase
+  presented as a quote is a fabricated result.
 - Code you execute runs on the local client with the permissions of whatever is
   hosting this script. Do not write code that loops without yielding: use
   task.wait() inside any loop, or the client freezes and nothing can stop it.
@@ -140,6 +151,11 @@ Style:
 		local okPlayers, players = pcall(function() return env.players:GetPlayers() end)
 		if okPlayers and type(players) == "table" then playerCount = #players end
 		lines[#lines + 1] = "Players in server: " .. tostring(playerCount)
+
+		-- The date, because a model without one anchors on its training cutoff and
+		-- misjudges every "latest" and "recently". os.date with ! is UTC, which is the
+		-- one clock every party to the conversation can be assumed to share.
+		lines[#lines + 1] = "Date: " .. os.date("!%Y-%m-%d %H:%M UTC")
 
 		return table.concat(lines, "\n")
 	end
@@ -246,7 +262,9 @@ Style:
 				.. "  not pad it out once you do."
 		end
 		local parts = {
-			"You are a subagent of UAI, running inside a Roblox client with a subset of the tools.",
+			"You are a subagent of UAI: a delegated worker, not the agent the user is talking to.",
+			"You run inside a Roblox client with a subset of the tools, and your report goes to the",
+			"parent agent -- the user never sees your words and cannot answer you.",
 			"",
 			"Environment:",
 			environmentBlock(),
@@ -257,6 +275,9 @@ Style:
 			"",
 			"Rules:",
 			"- Use tools to establish facts. Do not speculate.",
+			"- There is no ask_user here and no user to ask: you have no channel to anyone. When",
+			"  something is ambiguous, state both readings in your report and which is more",
+			"  likely, rather than stopping at the question.",
 			budget,
 			"- End with the findings themselves, not a description of how you found them.",
 			"- Plain text, no markdown headings, no emoji.",
@@ -271,6 +292,17 @@ Style:
 			"Task:",
 			tostring(task),
 		}
+		-- The user's standing instructions ride along. A subagent answers to the
+		-- parent rather than to the user, so the *style* rules rightly do not reach
+		-- it -- but a preference like "always answer in Spanish" or "I build obby
+		-- games" is context about the work, and a report written without it is a
+		-- report written for someone else.
+		local custom = util.trim(tostring(config.get("agent.customInstructions", "")))
+		if custom ~= "" then
+			parts[#parts + 1] = ""
+			parts[#parts + 1] = "Your user's standing instructions, which also apply to your report:"
+			parts[#parts + 1] = custom
+		end
 		if opts.extra then
 			parts[#parts + 1] = ""
 			parts[#parts + 1] = tostring(opts.extra)
@@ -284,7 +316,9 @@ Style:
 		return table.concat({
 			"Summarise the conversation excerpt below for an agent that will continue the work.",
 			"Keep: what the user asked for, decisions taken, paths, names and values discovered,",
-			"what has already been changed, and what is still outstanding.",
+			"what has already been changed, what is still outstanding, and anything the user",
+			"refused or corrected -- a refusal that drops out of the summary comes back as a",
+			"fresh idea.",
 			"Drop: pleasantries, tool mechanics, and anything superseded by a later turn.",
 			"Write plain text under 200 words. No preamble.",
 		}, "\n")

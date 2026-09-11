@@ -151,6 +151,18 @@ return function(env)
 		if M.status and id then M.status.Text = tostring(id) end
 	end
 
+	-- A named phase of the startup that is not module loading: the file migration,
+	-- the session restore. Same card, same bar, a word instead of a module id -- the
+	-- thing a returning user most needs to see during the migration is that it is
+	-- their files being moved and how far through it is.
+	function M.phase(text, fraction)
+		if not M.screen then return end
+		if M.status then M.status.Text = tostring(text or "") end
+		if M.fill and fraction ~= nil then
+			M.fill.Size = UDim2.new(math.max(0, math.min(fraction, 1)), 0, 1, 0)
+		end
+	end
+
 	-- The interface is up. The closing line is the honest version of a full bar: it
 	-- says how many of the artifact's modules this boot needed and what the rest are
 	-- waiting for.

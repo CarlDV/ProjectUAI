@@ -21,6 +21,7 @@ return function(env)
 
 	local function present(request)
 		M.showing = true
+		M.current = request
 
 		local answered = false
 		local function reply(text)
@@ -28,11 +29,16 @@ return function(env)
 			answered = true
 			pcall(request.resolve, text)
 			M.showing = false
+			M.current = nil
 			-- Drain the next question on the same frame, so a batch of asks does not
 			-- make the user wait between answers.
 			local next_request = table.remove(M.queue, 1)
 			if next_request then present(next_request) end
 		end
+
+		-- The modal handle, so a sweep can take the card off screen as well as
+		-- answering the call behind it.
+		local modal = nil
 
 		local options = {}
 		for _, value in ipairs(type(request.options) == "table" and request.options or {}) do
@@ -40,7 +46,7 @@ return function(env)
 			if clean ~= "" and #options < 4 then options[#options + 1] = clean end
 		end
 
-		local modal = overlay.modal({
+		modal = overlay.modal({
 			title = "The agent is asking",
 			description = tostring(request.question or ""),
 			width = theme.size.modalWide,
@@ -54,6 +60,18 @@ return function(env)
 		if not modal then
 			reply("")
 			return
+		end
+		-- A sweep answers the call; closing the modal is what takes the card away,
+		-- and modal.close is what calls onClose -- which is already answered by then,
+		-- so the double-resolve is a no-op.
+		request.close = function()
+			if not answered then
+				answered = true
+				pcall(request.resolve, "")
+				M.showing = false
+				M.current = nil
+			end
+			pcall(function() modal.close() end)
 		end
 
 		-- Which conversation is asking, for the same reason the permission prompt
@@ -132,12 +150,44 @@ return function(env)
 			options = event.options,
 			resolve = event.resolve,
 			sessionTitle = session and session.title or nil,
+			session = session,
 		}
 		if M.showing then
 			M.queue[#M.queue + 1] = request
 		else
 			present(request)
 		end
+	end
+
+	-- A turn that stops mid-ask leaves a question on screen for a conversation that
+	-- is no longer waiting on the answer. The tool's own wait loop notices the abort
+	-- and returns, so resolving here closes the modal rather than leaving the user
+	-- able to answer a dead turn. Scoped to one conversation, like the permission
+	-- layer's own sweep: stopping this turn must not dismiss another's question.
+	function M.sweep(session)
+		local closed = 0
+		local function take(request)
+			if request.close then
+				request.close()
+			else
+				pcall(request.resolve, "")
+			end
+			closed = closed + 1
+		end
+		if M.current and (session == nil or M.current.session == session) then
+			take(M.current)
+			M.current = nil
+		end
+		local kept = {}
+		for _, request in ipairs(M.queue) do
+			if session == nil or request.session == session then
+				take(request)
+			else
+				kept[#kept + 1] = request
+			end
+		end
+		M.queue = kept
+		return closed
 	end
 
 	function M.watch()

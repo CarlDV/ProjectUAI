@@ -52,6 +52,14 @@ return function(env)
 	local FIELD_CAP = 12000
 	local TRANSCRIPT_BYTES = 262144
 
+	-- How long a pasted message may be before it stops being a message. A long script
+	-- pasted into the composer is reference material, not a request: sent whole it
+	-- drowns the turn, and the model's only use for it is file_read anyway. Over this
+	-- the body goes to pastes/ and the conversation carries a pointer -- the user's
+	-- words plus "the code is in this file" -- which is the same information for a
+	-- fraction of the context.
+	local PASTE_CAP = 8000
+
 	local function transcriptOf(session)
 		local durable = {}
 		for _, event in ipairs(session.log) do
@@ -106,6 +114,10 @@ return function(env)
 		anyEvent = signal.new("session:any"),
 	}
 
+	-- Published for the composer's paste detection, so the two halves of the feature
+	-- share one number rather than each keeping a copy that drifts.
+	M.PASTE_CAP = PASTE_CAP
+
 	function M.create(opts)
 		opts = opts or {}
 		local place = env.require("runtime/place")
@@ -120,6 +132,10 @@ return function(env)
 			maxTurns = opts.maxTurns,
 			toolFilter = opts.toolFilter,
 			toolGroups = opts.toolGroups,
+			-- Tools this conversation must not be offered at all -- not denied, absent.
+			-- The registry's definitions() reads it; the field is opt-in so a session
+			-- that wants everything (the main conversation) does not have to say so.
+			toolExclude = opts.toolExclude,
 			budgetSeconds = opts.budgetSeconds,
 			-- Set by whoever created the session, and read by the loop in place of the
 			-- global switch: a subagent carries its own budget, so lifting it is a
@@ -193,6 +209,24 @@ return function(env)
 			if clean == "" then return false, "nothing to send" end
 			if session.busy then return false, "already working" end
 
+			-- A message pasted in whole -- a script, a log, a config -- over the paste
+			-- cap becomes a file and a pointer. The user's own words are never the part
+			-- that overflows: the cap is on the whole message, but the tail that crosses
+			-- it is nearly always the pasted block, so the head (what they typed around
+			-- it) stays in the conversation and the block goes to disk where the tools
+			-- can read it properly.
+			if #clean > PASTE_CAP and fsx.enabled then
+				local stamp = os.date("!%Y%m%d-%H%M%S")
+				local path = session.id .. "-" .. stamp .. ".txt"
+				local ok = fsx.write(path, clean, { scope = "pastes" })
+				if ok then
+					clean = string.format(
+						"%s\n\n[The rest of this message was long, so it was saved to %s/pastes/%s. Read it with file_read when you need it.]",
+						util.ellipsis(clean, 400), fsx.root, path)
+					session.emit("status", { text = "Long message saved to pastes/" .. path })
+				end
+			end
+
 			session.busy = true
 			session.abortFlag = false
 			session.turns = session.turns + 1
@@ -213,6 +247,9 @@ return function(env)
 				-- denied whatever another was waiting on -- and a denied write is
 				-- reported to that model as the user refusing it.
 				permissions.denyAll(nil, session)
+				-- Its questions too: a turn that ended still had an ask on screen, which
+				-- the user could then answer for a conversation that had moved on.
+				pcall(function() env.require("ui/panels/ask").sweep(session) end)
 				if not ok then
 					log.error("session", "loop crashed", reply)
 					session.emit("error", { message = "Internal error: " .. tostring(reply), fatal = true })
@@ -231,6 +268,7 @@ return function(env)
 			session.abortFlag = true
 			session.emit("status", { text = "Stopping" })
 			permissions.denyAll("aborted", session)
+			pcall(function() env.require("ui/panels/ask").sweep(session) end)
 			return true
 		end
 

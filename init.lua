@@ -140,6 +140,32 @@ local function start()
 	env.require("agent/hooks").adoptContext()
 	env.require("agent/registry").load()
 
+	-- The workspace migration, before anything that reads files/: the file tools,
+	-- the paste fallbacks, the attach menu. For a returning user with older files
+	-- this is the step between "it used to see my notes" and the tidy layout, so it
+	-- is reported through the boot indicator while it happens rather than logged
+	-- where nobody looks. A fresh install sweeps an empty root and reports nothing.
+	pcall(function()
+		local fsx = env.require("runtime/fsx")
+		local swept = fsx.list("")
+		local pending = 0
+		for _, entry in ipairs(swept) do
+			local name = tostring(entry.name or "")
+			local clientOwns = name == "files" or name == "pastes" or name == "sessions"
+				or name == "export" or name == "config.json" or name == "stats.json"
+			if not clientOwns then pending = pending + 1 end
+		end
+		if pending > 0 and boot then
+			boot.phase("updating: your files are moving to the new layout", 0)
+		end
+		local moved = fsx.migrate(function(count, name)
+			if boot then boot.phase(string.format("moved %d: %s", count, name), math.min(count / 30, 0.9)) end
+		end)
+		if moved and moved > 0 and boot then
+			boot.phase(string.format("moved %d file(s) into files/", moved), 1)
+		end
+	end)
+
 	local sessions = env.require("agent/session")
 	sessions.restore()
 
