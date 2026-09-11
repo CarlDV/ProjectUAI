@@ -6362,7 +6362,7 @@ return function(env)
 			baseUrl = "http://127.0.0.1:1234/v1",
 			authStyle = "none",
 			requires = "executor",
-			note = "Start the LM Studio server first, then fetch models.",
+			note = "Loopback only: LM Studio must run on the same machine as this executor host. Start the server first, then fetch models.",
 		},
 		{
 			id = "vllm",
@@ -6370,6 +6370,7 @@ return function(env)
 			baseUrl = "http://127.0.0.1:8000/v1",
 			authStyle = "bearer",
 			requires = "executor",
+			note = "For your own machine, use localhost only when the executor host is that same machine. Otherwise use a reachable LAN/public URL via Custom endpoint.",
 		},
 		{
 			id = "custom",
