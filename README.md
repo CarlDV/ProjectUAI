@@ -2,7 +2,7 @@
 
 A universal AI agent that runs inside a Roblox client. It works in any game,
 against any OpenAI-compatible inference endpoint, and it identifies itself on the
-wire as the Claude Code CLI
+wire as the Claude Code CLI.
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/CarlDV/ProjectUAI/main/dist/uai.lua"))()
