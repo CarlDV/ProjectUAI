@@ -88,9 +88,9 @@ return function(env)
 		return registry.endpoint({ baseUrl = base, query = record.query }, "/messages")
 	end
 
-	function M.headers(record)
+	function M.headers(record, explicitKey)
 		local style = record.authStyle or "bearer"
-		local key = util.trim(record.apiKey or "")
+		local key = util.trim(explicitKey or record.apiKey or "")
 		local headers = {}
 		if key ~= "" and style ~= "none" then
 			if style == "bearer" then
@@ -100,7 +100,7 @@ return function(env)
 				-- literally here would just produce a 401 nobody could explain.
 				headers["x-api-key"] = key
 			else
-				headers = registry.authHeaders(record)
+				headers = registry.authHeaders(record, explicitKey)
 			end
 		end
 		headers["anthropic-version"] = VERSION
@@ -455,6 +455,22 @@ return function(env)
 	-- Performs one completion against one provider. Same return contract as
 	-- provider/openai: result, nil on success or nil, message, res on failure, so the
 	-- chain in agent/loop cannot tell the two adapters apart.
+	--
+	-- A record with several keys rotates on a 429 or quota refusal with no sleep
+	-- between keys, exactly as the chat adapter does: the next key's quota is
+	-- untouched, so waiting would only spend the deadline the reply still needs.
+	local function quotaRefusal(res)
+		if not res then return false end
+		if res.status == 429 then return true end
+		if res.status == 402 or res.status == 403 then
+			local body = tostring(res.body or ""):lower()
+			if body:find("resource_exhausted", 1, true) then return true end
+			if body:find("quota", 1, true) then return true end
+			if body:find("rate limit", 1, true) then return true end
+		end
+		return false
+	end
+
 	function M.complete(record, request)
 		local wantStream = request.stream
 		if wantStream == nil then
@@ -462,11 +478,25 @@ return function(env)
 		end
 
 		local body = M.buildBody(record, util.merge(request, { stream = wantStream }))
-		local headers = M.headers(record)
-		for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
-		headers["Accept"] = wantStream and "text/event-stream" or "application/json"
+		local pool = registry.keysOf(record)
+		local currentKey = nil
+
+		local function rebuildHeaders()
+			if #pool > 1 then currentKey = registry.nextKey(record) end
+			local headers = M.headers(record, currentKey)
+			for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
+			headers["Accept"] = wantStream and "text/event-stream" or "application/json"
+			return headers
+		end
+
+		local headers = rebuildHeaders()
 
 		local started = clock.ms()
+		local rotationsLeft = math.max(#pool - 1, 0)
+		-- Same as the chat adapter: with a pool, a 429 is rotation's to answer, not
+		-- the transport's to sleep on.
+		local skip429 = (#pool > 1) and { [429] = true } or nil
+
 		local function fire(payload)
 			return http.send({
 				url = M.endpoint(record),
@@ -475,16 +505,37 @@ return function(env)
 				body = util.encode(payload),
 				identity = (record.claudeUa ~= false) and "claude" or "none",
 				attempts = request.attempts or config.get("agent.retries", 5),
+				skipStatus = skip429,
 				aborted = request.aborted,
 				onRetry = request.onRetry,
 				tag = "messages:" .. record.id,
-				-- Same reasoning as the chat adapter: a thinking model emits nothing until
-				-- it answers, so the wall has to outlast the think.
+				-- Same reasoning as the chat adapter: a thinking model emits nothing
+				-- until it answers, so the wall has to outlast the think.
 				timeout = requestTimeout(request),
 			})
 		end
 
-		local res, err = fire(body)
+		local function fireWithRotation(payload)
+			local res, err = fire(payload)
+			while res and not res.ok and quotaRefusal(res) and rotationsLeft > 0 do
+				rotationsLeft = rotationsLeft - 1
+				registry.cooldownKey(record, currentKey or pool[1])
+				headers = rebuildHeaders()
+				local index = 0
+				for position, key in ipairs(pool) do
+					if key == currentKey then index = position end
+				end
+				local label = "rate limited, rotating to key #" .. index
+				log.info("provider", record.label .. ": " .. label)
+				if request.onRetry then
+					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = label, status = res.status })
+				end
+				res, err = fire(payload)
+			end
+			return res, err
+		end
+
+		local res, err = fireWithRotation(body)
 
 		-- max_tokens is mandatory on this API and its limit is per model, so a reply
 		-- ceiling chosen for the widest Claude is a hard 400 on a narrower one -- and
@@ -504,7 +555,7 @@ return function(env)
 					if request.onRetry then
 						request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 400 })
 					end
-					res, err = fire(body)
+					res, err = fireWithRotation(body)
 				end
 			end
 		end
@@ -521,7 +572,7 @@ return function(env)
 				if request.onRetry then
 					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 0 })
 				end
-				res, err = fire(lowered)
+				res, err = fireWithRotation(lowered)
 			end
 		end
 

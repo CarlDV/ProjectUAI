@@ -505,10 +505,12 @@ return function(env)
 		if props.icon then
 			local slot = P.frame(row, {
 				name = "BylineIcon",
-				size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+				size = UDim2.fromOffset(18, 18),
+				bg = theme.color.surfaceRaised,
+				radius = theme.radius.xs,
 				layoutOrder = 1,
 			})
-			icons.draw(props.icon, slot, theme.size.icon, props.iconColor or theme.color.textTertiary)
+			icons.draw(props.icon, slot, 12, props.iconColor or theme.color.textTertiary)
 		end
 		-- Fills rather than sizing to its text, so the byline is one full-width row and a
 		-- long model id truncates instead of pushing the line past the reading column.
@@ -643,42 +645,67 @@ return function(env)
 		})
 
 		local header = Instance.new("TextButton", card)
+		header.Name = "ReasoningHeader"
 		header.Text = ""
 		header.AutoButtonColor = false
-		header.BackgroundTransparency = 1
-		-- A disclosure control, so it answers to the platform's hit-target floor like
-		-- every other one. At max(label.height, icon) it was sixteen pixels tall, which
-		-- is under the pointer minimum and well under the 44 a touch device needs.
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.text.label.height + theme.space.xs,
+		header.BackgroundColor3 = theme.color.surface
+		header.BackgroundTransparency = 0.45
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.rowTight + 4,
 			responsive.minTarget() - theme.space.sm))
 		header.LayoutOrder = 1
 		header.Selectable = true
+		Instance.new("UICorner", header).CornerRadius = UDim.new(0, theme.radius.sm)
+		local thinkStroke = Instance.new("UIStroke", header)
+		thinkStroke.Color = theme.color.borderSubtle
+		thinkStroke.Thickness = theme.stroke.hair
+		thinkStroke.Transparency = 0.4
 
-		local row = P.row(header, { size = UDim2.fromScale(1, 1), gap = theme.space.xs })
+		local row = P.row(header, {
+			size = UDim2.fromScale(1, 1),
+			gap = theme.space.sm,
+			padding = { left = theme.space.sm, right = theme.space.sm },
+			alignY = "Center",
+		})
 		local caret = P.frame(row, {
+			name = "Caret",
 			size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
 			layoutOrder = 1,
 		})
 		icons.chevron(caret, theme.size.icon, theme.color.textTertiary, "right")
+
+		local sparkBadge = P.frame(row, {
+			name = "SparkBadge",
+			size = UDim2.fromOffset(18, 18),
+			bg = theme.color.surfaceRaised,
+			radius = theme.radius.xs,
+			layoutOrder = 2,
+		})
+		icons.spark(sparkBadge, 11, theme.color.accent)
+
 		local title = P.text(row, {
 			text = "Thinking",
 			role = "label",
-			color = theme.color.textTertiary,
+			color = theme.color.textSecondary,
 			size = UDim2.new(0, 0, 1, 0),
 			flex = "Fill",
-			layoutOrder = 2,
+			layoutOrder = 3,
 		})
-		-- How much of it there is, in the unit it is billed in. A card that says only
-		-- "reasoning" gives no grounds for opening it or for leaving it shut, and this
-		-- is the one part of a turn whose size is otherwise invisible: reasoning is
-		-- charged as output and never appears in the reply.
-		P.text(row, {
+
+		local tokenPill = P.frame(row, {
+			name = "TokenPill",
+			bg = theme.color.surfaceRaised,
+			bgTransparency = 0.6,
+			radius = theme.radius.xs,
+			padding = { x = theme.space.xs, y = 2 },
+			auto = "X",
+			layoutOrder = 4,
+		})
+		P.stroke(tokenPill, theme.color.borderSubtle, theme.stroke.hair)
+		local tokenText = P.text(tokenPill, {
 			text = "~" .. util.formatNumber(usage.estimateText(text)) .. " tokens",
 			role = "caption",
 			color = theme.color.textTertiary,
-			align = "Right",
 			auto = "X",
-			layoutOrder = 3,
 		})
 
 		local asideBody, bodyRow = ruled(card, {
@@ -686,8 +713,6 @@ return function(env)
 			layoutOrder = 2,
 			color = theme.color.borderSubtle,
 			width = theme.stroke.hair,
-			-- Positioned under the caret's centre line, so the rule continues the
-			-- disclosure triangle above it rather than starting at the row's edge.
 			ruleAt = math.floor(theme.size.icon / 2),
 			inset = theme.space.md,
 		})
@@ -700,17 +725,31 @@ return function(env)
 		})
 		body.Size = UDim2.new(1, 0, 0, 0)
 
-		-- Open on arrival. The thinking is what explains the answer, and a card that
-		-- hides it by default reads as though there were nothing inside; the header
-		-- still folds a long one away once it has been read.
-		local open = true
-		caret.Rotation = 90
+		local open = config.get("ui.expandThinking", true) == true
+		caret.Rotation = open and 90 or 0
+		bodyRow.Visible = open
 		local function toggle()
 			open = not open
 			bodyRow.Visible = open
 			caret.Rotation = open and 90 or 0
 		end
 		header.Activated:Connect(toggle)
+		header.MouseEnter:Connect(function()
+			title.TextColor3 = theme.color.accentHot
+			env.tween:Create(header, theme.tween("quick"), {
+				BackgroundColor3 = theme.color.surfaceHover,
+				BackgroundTransparency = 0.15,
+			}):Play()
+			env.tween:Create(thinkStroke, theme.tween("quick"), { Color = theme.color.border, Transparency = 0 }):Play()
+		end)
+		header.MouseLeave:Connect(function()
+			title.TextColor3 = theme.color.textSecondary
+			env.tween:Create(header, theme.tween("quick"), {
+				BackgroundColor3 = theme.color.surface,
+				BackgroundTransparency = 0.45,
+			}):Play()
+			env.tween:Create(thinkStroke, theme.tween("quick"), { Color = theme.color.borderSubtle, Transparency = 0.4 }):Play()
+		end)
 		-- The wrapper, not the card: hiding the card alone left its frame in the list
 		-- layout, so a hidden reasoning row still pushed the reply down by its padding.
 		if config.get("ui.showReasoning", true) == false then holder.Visible = false end
@@ -833,63 +872,112 @@ return function(env)
 	--
 	-- So consecutive calls go in here instead. Inside, rows are one step apart; the
 	-- block keeps the transcript's own gap to whatever is above and below it. The header
-	-- counts the run and folds it -- automatically once it has finished and there are
-	-- more of them than anyone reads line by line, since a finished run is a receipt.
-	local FOLD_RUN_AT = 4
+	-- counts the run and folds it -- automatically once it has finished so finished runs
+	-- read as a single clean receipt rather than walls of clutter.
+	local FOLD_RUN_AT = 2
+
+	local function toolIconFor(name)
+		local lower = string.lower(name or "")
+		if lower:find("cmd") or lower:find("bash") or lower:find("term") or lower:find("exec") then
+			return "terminal"
+		elseif lower:find("file") or lower:find("read") or lower:find("view") or lower:find("tree") then
+			return "document"
+		elseif lower:find("write") or lower:find("edit") or lower:find("patch") then
+			return "code"
+		elseif lower:find("search") or lower:find("grep") or lower:find("find") then
+			return "search"
+		elseif lower:find("web") or lower:find("fetch") or lower:find("http") or lower:find("url") then
+			return "globe"
+		elseif lower:find("skill") then
+			return "book"
+		elseif lower:find("agent") or lower:find("sub") then
+			return "branch"
+		else
+			return "sliders"
+		end
+	end
 
 	function M.toolRun(parent, order)
 		local holder = wrapper(parent, { name = "ToolRun", layoutOrder = order })
 		local card = P.column(holder, {
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
-			gap = theme.space.xxs,
+			gap = theme.space.xs,
 		})
 
 		local header = Instance.new("TextButton", card)
 		header.Name = "RunHeader"
 		header.Text = ""
 		header.AutoButtonColor = false
-		header.BackgroundTransparency = 1
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.rowTight,
-			responsive.minTarget() - theme.space.sm))
+		header.BackgroundColor3 = theme.color.surface
+		header.BackgroundTransparency = 0.4
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row, responsive.minTarget() - theme.space.sm))
 		header.LayoutOrder = 1
 		header.Selectable = true
 		header.Visible = false
+		Instance.new("UICorner", header).CornerRadius = UDim.new(0, theme.radius.md)
 
-		local headerRow = P.row(header, { size = UDim2.fromScale(1, 1), gap = theme.space.xs })
+		local runStroke = Instance.new("UIStroke", header)
+		runStroke.Color = theme.color.borderSubtle
+		runStroke.Thickness = theme.stroke.hair
+
+		local headerRow = P.row(header, {
+			size = UDim2.fromScale(1, 1),
+			gap = theme.space.sm,
+			padding = { x = theme.space.sm },
+			alignY = "Center",
+		})
 		local caret = P.frame(headerRow, {
 			name = "Caret",
 			size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
 			layoutOrder = 1,
 		})
 		icons.chevron(caret, theme.size.icon, theme.color.textTertiary, "right")
+
+		local runIconBadge = P.frame(headerRow, {
+			name = "RunIconBadge",
+			size = UDim2.fromOffset(20, 20),
+			bg = theme.color.surfaceRaised,
+			radius = theme.radius.xs,
+			layoutOrder = 2,
+		})
+		icons.terminal(runIconBadge, 12, theme.color.accentHot)
+
 		local summary = P.text(headerRow, {
 			name = "RunSummary",
 			text = "",
-			role = "caption",
-			color = theme.color.textTertiary,
+			role = "small",
+			color = theme.color.textPrimary,
 			truncate = true,
 			size = UDim2.new(0, 0, 1, 0),
 			flex = "Fill",
-			layoutOrder = 2,
+			layoutOrder = 3,
 		})
-		local timing = P.text(headerRow, {
+
+		local timingPill = P.frame(headerRow, {
+			name = "TimingPill",
+			bg = theme.color.surfaceRaised,
+			bgTransparency = 0.6,
+			radius = theme.radius.xs,
+			padding = { x = theme.space.xs, y = 2 },
+			auto = "X",
+			layoutOrder = 4,
+		})
+		P.stroke(timingPill, theme.color.borderSubtle, theme.stroke.hair)
+		local timing = P.text(timingPill, {
 			name = "RunTiming",
 			text = "",
 			role = "caption",
 			color = theme.color.textTertiary,
-			align = "Right",
-			layoutOrder = 3,
+			auto = "X",
 		})
-		timing.Size = UDim2.fromOffset(theme.size.metaColumn, theme.text.caption.height)
 
 		local rows = P.column(card, {
 			name = "Calls",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
-			-- One step, not the transcript's paragraph gap: these are lines of one
-			-- list, not separate events.
-			gap = theme.space.xxs,
+			gap = theme.space.xs,
+			padding = { left = theme.space.sm },
 			layoutOrder = 2,
 		})
 
@@ -909,7 +997,7 @@ return function(env)
 
 		local function paint()
 			local waited = handle.ms or clock.since(started)
-			timing.Text = waited >= 1000 and util.formatDuration(waited) or ""
+			timing.Text = waited >= 1000 and util.formatDuration(waited) or string.format("%dms", waited)
 			-- The summary names what ran, because a count alone cannot be reread:
 			-- "6 tools" tells someone scrolling back nothing about which six. The
 			-- names are deduplicated in arrival order and capped, so a run that
@@ -975,30 +1063,37 @@ return function(env)
 			handle.ms = clock.since(started)
 			pcall(stop)
 			paint()
-			-- A finished run of more than a few calls folds itself away. The header
-			-- keeps the count and the duration, which is what anyone rereading a turn
-			-- wants from it; the rows are one click away.
-			if not folded and handle.calls > FOLD_RUN_AT then
+			-- A finished run of calls folds itself away into a clean receipt.
+			-- The header keeps the count and the duration; the rows are one click away.
+			if not folded and handle.calls >= FOLD_RUN_AT then
 				folded = true
 				setOpen(false)
 			end
 		end
+
+		header.MouseEnter:Connect(function()
+			summary.TextColor3 = theme.color.accentHot
+			env.tween:Create(header, theme.tween("quick"), {
+				BackgroundColor3 = theme.color.surfaceHover,
+				BackgroundTransparency = 0.1,
+			}):Play()
+			env.tween:Create(runStroke, theme.tween("quick"), { Color = theme.color.border }):Play()
+		end)
+		header.MouseLeave:Connect(function()
+			summary.TextColor3 = theme.color.textPrimary
+			env.tween:Create(header, theme.tween("quick"), {
+				BackgroundColor3 = theme.color.surface,
+				BackgroundTransparency = 0.4,
+			}):Play()
+			env.tween:Create(runStroke, theme.tween("quick"), { Color = theme.color.borderSubtle }):Play()
+		end)
 
 		return handle
 	end
 
 	-- A tool call row: a disclosure caret, a risk dot, the tool's name, what it is
 	-- doing, how long it took -- and underneath, verbatim, the code it was given.
-	--
-	-- Flat, not a card. A turn that calls six tools was six outlined boxes stacked
-	-- between two paragraphs of prose, which made the machinery louder than the answer.
-	--
-	-- The code is outside the fold on purpose. Every listing the model produced -- the
-	-- Luau it is about to execute, the body it is about to write to a file, the property
-	-- map it is about to apply -- was reachable only by opening a pane that defaulted
-	-- shut and gave no sign it existed, and what showed instead was ninety characters of
-	-- the JSON envelope. Arguments that are values still live behind the fold; arguments
-	-- that are code do not, though they fold at a dozen lines rather than sixty.
+	-- Styled as a sleek Claude Code developer tool capsule.
 	function M.toolCall(parent, info, order)
 		local holder = wrapper(parent, { name = "Tool", layoutOrder = order })
 		local card = P.column(holder, {
@@ -1012,25 +1107,28 @@ return function(env)
 		local codeParts, facts = splitArguments(decoded)
 
 		local header = Instance.new("TextButton", card)
+		header.Name = "ToolHeader"
 		header.Text = ""
 		header.AutoButtonColor = false
-		header.BackgroundTransparency = 1
-		-- One line of a list rather than a row of its own. At `row` these stacked into
-		-- eight paragraph-height bands per turn; the touch floor still applies, because
-		-- the whole row is the disclosure control.
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.rowTight,
-			responsive.minTarget() - theme.space.sm))
+		header.BackgroundColor3 = theme.color.surface
+		header.BackgroundTransparency = 0.45
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row, responsive.minTarget() - theme.space.sm))
 		header.LayoutOrder = 1
 		header.Selectable = true
+		Instance.new("UICorner", header).CornerRadius = UDim.new(0, theme.radius.sm)
+
+		local stroke = Instance.new("UIStroke", header)
+		stroke.Color = theme.color.borderSubtle
+		stroke.Thickness = theme.stroke.hair
+		stroke.Transparency = 0.3
 
 		local row = P.row(header, {
 			size = UDim2.fromScale(1, 1),
-			gap = theme.space.xs,
+			gap = theme.space.sm,
+			padding = { left = theme.space.sm, right = theme.space.sm },
+			alignY = "Center",
 		})
 
-		-- The affordance the row never had. Without it a tool call was a line of text
-		-- that happened to answer a click, so the detail pane may as well not have been
-		-- there.
 		local caret = P.frame(row, {
 			name = "Caret",
 			size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
@@ -1038,11 +1136,22 @@ return function(env)
 		})
 		icons.chevron(caret, theme.size.icon, theme.color.textTertiary, "right")
 
-		local spinner = C.spinner(row, { diameter = theme.size.icon - theme.space.hair, layoutOrder = 2 })
+		-- Dedicated contextual icon badge for the tool
+		local iconName = toolIconFor(info.name)
+		local iconBadge = P.frame(row, {
+			name = "ToolIconBadge",
+			size = UDim2.fromOffset(20, 20),
+			bg = theme.color.surfaceRaised,
+			radius = theme.radius.xs,
+			layoutOrder = 2,
+		})
+		icons.draw(iconName, iconBadge, 12, theme.color.accentHot)
+
+		local spinner = C.spinner(row, { diameter = theme.size.icon - theme.space.hair, layoutOrder = 3 })
 		local dotSlot = P.frame(row, {
 			name = "DotSlot",
 			size = UDim2.fromOffset(theme.size.icon - theme.space.hair, theme.size.icon - theme.space.hair),
-			layoutOrder = 2,
+			layoutOrder = 3,
 		})
 		dotSlot.Visible = false
 		local dot = P.statusDot(dotSlot, {
@@ -1055,8 +1164,8 @@ return function(env)
 		local name = P.text(row, {
 			text = tostring(info.name or "tool"),
 			role = "monoSmall",
-			color = theme.color.textSecondary,
-			layoutOrder = 3,
+			color = theme.color.textPrimary,
+			layoutOrder = 4,
 		})
 		name.Size = UDim2.fromOffset(0, theme.text.monoSmall.height)
 		name.AutomaticSize = Enum.AutomaticSize.X
@@ -1066,23 +1175,27 @@ return function(env)
 			role = "caption",
 			color = theme.color.textTertiary,
 			truncate = true,
-			-- Takes whatever is left rather than reserving a guess. The guess was
-			-- icon + 90, but the row also has to fit an auto-width tool name, so it
-			-- over-committed by the width of that name and pushed `timing` out past
-			-- the card's clip -- which is why a tool call never showed how long it took.
 			size = UDim2.new(0, 0, 1, 0),
 			flex = "Fill",
-			layoutOrder = 4,
+			layoutOrder = 5,
 		})
 
-		local timing = P.text(row, {
+		local timingPill = P.frame(row, {
+			name = "TimingPill",
+			bg = theme.color.surfaceRaised,
+			bgTransparency = 0.6,
+			radius = theme.radius.xs,
+			padding = { x = theme.space.xs, y = 2 },
+			auto = "X",
+			layoutOrder = 6,
+		})
+		P.stroke(timingPill, theme.color.borderSubtle, theme.stroke.hair)
+		local timing = P.text(timingPill, {
 			text = "",
 			role = "caption",
 			color = theme.color.textTertiary,
-			align = "Right",
-			layoutOrder = 5,
+			auto = "X",
 		})
-		timing.Size = UDim2.fromOffset(theme.size.metaColumn, theme.text.caption.height)
 
 		-- Always-on code, indented to the caret's centre line so it reads as belonging
 		-- to the row above it.
@@ -1164,6 +1277,22 @@ return function(env)
 		end
 		setOpen(open)
 		header.Activated:Connect(function() setOpen(not open) end)
+		header.MouseEnter:Connect(function()
+			name.TextColor3 = theme.color.accentHot
+			env.tween:Create(header, theme.tween("quick"), {
+				BackgroundColor3 = theme.color.surfaceHover,
+				BackgroundTransparency = 0.15,
+			}):Play()
+			env.tween:Create(stroke, theme.tween("quick"), { Color = theme.color.border }):Play()
+		end)
+		header.MouseLeave:Connect(function()
+			name.TextColor3 = theme.color.textPrimary
+			env.tween:Create(header, theme.tween("quick"), {
+				BackgroundColor3 = theme.color.surface,
+				BackgroundTransparency = 0.45,
+			}):Play()
+			env.tween:Create(stroke, theme.tween("quick"), { Color = theme.color.borderSubtle }):Play()
+		end)
 
 		local handle = { root = holder, card = card }
 		local nested
@@ -1216,13 +1345,28 @@ return function(env)
 
 		function handle.finish(result)
 			pcall(function() spinner:Destroy() end)
-			dotSlot.Visible = true
-			if result.ok then
-				dot.BackgroundColor3 = theme.riskColor(info.risk)
-			else
-				dot.BackgroundColor3 = result.denied and theme.color.warn or theme.color.danger
+			if not result.ok or result.denied or info.risk == "write" then
+				dotSlot.Visible = true
+				if not result.ok then
+					dot.BackgroundColor3 = result.denied and theme.color.warn or theme.color.danger
+				else
+					dot.BackgroundColor3 = theme.riskColor(info.risk)
+				end
 			end
-			timing.Text = result.ms and util.formatDuration(result.ms) or ""
+			if result.ms then
+				timing.Text = result.ms >= 1000 and util.formatDuration(result.ms) or string.format("%dms", result.ms)
+				timingPill.Visible = true
+			else
+				timing.Text = ""
+				timingPill.Visible = false
+			end
+			if not result.ok then
+				timing.TextColor3 = theme.color.danger
+				stroke.Color = theme.color.danger
+			else
+				timing.TextColor3 = theme.color.textTertiary
+				stroke.Color = theme.color.borderSubtle
+			end
 			local text = tostring(result.text or "")
 			preview.Text = util.ellipsis(text:gsub("[\n\r]+", " "), ARG_PREVIEW)
 			preview.TextColor3 = result.ok and theme.color.textTertiary or theme.color.danger
@@ -1310,24 +1454,42 @@ return function(env)
 		})
 
 		local header = Instance.new("TextButton", card)
+		header.Name = "SubagentHeader"
 		header.Text = ""
 		header.AutoButtonColor = false
-		header.BackgroundTransparency = 1
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row - theme.space.xxs,
+		header.BackgroundColor3 = theme.color.surface
+		header.BackgroundTransparency = 0.4
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row,
 			responsive.minTarget() - theme.space.sm))
 		header.LayoutOrder = 1
 		header.Selectable = true
+		Instance.new("UICorner", header).CornerRadius = UDim.new(0, theme.radius.sm)
+
+		local subStroke = Instance.new("UIStroke", header)
+		subStroke.Color = theme.color.borderSubtle
+		subStroke.Thickness = theme.stroke.hair
 
 		local row = P.row(header, {
 			size = UDim2.fromScale(1, 1),
-			gap = theme.space.xs,
+			gap = theme.space.sm,
+			padding = { left = theme.space.sm, right = theme.space.sm },
+			alignY = "Center",
 		})
 
-		local spinner = C.spinner(row, { diameter = theme.size.icon - theme.space.hair, layoutOrder = 1 })
+		local iconBadge = P.frame(row, {
+			name = "SubagentIconBadge",
+			size = UDim2.fromOffset(20, 20),
+			bg = theme.color.surfaceRaised,
+			radius = theme.radius.xs,
+			layoutOrder = 1,
+		})
+		icons.branch(iconBadge, 12, theme.color.accent)
+
+		local spinner = C.spinner(row, { diameter = theme.size.icon - theme.space.hair, layoutOrder = 2 })
 		local dotSlot = P.frame(row, {
 			name = "DotSlot",
 			size = UDim2.fromOffset(theme.size.icon - theme.space.hair, theme.size.icon - theme.space.hair),
-			layoutOrder = 1,
+			layoutOrder = 2,
 		})
 		dotSlot.Visible = false
 		local dot = P.statusDot(dotSlot, {
@@ -1338,34 +1500,55 @@ return function(env)
 		})
 
 		local kindLabel = P.text(row, {
-			-- A follow-up says so. It is the same subagent with the same context and the
-			-- same id, so two cards under one conversation would otherwise read as two
-			-- separate dispatches doing the same job twice.
 			text = info.followUp and "follow-up" or "agent",
 			role = "monoSmall",
-			color = theme.color.accent,
-			layoutOrder = 2,
+			color = theme.color.accentHot,
+			layoutOrder = 3,
 		})
 		kindLabel.Size = UDim2.fromOffset(0, theme.text.monoSmall.height)
 		kindLabel.AutomaticSize = Enum.AutomaticSize.X
+
 		local title = P.text(row, {
 			text = tostring(info.label or "task"),
-			role = "caption",
-			color = theme.color.textSecondary,
+			role = "small",
+			color = theme.color.textPrimary,
 			truncate = true,
 			size = UDim2.new(0, 0, 1, 0),
 			flex = "Fill",
-			layoutOrder = 3,
+			layoutOrder = 4,
 		})
 
-		local meta = P.text(row, {
+		local metaPill = P.frame(row, {
+			name = "MetaPill",
+			bg = theme.color.surfaceRaised,
+			bgTransparency = 0.6,
+			radius = theme.radius.xs,
+			padding = { x = theme.space.xs, y = 2 },
+			auto = "X",
+			layoutOrder = 5,
+		})
+		P.stroke(metaPill, theme.color.borderSubtle, theme.stroke.hair)
+		local meta = P.text(metaPill, {
 			text = "",
 			role = "caption",
 			color = theme.color.textTertiary,
-			align = "Right",
-			layoutOrder = 4,
+			auto = "X",
 		})
-		meta.Size = UDim2.fromOffset(theme.size.metaColumnWide, theme.text.caption.height)
+
+		header.MouseEnter:Connect(function()
+			env.tween:Create(header, theme.tween("quick"), {
+				BackgroundColor3 = theme.color.surfaceHover,
+				BackgroundTransparency = 0.1,
+			}):Play()
+			env.tween:Create(subStroke, theme.tween("quick"), { Color = theme.color.border }):Play()
+		end)
+		header.MouseLeave:Connect(function()
+			env.tween:Create(header, theme.tween("quick"), {
+				BackgroundColor3 = theme.color.surface,
+				BackgroundTransparency = 0.4,
+			}):Play()
+			env.tween:Create(subStroke, theme.tween("quick"), { Color = theme.color.borderSubtle }):Play()
+		end)
 
 		local feed = P.column(card, {
 			name = "Feed",
@@ -1428,7 +1611,8 @@ return function(env)
 			if calls > 0 then bits[#bits + 1] = string.format("%d/%d", finished, calls) end
 			local waited = finalMs or clock.since(started)
 			if waited >= 1000 then bits[#bits + 1] = util.formatDuration(waited) end
-			meta.Text = table.concat(bits, "  ")
+			meta.Text = table.concat(bits, "  \194\183  ")
+			metaPill.Visible = #bits > 0
 		end
 
 		-- One timer for the clock, stopped when the subagent reports back. Same reason

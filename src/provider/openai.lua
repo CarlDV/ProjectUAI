@@ -446,6 +446,28 @@ return function(env)
 	-- Performs one completion against one provider. Returns result, nil on success
 	-- or nil, message on failure. Retries inside net/http cover transport and
 	-- 5xx/429; the provider chain above this handles a dead endpoint.
+	--
+	-- A record with several keys gets one more layer: a 429 or quota refusal
+	-- benches the key that carried it and re-fires on the next key immediately.
+	-- No sleep, because the refusal arrived in milliseconds and the next key's
+	-- quota is untouched -- waiting would only spend the wall clock the reply
+	-- still has to fit inside.
+	local function quotaRefusal(res)
+		if not res then return false end
+		if res.status == 429 then return true end
+		if res.status == 402 or res.status == 403 then
+			local body = tostring(res.body or ""):lower()
+			if body:find("resource_exhausted", 1, true) then return true end
+			if body:find("quota", 1, true) then return true end
+			if body:find("rate limit", 1, true) then return true end
+		end
+		return false
+	end
+
+	local function rotationSuffix(index)
+		return string.format(" (key %d)", index)
+	end
+
 	function M.complete(record, request)
 		local wantStream = request.stream
 		if wantStream == nil then wantStream = record.stream ~= false and config.get("agent.stream", true) end
@@ -454,13 +476,36 @@ return function(env)
 		applyRemembered(record, body)
 
 		local url = registry.endpoint(record, "/chat/completions")
-		local headers = registry.authHeaders(record)
-		for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
-		for key, value in pairs(record.headers or {}) do headers[key] = value end
-		headers["Accept"] = wantStream and "text/event-stream" or "application/json"
+		local pool = registry.keysOf(record)
+		local currentKey = nil
+		local currentKeyIndex = 0
+
+		local function rebuildHeaders()
+			-- With a pool, the key is chosen per attempt; without one this is the
+			-- record's own key and nothing changes from before the pool existed.
+			if #pool > 1 then
+				currentKey = registry.nextKey(record)
+				for index, key in ipairs(pool) do
+					if key == currentKey then currentKeyIndex = index end
+				end
+			end
+			local headers = registry.authHeaders(record, currentKey)
+			for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
+			for key, value in pairs(record.headers or {}) do headers[key] = value end
+			headers["Accept"] = wantStream and "text/event-stream" or "application/json"
+			return headers
+		end
+
+		local headers = rebuildHeaders()
 
 		local started = clock.ms()
 		local attemptsAllowed = request.attempts or config.get("agent.retries", 3)
+		local rotationsLeft = math.max(#pool - 1, 0)
+		-- With a pool, a 429 belongs to the rotation above, not to the transport's
+		-- backoff: sleeping on an exhausted key spends the wall clock the reply still
+		-- needs, and the next key answers at once. Without a pool the flag is nil and
+		-- the transport behaves exactly as it always has.
+		local skip429 = (#pool > 1) and { [429] = true } or nil
 
 		local function fire(payload)
 			-- A socket is only used when the record names one and the host has
@@ -490,6 +535,7 @@ return function(env)
 				body = util.encode(payload),
 				identity = (record.claudeUa ~= false) and "claude" or "none",
 				attempts = attemptsAllowed,
+				skipStatus = skip429,
 				aborted = request.aborted,
 				onRetry = request.onRetry,
 				tag = "chat:" .. record.id,
@@ -499,10 +545,28 @@ return function(env)
 			})
 		end
 
-		local res, err = fire(body)
+		local function fireWithRotation(payload)
+			local res, err = fire(payload)
+			while res and not res.ok and quotaRefusal(res) and rotationsLeft > 0 do
+				rotationsLeft = rotationsLeft - 1
+			local benched = currentKey or pool[1]
+				registry.cooldownKey(record, benched)
+				currentKey = registry.nextKey(record)
+				for index, key in ipairs(pool) do
+					if key == currentKey then currentKeyIndex = index end
+				end
+				headers = rebuildHeaders()
+				local label = "rate limited, rotating to key #" .. currentKeyIndex
+				log.info("provider", record.label .. ": " .. label)
+				if request.onRetry then
+					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = label, status = res.status })
+				end
+				res, err = fire(payload)
+			end
+			return res, err
+		end
 
-		-- One parameter repair, then one more attempt. Repeating this would turn a
-		-- misconfigured provider into a request storm.
+		local res, err = fireWithRotation(body)
 		if res and res.status == 400 then
 			local message = M.errorText(res, nil)
 			local note, key = repair(body, message)
@@ -518,7 +582,7 @@ return function(env)
 				if request.onRetry then
 					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 400 })
 				end
-				res, err = fire(body)
+				res, err = fireWithRotation(body)
 			end
 		end
 
@@ -538,7 +602,7 @@ return function(env)
 				if request.onRetry then
 				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 0 })
 			end
-				res, err = fire(lowered)
+				res, err = fireWithRotation(lowered)
 			end
 		end
 

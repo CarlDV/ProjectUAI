@@ -17,7 +17,8 @@ return function(env)
 	local state = env.require("agent/state")
 
 	local THREAD_DIR = "sessions"
-	local THREAD_LIMIT = 20
+	-- Keep all sessions indefinitely; no thread limit is enforced.
+	local THREAD_LIMIT = math.huge
 
 	-- Which events are the transcript, as opposed to the running commentary around one.
 	--
@@ -44,13 +45,10 @@ return function(env)
 		["abort"] = true,
 	}
 
-	-- How much of a conversation a file carries. The in-memory log holds 400 events; a
-	-- stored one holds the most recent 300, any single string in it is capped, and the
-	-- whole thing is capped again -- because 300 events times one 12000-character tool
-	-- result is a three-megabyte write, and this is written after every turn.
-	local TRANSCRIPT_LIMIT = 300
-	local FIELD_CAP = 12000
-	local TRANSCRIPT_BYTES = 262144
+	-- Keep full conversation history; no arbitrary event count cap.
+	local TRANSCRIPT_LIMIT = math.huge
+	local FIELD_CAP = 24000
+	local TRANSCRIPT_BYTES = 1048576
 
 	-- How long a pasted message may be before it stops being a message. A long script
 	-- pasted into the composer is reference material, not a request: sent whole it
@@ -172,7 +170,6 @@ return function(env)
 			if kind == "status" then session.status = payload.text or session.status end
 			if not session.headless then
 				session.log[#session.log + 1] = payload
-				if #session.log > 400 then table.remove(session.log, 1) end
 			end
 			hooks.run("onEvent", { session = session, event = payload })
 			session.events:fire(payload)
@@ -457,6 +454,8 @@ return function(env)
 	end
 
 	function M.trimThreads()
+		-- Keep all sessions: no limit is enforced, preserving all history indefinitely.
+		if THREAD_LIMIT == math.huge then return end
 		local ordered = M.list()
 		for index = THREAD_LIMIT + 1, #ordered do
 			local victim = ordered[index]

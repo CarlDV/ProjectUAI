@@ -160,7 +160,11 @@ scenario("boot mounts the interface", function()
 	local harness, handle = bootWith({ provider = false })
 
 	truthy("bootstrap returned a handle", handle ~= nil)
-	check("version reported", handle.version, "1.0.0")
+	-- The version is asserted against the changelog's newest entry rather than
+	-- a hardcoded string: the two must agree or the What's New marker can never
+	-- clear, and this way a bump that forgets one of them fails here instead.
+	check("version reported", handle.version,
+		handle.env.require("runtime/changelog").latest().version)
 	truthy("handle is alive", handle.alive)
 
 	local screen = harness.screen()
@@ -5040,6 +5044,55 @@ scenario("chat and virtual input tools are registered and callable", function()
 	truthy("mouse_click executes", clickRes:find("Mouse left click") ~= nil or clickRes:find("no mouse input") ~= nil)
 end)
 
+-- Infinite Yield tools -------------------------------------------------------
+
+-- What this locks in: the three iy tools exist with the right group and risk,
+-- the group carries a label, and the runtime module reports the honest states
+-- without IY present -- off says off, an unauthorised mode says so, and a
+-- command against a mode that is off fails with the reason rather than raising.
+scenario("infinite yield tools register and report without IY", function()
+	local harness, handle = bootWith({ provider = false })
+	local registry = handle.tools
+
+	local status = registry.get("iy_status")
+	truthy("iy_status is registered", status ~= nil)
+	check("iy_status group", status and status.group, "iy")
+	check("iy_status risk", status and status.risk, "read")
+
+	local cmd = registry.get("iy_cmd")
+	truthy("iy_cmd is registered", cmd ~= nil)
+	check("iy_cmd group", cmd and cmd.group, "iy")
+	check("iy_cmd risk", cmd and cmd.risk, "write")
+
+	local list = registry.get("iy_cmds")
+	truthy("iy_cmds is registered", list ~= nil)
+	check("iy_cmds risk", list and list.risk, "read")
+
+	check("iy group label", registry.groupLabel("iy"), "Infinite Yield")
+
+	local iy = handle.env.require("runtime/iy")
+	check("mode starts nil", iy.mode, nil)
+	check("status names the default setting", iy.status()[1][2], "hidden")
+	check("not loaded", iy.isLoaded(), false)
+
+	local empty = cmd.run({ command = "" })
+	contains("an empty command fails cleanly", type(empty) == "table" and empty.text or tostring(empty), "Failed")
+
+	iy.setMode("off")
+	local off = cmd.run({ command = "speed 100" })
+	contains("a command while off names the setting", type(off) == "table" and off.text or tostring(off), "Settings")
+
+	iy.setMode("hidden")
+	check("mode switches", iy.mode, "hidden")
+	check("an unknown mode is refused", iy.setMode("sideways"), false)
+
+	local denied = cmd.run({ command = "speed 100" })
+	contains("a load without http or exec still reports a reason",
+		type(denied) == "table" and denied.text or tostring(denied), "Failed")
+
+	iy.setMode("off")
+end)
+
 scenario("mobile panel can be moved and resized, and burger menu stays within screen bounds", function()
 	local harness, handle = bootWith({})
 	local responsive = handle.env.require("ui/responsive")
@@ -5851,7 +5904,9 @@ scenario("legacy files migrate into the workspace", function()
 	fsx.write("old-notes.txt", "kept note")
 	fsx.write("builds/raft.lua", "local raft = true")
 	fsx.write("config.json", "{\"fake\":true}")
-	fsx.ensure("sessions")
+	fsx.write("my_skill.md", "# My Skill", { scope = "skills" })
+	fsx.write("icons/spark.png", "fake icon")
+	fsx.write("skills/displaced.md", "# Recovered Skill", { scope = "files" })
 
 	local moved = fsx.migrate()
 	check("two agent files moved", moved, 2)
@@ -5859,6 +5914,11 @@ scenario("legacy files migrate into the workspace", function()
 	truthy("and the folder's file moved", harness.files["UAI/files/builds/raft.lua"] == "local raft = true")
 	falsy("the root copy is gone", harness.files["UAI/old-notes.txt"] ~= nil)
 	falsy("config.json was left alone", harness.files["UAI/config.json"] == nil)
+	truthy("skills folder was left alone", harness.files["UAI/skills/my_skill.md"] == "# My Skill")
+	falsy("skills was not moved to files/", harness.files["UAI/files/skills/my_skill.md"] ~= nil)
+	truthy("icons folder was left alone", harness.files["UAI/icons/spark.png"] == "fake icon")
+	truthy("displaced skill was recovered", harness.files["UAI/skills/displaced.md"] == "# Recovered Skill")
+	falsy("displaced skill file removed from files/", harness.files["UAI/files/skills/displaced.md"] ~= nil)
 
 	-- Idempotent: the second sweep finds nothing to move.
 	local again = fsx.migrate()
@@ -5986,6 +6046,483 @@ scenario("conversation_search also scans pastes", function()
 	truthy("the search succeeds", found.ok, found.text)
 	contains("and finds the paste", found.text, "pastes/")
 	contains("with the line that matched", found.text, "Instance.new")
+end)
+
+-- Multi-key rotation --------------------------------------------------------
+
+-- What this locks in: a record carrying several keys rotates on a 429 without
+-- sleeping, the benched key is skipped afterwards, and a single-key record
+-- never rotates (the pool is what makes the retry free). The harness answers
+-- 429 to whichever key arrives first and 200 afterwards, so the number of
+-- requests is the observable: one rotation, then success.
+scenario("a key pool rotates on a rate limit without delay", function()
+	local seenKeys = {}
+	local handler = function(spec)
+		local auth = spec.headers and (spec.headers["Authorization"] or spec.headers["x-api-key"]) or ""
+		seenKeys[#seenKeys + 1] = auth
+		if #seenKeys == 1 then
+			return { StatusCode = 429, Body = json.encode({ error = { message = "rate limit exceeded" } }) }
+		end
+		return { StatusCode = 200, Body = chatBody({ content = "rotated" }) }
+	end
+
+	local harness, handle = bootWith({ handler = handler })
+	local registry = handle.providers
+	local record = registry.active()
+	record.apiKey = "key-one\nkey-two\nkey-three"
+
+	local calls = {}
+	local result = handle.env.require("provider/openai").complete(record, {
+		messages = { { role = "user", content = "hi" } },
+		stream = false,
+		onRetry = function(info) calls[#calls + 1] = info end,
+	})
+
+	truthy("the completion succeeds after rotating", result ~= nil)
+	check("two keys were tried", #seenKeys, 2)
+	falsy("the first key is benched, not repeated", seenKeys[2] == seenKeys[1])
+	contains("the rotation was reported", #calls > 0 and calls[1].reason or "", "rotating to key")
+	contains("with no wait", #calls > 0 and tostring(calls[1].wait) or "", "0")
+
+	-- The benched key is skipped on the next completion too: its cooldown is
+	-- 30s and the virtual clock has not moved that far.
+	local nextKey = registry.nextKey(record)
+	check("the cooled key is not selected again", nextKey, "key-two")
+end)
+
+scenario("quota wording in a 200-body style refusal also rotates", function()
+	local seenKeys = {}
+	local handler = function(spec)
+		local auth = spec.headers and (spec.headers["Authorization"] or spec.headers["x-api-key"]) or ""
+		seenKeys[#seenKeys + 1] = auth
+		if #seenKeys == 1 then
+			return { StatusCode = 403, Body = json.encode({
+				error = { code = 429, message = "RESOURCE_EXHAUSTED: quota exceeded" },
+			}) }
+		end
+		return { StatusCode = 200, Body = chatBody({ content = "rotated" }) }
+	end
+
+	local harness, handle = bootWith({ handler = handler })
+	local record = handle.providers.active()
+	record.apiKey = "alpha-key\nbeta-key"
+
+	local result = handle.env.require("provider/openai").complete(record, {
+		messages = { { role = "user", content = "hi" } },
+		stream = false,
+	})
+	truthy("a RESOURCE_EXHAUSTED 403 rotates to the next key", result ~= nil)
+	check("two keys were tried", #seenKeys, 2)
+end)
+
+scenario("a single key is never rotated", function()
+	local seenKeys = {}
+	local handler = function(spec)
+		local auth = spec.headers and (spec.headers["Authorization"] or spec.headers["x-api-key"]) or ""
+		seenKeys[#seenKeys + 1] = auth
+		return { StatusCode = 429, Body = json.encode({ error = { message = "rate limit" } }) }
+	end
+
+	local harness, handle = bootWith({ handler = handler })
+	local record = handle.providers.active()
+	record.apiKey = "one-key-only"
+
+	local result = handle.env.require("provider/openai").complete(record, {
+		messages = { { role = "user", content = "hi" } },
+		stream = false,
+		attempts = 1,
+	})
+	falsy("a single-key pool has nothing to rotate to", result ~= nil)
+	-- The 429 may still be retried by the transport layer, but every attempt
+	-- carries the same key.
+	for index = 1, #seenKeys do
+		check("attempt " .. index .. " carried the only key", seenKeys[index], "Bearer one-key-only")
+	end
+end)
+
+scenario("the key pool parser splits on lines, commas and whitespace", function()
+	local harness, handle = bootWith({ provider = false })
+	local registry = handle.providers
+	local record = registry.blank("custom")
+	record.apiKey = "alpha\nbeta,  gamma\r\n\r\ndelta"
+	local keys = registry.keysOf(record)
+	check("four keys parsed", #keys, 4)
+	check("in order", table.concat(keys, ","), "alpha,beta,gamma,delta")
+
+	record.apiKey = "alpha\nalpha\nalpha"
+	check("duplicates collapse", #registry.keysOf(record), 1)
+
+	record.apiKey = ""
+	check("empty means no pool", #registry.keysOf(record), 0)
+
+	record.apiKey = "one-key"
+	check("a single key is a pool of one", #registry.keysOf(record), 1)
+
+	-- authHeaders binds whichever key it is handed, or the record's own when
+	-- nothing is passed -- the pre-pool behaviour, unchanged.
+	record.apiKey = "the-record-key"
+	local headers = registry.authHeaders(record)
+	check("default binding is the record key", headers.Authorization, "Bearer the-record-key")
+	headers = registry.authHeaders(record, "an-explicit-key")
+	check("an explicit key overrides", headers.Authorization, "Bearer an-explicit-key")
+end)
+
+-- IY plugin store -------------------------------------------------------------
+
+-- What this locks in: the store tools register, search hits the real catalogue
+-- shape, and install refuses cleanly when IY is not available rather than
+-- fetching a file nothing can load.
+scenario("iy plugin store tools register and search a catalogue", function()
+	local harness, handle = bootWith({ provider = false })
+	local registry = handle.tools
+
+	local search = registry.get("iy_plugin_search")
+	truthy("iy_plugin_search is registered", search ~= nil)
+	check("iy_plugin_search group", search and search.group, "iy")
+	check("iy_plugin_search risk", search and search.risk, "read")
+
+	local install = registry.get("iy_plugin_install")
+	truthy("iy_plugin_install is registered", install ~= nil)
+	check("iy_plugin_install risk", install and install.risk, "write")
+
+	local remove = registry.get("iy_plugin_uninstall")
+	truthy("iy_plugin_uninstall is registered", remove ~= nil)
+	check("iy_plugin_uninstall risk", remove and remove.risk, "write")
+
+	local store = handle.env.require("runtime/iy_store")
+	-- A catalogue injected straight into the cache, in the shape the live site
+	-- returns: plugins[].files[] with is_plugin, plus non-plugin media entries
+	-- that must be skipped.
+	store.catalog = {
+		plugins = {
+			{
+				id = "1", name = "dexrecontinued", author = "Agent",
+				files = {
+					{ filename = "shot.png", url = "plugins/1/shot.png", size = 100, is_plugin = false },
+					{ filename = "dexrecontinued.iy", url = "plugins/1/dexrecontinued.iy", size = 613, is_plugin = true },
+				},
+			},
+			{ id = "2", name = "IYfix", author = "Agent",
+				files = { { filename = "IYfix.iy", url = "plugins/2/IYfix.iy", size = 584, is_plugin = true } } },
+			{ id = "3", name = "BetterESP", author = "Other",
+				files = { { filename = "BetterESP.iy", url = "plugins/3/BetterESP.iy", size = 900, is_plugin = true } } },
+		},
+	}
+	store.catalogAt = handle.env.require("runtime/clock").ms()
+
+	local results, err = store.search("dex", 10)
+	truthy("the search matches by name", results ~= nil and #results == 1, tostring(err))
+	check("the .iy file is picked, not the png", results[1].file.name, "dexrecontinued.iy")
+	check("the author is carried", results[1].author, "Agent")
+
+	-- Author match scores below name match, but still matches.
+	local byAuthor = store.search("agent", 10)
+	truthy("the search matches by author", byAuthor ~= nil and #byAuthor >= 2)
+
+	-- Empty query matches everything, capped.
+	local all = store.search("", 2)
+	check("an empty query is capped at the limit", #all, 2)
+
+	local none = store.search("nothing-matches-this", 10)
+	check("a miss is empty, not an error", type(none) == "table" and #none, 0)
+
+	-- Install without IY available: mode off, so ensure() refuses and nothing
+	-- is fetched.
+	handle.config.set("iy.mode", "off")
+	handle.env.require("runtime/iy").mode = "off"
+	local ok, why = store.install("dexrecontinued")
+	falsy("install without IY refuses", ok)
+	contains("and says it is the setting", tostring(why), "Settings")
+
+	local unok, unwhy = store.uninstall("dexrecontinued")
+	falsy("uninstall without IY refuses", unok)
+	contains("and says what is missing", tostring(unwhy), "not loaded")
+end)
+
+-- Markdown skills -------------------------------------------------------------
+
+-- What this locks in: the two access paths converge on one engine. A file
+-- dropped into skills/ is listed, described and readable; a skill the agent
+-- writes carries a header the catalogue can parse back; the toggle gates the
+-- read without touching the file; the index block carries names and
+-- descriptions only -- never a body, which is the token contract the engine
+-- exists to keep.
+scenario("markdown skills: drop, list, read, toggle", function()
+	local harness, handle = bootWith({ provider = false })
+	local fsx = handle.env.require("runtime/fsx")
+	local skills = handle.env.require("runtime/skills")
+
+	-- The file-drop path: a user writes this by hand, frontmatter and body.
+	fsx.ensure("skills")
+	local ok = fsx.write("ponytail.md", table.concat({
+		"---",
+		"name: Ponytail",
+		"description: Senior developer mindset. Prevents over-engineering.",
+		"---",
+		"",
+		"Prefer the one-liner. Use platform built-ins.",
+		"",
+		"## Rules",
+		"",
+		"- No new dependencies without a fight",
+		"- The boring solution first",
+	}, "\n"), { scope = "skills" })
+	truthy("the file lands in skills/", ok)
+
+	local list = skills.list()
+	check("one skill listed", #list, 1)
+	check("the name comes from the header", list[1].name, "Ponytail")
+	check("the description comes from the header",
+		list[1].description, "Senior developer mindset. Prevents over-engineering.")
+	check("on by default", list[1].enabled, true)
+
+	local body = skills.read("Ponytail")
+	truthy("read by name", body ~= nil)
+	contains("the body is returned", body, "Prefer the one-liner")
+	contains("with its structure", body, "The boring solution first")
+	local strayHeader = body:find("description:", 1, true)
+	falsy("the frontmatter is stripped from the body", strayHeader ~= nil)
+
+	local byFile = skills.read("ponytail.md")
+	contains("read by filename too", byFile, "Prefer the one-liner")
+
+	-- A file with no frontmatter at all is still a skill: the filename is the
+	-- name and the whole text is the body.
+	fsx.write("headerless.md", "Just a rule: always yield in loops.", { scope = "skills" })
+	local bare = skills.list()
+	check("two skills now", #bare, 2)
+	local found = skills.find("headerless")
+	truthy("findable by filename", found ~= nil)
+	check("the filename is the fallback name", found and found.name, "headerless")
+	local bareBody = skills.read("headerless")
+	contains("a headerless file reads whole", bareBody, "always yield in loops")
+
+	-- The toggle: gates the read, leaves the file alone.
+	skills.setEnabled("ponytail.md", false)
+	local refused, refuseWhy = skills.read("Ponytail")
+	falsy("a switched-off skill is refused", refused)
+	contains("and says so", tostring(refuseWhy), "switched off")
+	local stillThere = fsx.read("ponytail.md", { scope = "skills" })
+	contains("the file itself is untouched", stillThere, "Prefer the one-liner")
+
+	-- And the index block -- the token contract. Names and descriptions only,
+	-- checked while the skill is off so its absence is proven, then on so its
+	-- return is.
+	local indexOff = skills.indexBlock()
+	falsy("the index omits a switched-off skill", indexOff ~= nil and indexOff:find("Ponytail", 1, true) ~= nil)
+	skills.setEnabled("ponytail.md", true)
+	local index = skills.indexBlock()
+	contains("the index names the skill", index, "Ponytail")
+	contains("with its description", index, "Prevents over-engineering")
+	local bodyLeak = index:find("one-liner", 1, true)
+	falsy("the index never carries a body", bodyLeak)
+end)
+
+scenario("skills_write builds a readable skill and skills_delete removes it", function()
+	local harness, handle = bootWith({ provider = false })
+	local skills = handle.env.require("runtime/skills")
+	local fsx = handle.env.require("runtime/fsx")
+
+	local ok, file = skills.save("RemoteHooking",
+		"How to hook remotes safely for this client.",
+		"1. Inspect first with remotes_list\n2. Hook one at a time\n3. Always restore")
+	truthy("the save succeeds", ok, file)
+	check("the filename is derived", file, "RemoteHooking.md")
+
+	-- What was written parses back: the catalogue can describe it and the read
+	-- returns the body without the header the engine added.
+	local list = skills.list()
+	check("the written skill is listed", #list, 1)
+	check("with its description", list[1].description, "How to hook remotes safely for this client.")
+	local body = skills.read("RemoteHooking")
+	contains("the body round-trips", body, "Hook one at a time")
+	local headerLeak = body:find("description:", 1, true)
+	falsy("the generated frontmatter is stripped on read", headerLeak ~= nil)
+
+	local del = skills.remove("RemoteHooking")
+	truthy("the delete succeeds", del)
+	check("the list is empty again", #skills.list(), 0)
+
+	local bad = skills.remove("RemoteHooking")
+	falsy("deleting again fails cleanly", bad)
+end)
+
+scenario("skills install from github resolves, fetches and saves", function()
+	-- A GitHub-shaped body: frontmatter plus a playbook, the shape of an
+	-- Anthropic-style skill repo.
+	local fetched = {}
+	local handler = function(entry)
+		fetched[#fetched + 1] = entry.url
+		return { StatusCode = 200, Body = table.concat({
+			"---",
+			"name: Ponytail",
+			"description: Installed playbook.",
+			"---",
+			"",
+			"Favour one-liners and platform built-ins.",
+		}, "\n") }
+	end
+
+	local harness, handle = bootWith({ provider = false, handler = handler })
+	local skills = handle.env.require("runtime/skills")
+
+	-- owner/repo form: resolves to raw.githubusercontent, main, SKILL.md.
+	local ok, name = skills.fromGitHub("DietrichGebert/ponytail", nil)
+	truthy("the install succeeds", ok, name)
+	check("the skill is named", name, "Ponytail")
+	check("one fetch was made", #fetched, 1)
+	contains("at the raw host", fetched[1], "raw.githubusercontent.com/DietrichGebert/ponytail/main/SKILL.md")
+
+	local list = skills.list()
+	check("the installed skill is listed", #list, 1)
+	local body = skills.read("Ponytail")
+	contains("with its body", body, "platform built-ins")
+
+	-- A github.com blob URL becomes the same raw URL.
+	skills.remove("Ponytail")
+	local okUrl = skills.fromGitHub("https://github.com/DietrichGebert/ponytail/blob/main/docs/SKILL.md", nil)
+	truthy("a blob URL installs", okUrl)
+	contains("rewritten to raw", fetched[2], "raw.githubusercontent.com/DietrichGebert/ponytail/main/docs/SKILL.md")
+
+	-- A bare name is refused: guessing an owner installs a stranger's code.
+	local refused = skills.fromGitHub("ponytail", nil)
+	falsy("a bare name is refused", refused)
+
+	-- A 404 says so rather than saving an error page.
+	harness.http.handler = function() return { StatusCode = 404, Body = "not found" } end
+	local missing, missingWhy = skills.fromGitHub("someone/missing", nil)
+	falsy("a missing repo fails cleanly", missing)
+	contains("with the status", tostring(missingWhy), "404")
+end)
+
+scenario("the skills tool group registers and the prompt carries the index", function()
+	local harness, handle = bootWith({ provider = false })
+	local registry = handle.tools
+	local fsx = handle.env.require("runtime/fsx")
+	local skills = handle.env.require("runtime/skills")
+
+	local expected = {
+		{ id = "skills_list", risk = "read" },
+		{ id = "skills_read", risk = "read" },
+		{ id = "skills_write", risk = "write" },
+		{ id = "skills_install", risk = "write" },
+		{ id = "skills_delete", risk = "write" },
+	}
+	for _, spec in ipairs(expected) do
+		local tool = registry.get(spec.id)
+		truthy(spec.id .. " is registered", tool ~= nil)
+		check(spec.id .. " group", tool and tool.group, "skills")
+		check(spec.id .. " risk", tool and tool.risk, spec.risk)
+	end
+	check("skills group label", registry.groupLabel("skills"), "Skills")
+
+	-- The environment block: nothing when there are no skills, the index when
+	-- there is one, and never a body.
+	local prompt = handle.env.require("agent/prompt")
+	local built = prompt.build({})
+	falsy("no skills, no block", built:find("Skills available", 1, true))
+
+	fsx.ensure("skills")
+	skills.save("Tiny", "One line.", "The body of the tiny skill.")
+	built = prompt.build({})
+	contains("the index line appears", built, "Skills available")
+	contains("naming the skill", built, "Tiny")
+	contains("with its description", built, "One line.")
+	local leak = built:find("The body of the tiny skill", 1, true)
+	falsy("the body never reaches the prompt", leak ~= nil)
+end)
+
+-- Changelog --------------------------------------------------------------------
+
+-- What this locks in: the full release history is present and ordered newest
+-- first, every entry carries the categories the modal badges, the unread
+-- marker flips when the modal opens, and the modal itself renders every
+-- version card -- on a desktop viewport and on a phone-sized one, where the
+-- header moves the title to its own line rather than truncating it.
+scenario("the changelog carries every release and marks itself read", function()
+	local harness, handle = bootWith({ provider = false })
+	local changelog = handle.env.require("runtime/changelog")
+	local config = handle.env.require("runtime/config")
+
+	local all = changelog.all()
+	truthy("there is history", #all >= 10)
+	local initial = false
+	for _, entry in ipairs(all) do
+		if entry.version == "1.0.0" and entry.title == "Initial release" then initial = true end
+	end
+	truthy("the initial release is present", initial)
+
+	-- Newest first, strictly: a duplicate or a misorder breaks the marker.
+	for index = 2, #all do
+		truthy("version " .. all[index - 1].version .. " is newer than " .. all[index].version,
+			all[index - 1].version > all[index].version)
+	end
+
+	-- Every entry is renderable: a title, a date, and at least one section
+	-- whose category the modal knows how to badge.
+	for _, entry in ipairs(all) do
+		truthy("v" .. entry.version .. " has a title", type(entry.title) == "string" and entry.title ~= "")
+		truthy("v" .. entry.version .. " has a date", type(entry.date) == "string" and entry.date ~= "")
+		truthy("v" .. entry.version .. " has sections", #(entry.sections or {}) > 0)
+		for _, section in ipairs(entry.sections) do
+			truthy("v" .. entry.version .. " " .. section.category .. " has items", #(section.items or {}) > 0)
+		end
+	end
+
+	-- The read marker: unread until opened, read after.
+	check("the marker starts unread on a fresh client", changelog.isUnread(), true)
+	truthy("marking it read succeeds", changelog.markRead())
+	check("and it is read now", changelog.isUnread(), false)
+	check("the setting holds the version", config.get("ui.lastSeenVersion"), changelog.latest().version)
+
+	-- The running version is the newest entry -- otherwise the marker can
+	-- never clear for a user who opens the modal.
+	local version = tostring(handle.env.info.version)
+	check("the client version matches the newest entry", changelog.latest().version, version)
+end)
+
+scenario("the what's new modal renders every release on wide and narrow viewports", function()
+	local harness, handle = bootWith({})
+	local app = handle.app
+	local changelog = handle.env.require("runtime/changelog")
+
+	-- Desktop: the full window opens the modal from the app's entry point.
+	local modal = app.showChangelog()
+	truthy("the modal opens", modal ~= nil)
+	local text = harness.textOf(harness.byName("Modal"))
+	for _, entry in ipairs(changelog.all()) do
+		truthy("v" .. entry.version .. " is on screen", text:find(entry.version, 1, true) ~= nil)
+		contains("with its title", text, entry.title)
+	end
+	contains("category badges label the sections", text, "New")
+	contains("and the improved ones", text, "Improved")
+	contains("and the fixed ones", text, "Fixed")
+	-- Opening marked it read.
+	check("opening the modal marked it read", changelog.isUnread(), false)
+	modal.close()
+	harness.settle(1)
+
+	-- Phone-sized: the same content, with the title on its own line.
+	harness.services.UserInputService.TouchEnabled = true
+	local responsive = handle.env.require("ui/responsive")
+	responsive.refresh("test")
+	harness.setViewport(390, 740)
+	harness.settle(2)
+	local phoneModal = app.showChangelog()
+	truthy("the modal opens on a phone viewport", phoneModal ~= nil)
+	local phoneText = harness.textOf(harness.byName("Modal"))
+	for _, entry in ipairs(changelog.all()) do
+		truthy("v" .. entry.version .. " is on the phone too", phoneText:find(entry.version, 1, true) ~= nil)
+	end
+	phoneModal.close()
+	harness.settle(1)
+
+	harness.services.UserInputService.TouchEnabled = false
+	responsive.refresh("test")
+	harness.setViewport(1280, 720)
+	harness.settle(2)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
 print(("="):rep(72))

@@ -19,6 +19,103 @@ return function(env)
 		changed = signal.new("providers"),
 	}
 
+	-- Key pool ------------------------------------------------------------
+	--
+	-- One record may carry several keys, pasted one per line (or comma
+	-- separated). The pool is what beats a free-tier RPM ceiling: Google AI
+	-- Studio hands out keys in batches and caps each at 10-15 requests a
+	-- minute, so N keys in one record is N times the ceiling with no second
+	-- provider to configure.
+	--
+	-- The selection is sticky, not round-robin: the same key is used until it
+	-- is rate limited, then the next one takes over instantly. Round-robin
+	-- would spread the limit evenly but also spend every key's quota on
+	-- requests a single exhausted key could have answered, and it makes a
+	-- genuinely dead key indistinguishable from a cooling one.
+	local KEY_COOLDOWN_SECONDS = 30
+
+	function M.keysOf(record)
+		local raw = tostring(record and record.apiKey or "")
+		local keys, seen = {}, {}
+		-- Line breaks are the primary form (that is what a multi-line paste
+		-- produces); commas are accepted because a user who was handed
+		-- "key1,key2" should not have to edit it.
+		for token in raw:gmatch("[^\r\n,]+") do
+			local key = util.trim(token)
+			if key ~= "" and not seen[key] then
+				seen[key] = true
+				keys[#keys + 1] = key
+			end
+		end
+		return keys
+	end
+
+	function M.keyPoolSize(record)
+		return #M.keysOf(record)
+	end
+
+	-- Rotation state is kept on the record, not in this module's memory, so it
+	-- survives nothing it should not and is visible to the health views. It is
+	-- deliberately NOT persisted to config: which key is current is a fact about
+	-- this session, and a saved index would be stale on the next start.
+	local function keyState(record)
+		record.keyRotation = record.keyRotation or { index = 1, cooldowns = {} }
+		return record.keyRotation
+	end
+
+	-- The key a request should use. Sticky: the current index unless that key
+	-- is on cooldown, then the next one that is not. When every key is cooling,
+	-- the one whose cooldown expires soonest -- a pool that is entirely spent
+	-- is a pool that was just load-balanced, and waiting out the shortest
+	-- remaining bench is faster than hammering any single key.
+	function M.nextKey(record)
+		local keys = M.keysOf(record)
+		if #keys == 0 then return nil end
+		if #keys == 1 then return keys[1] end
+
+		local state = keyState(record)
+		local now = clock.ms()
+		local function ready(index)
+			local until_ = state.cooldowns[keys[index]]
+			return until_ == nil or until_ <= now
+		end
+
+		-- Walk the pool from the current index, wrapping once.
+		for offset = 0, #keys - 1 do
+			local index = ((state.index - 1 + offset) % #keys) + 1
+			if ready(index) then
+				state.index = index
+				return keys[index]
+			end
+		end
+
+		-- All cooling: soonest to expire.
+		local best, bestAt = nil, math.huge
+		for index = 1, #keys do
+			local until_ = state.cooldowns[keys[index]] or 0
+			if until_ < bestAt then
+				best, bestAt = keys[index], until_
+			end
+		end
+		return best
+	end
+
+	-- Bench one key after it was refused. `seconds` may be overridden by a
+	-- caller that read a Retry-After header, which outranks our default.
+	function M.cooldownKey(record, key, seconds)
+		local keys = M.keysOf(record)
+		if #keys < 2 then return false end
+		local state = keyState(record)
+		state.cooldowns[key] = clock.ms() + (seconds or KEY_COOLDOWN_SECONDS) * 1000
+		return true
+	end
+
+	function M.keyCooldowns(record)
+		local state = record and record.keyRotation
+		if type(state) ~= "table" then return nil end
+		return state.cooldowns
+	end
+
 	-- Base URL normalisation, done once on save so no request path has to guess.
 	--
 	--   api.openai.com            -> https://api.openai.com/v1
@@ -62,8 +159,8 @@ return function(env)
 		return url
 	end
 
-	function M.authHeaders(record)
-		local key = util.trim(record.apiKey)
+	function M.authHeaders(record, explicitKey)
+		local key = util.trim(explicitKey or record.apiKey)
 		local style = record.authStyle or "bearer"
 		if key == "" or style == "none" then return {} end
 		if style == "x-api-key" then return { ["x-api-key"] = key } end

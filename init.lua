@@ -19,7 +19,7 @@ end
 
 local hostContext = ...
 
-local VERSION = "1.0.0"
+local VERSION = "1.1.0"
 local FOLDER = "UAI"
 
 -- An existing instance is toggled rather than duplicated: running the loader twice
@@ -147,15 +147,22 @@ local function start()
 	-- where nobody looks. A fresh install sweeps an empty root and reports nothing.
 	pcall(function()
 		local fsx = env.require("runtime/fsx")
+		local alreadyMigrated = config.get("fs.migrated", false) == true
+		local hasDisplacedSkills = fsx.isDir("skills", { scope = "files" })
+		if alreadyMigrated and not hasDisplacedSkills then return end
+
 		local swept = fsx.list("")
 		local pending = 0
 		for _, entry in ipairs(swept) do
-			local name = tostring(entry.name or "")
-			local clientOwns = name == "files" or name == "pastes" or name == "sessions"
-				or name == "export" or name == "config.json" or name == "stats.json"
-			if not clientOwns then pending = pending + 1 end
+			if not tostring(entry.path or ""):find("/", 1, true) then
+				local name = tostring(entry.name or "")
+				local clientOwns = name == "files" or name == "pastes" or name == "skills"
+					or name == "sessions" or name == "export" or name == "icons"
+					or name == "config.json" or name == "stats.json"
+				if not clientOwns then pending = pending + 1 end
+			end
 		end
-		if pending > 0 and boot then
+		if (pending > 0 or hasDisplacedSkills) and boot then
 			boot.phase("updating: your files are moving to the new layout", 0)
 		end
 		local moved = fsx.migrate(function(count, name)
@@ -164,6 +171,10 @@ local function start()
 		if moved and moved > 0 and boot then
 			boot.phase(string.format("moved %d file(s) into files/", moved), 1)
 		end
+		config.set("fs.migrated", true)
+		config.save()
+		fsx.ensure("skills")
+		fsx.ensure("files")
 	end)
 
 	local sessions = env.require("agent/session")

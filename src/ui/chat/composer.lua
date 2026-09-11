@@ -369,7 +369,7 @@ return function(env)
 		-- A step larger than iconLarge, which is what the animation needs to read: at
 		-- twenty pixels the hop is three of them and the arms move by five, and nobody
 		-- notices either from a foot away.
-		local mascotSize = theme.size.iconLarge + theme.space.sm
+		local mascotSize = 34
 		local mascotSlot = P.frame(inputHolder, {
 			name = "Mascot",
 			size = UDim2.fromOffset(mascotSize + theme.space.xs, mascotSize),

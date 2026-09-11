@@ -1017,9 +1017,11 @@ return function(env)
 			width = theme.size.menuWide,
 			options = {
 				{ isHeader = true, title = name, subtitle = record and record.label or "no provider" },
+				{ divider = true },
 				{ label = "Settings", value = "settings", icon = "gear", shortcut = "Ctrl ," },
 				{ label = "Inference configuration", value = "providers", icon = "sliders" },
 				{ divider = true },
+				{ label = env.require("ui/changelog").menuLabel(), value = "changelog", icon = "spark" },
 				{ label = "About this build", value = "about", icon = "book" },
 				{ divider = true },
 				{ label = "Unload UAI", value = "unload", icon = "signOut", tone = "bad" },
@@ -1029,6 +1031,8 @@ return function(env)
 					M.showSettingsDialog("general")
 				elseif value == "providers" then
 					M.show("providers")
+				elseif value == "changelog" then
+					M.showChangelog()
 				elseif value == "about" then
 					M.showAbout()
 				elseif value == "unload" then
@@ -1055,9 +1059,7 @@ return function(env)
 	end
 
 	-- What this build actually is. Read rather than written: the version, the identity
-	-- that goes on the wire, what the host can do, and where it is running. There is no
-	-- changelog to show -- the client does not ship one -- and inventing release notes
-	-- would be worse than not having them.
+	-- that goes on the wire, what the host can do, and where it is running.
 	function M.showAbout()
 		local ua = env.require("net/ua")
 		local registry = env.require("agent/registry")
@@ -1091,14 +1093,33 @@ return function(env)
 				end,
 			})
 		end
+		-- The other half of this modal's job: what this version changed, one tap
+		-- away. Closes About first so two modals never stack on the same scrim.
+		P.button(modal.footer, {
+				text = "What's new",
+				variant = "secondary",
+				size = "sm",
+				layoutOrder = 2,
+				onClick = function()
+					modal.close()
+					M.showChangelog()
+				end,
+			})
 		P.button(modal.footer, {
 			text = "Close",
 			variant = "primary",
 			size = "sm",
-			layoutOrder = 2,
+			layoutOrder = 3,
 			onClick = function() modal.close() end,
-		})
+			})
 		return modal
+	end
+
+	-- The release notes. Reachable from the app menu and from About, and marked
+	-- read the moment it opens -- the marker on the menu row is what brought
+	-- the reader here, and leaving it after the fact would be a stale flag.
+	function M.showChangelog()
+		return env.require("ui/changelog").show()
 	end
 
 	-- Search across every conversation: titles first, then what was said in them. The
@@ -1112,7 +1133,6 @@ return function(env)
 			width = theme.size.dialog,
 		})
 		if not modal then return nil end
-
 		local results = P.column(modal.content, {
 			name = "SearchResults",
 			size = UDim2.new(1, 0, 0, 0),

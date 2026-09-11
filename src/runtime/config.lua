@@ -53,6 +53,11 @@ return function(env)
 			window = { width = 0, height = 0, x = 0, y = 0, maximised = false, placed = false },
 			mobilePanel = { width = 0, height = 0, x = 0, y = 0, placed = false },
 			launcher = { x = 0, y = 0, placed = false },
+			-- The last changelog version the user opened. The app menu marks What's
+			-- New while the running version is newer than this; opening the modal
+			-- sets it. "0.0.0" rather than the shipping version so a first run
+			-- shows the marker -- a new user is exactly who the notes are for.
+			lastSeenVersion = "0.0.0",
 		},
 		agent = {
 			maxTurns = 24,
@@ -194,6 +199,27 @@ return function(env)
 		logs = {
 			mirror = false,
 			level = "info",
+		},
+		-- Infinite Yield as an internal command engine. "off" withholds the iy
+		-- tools' engine entirely; "hidden" loads IY with its interface parked so
+		-- the agent has every command and the user keeps the screen; "visible"
+		-- loads it as IY draws itself. The mode is a request, not a state: it is
+		-- applied on the next command, never at boot, because loading is a
+		-- megabyte fetch and a GUI and a settings row should not spend that.
+		iy = {
+			mode = "hidden",
+		},
+		-- Markdown skills (.md playbooks) under skills/. The engine injects nothing
+		-- into the system prompt -- the environment block carries names and
+		-- one-line descriptions only, and a body is fetched by a tool call when a
+		-- task matches. `disabled` is the set of switched-off filenames; an absent
+		-- entry means enabled, so a file dropped in by hand works with no second
+		-- step.
+		skills = {
+			disabled = {},
+		},
+		fs = {
+			migrated = false,
 		},
 	}
 

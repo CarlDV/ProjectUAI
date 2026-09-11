@@ -37,7 +37,7 @@ return function(env)
 	-- stats.json) never share a directory: a folder full of both is the "very messy"
 	-- problem, and the fix is a prefix applied in one place rather than remembered by
 	-- every caller.
-	local SCOPES = { files = true, pastes = true }
+	local SCOPES = { files = true, pastes = true, skills = true }
 
 	function M.resolve(path, opts)
 		opts = opts or {}
@@ -215,10 +215,39 @@ return function(env)
 	local CLIENT_STATE = {
 		["config.json"] = true,
 		["stats.json"] = true,
+		["sessions"] = true,
+		["export"] = true,
+		["icons"] = true,
 	}
 
 	function M.migrate(onProgress)
 		if not M.enabled then return 0 end
+
+		-- Recovery: if a previous buggy migration moved playbooks from skills/ into files/skills/,
+		-- restore them back to the skills scope so the user does not lose their installed skills.
+		if M.isDir("skills", { scope = "files" }) then
+			local displaced = M.list("skills", { scope = "files" })
+			local recovered = 0
+			for _, file in ipairs(displaced) do
+				if not file.isDir and tostring(file.name):sub(-3):lower() == ".md" then
+					local body = M.read(file.path, { scope = "files" })
+					if body then
+						M.write(file.name, body, { scope = "skills" })
+						M.delete(file.path, { scope = "files" })
+						recovered = recovered + 1
+					end
+				end
+			end
+			local remain = 0
+			for _, file in ipairs(M.list("skills", { scope = "files" })) do
+				if not file.isDir then remain = remain + 1 end
+			end
+			if remain == 0 then M.delete("skills", { scope = "files" }) end
+			if recovered > 0 then
+				log.info("fsx", string.format("recovered %d misplaced skill(s) from files/skills/ into skills/", recovered))
+			end
+		end
+
 		-- Idempotent: once the root holds only client state and scope folders, the
 		-- sweep finds nothing and costs a single listfiles.
 		--
@@ -234,8 +263,8 @@ return function(env)
 				skipped = skipped + 1
 			else
 				local name = tostring(entry.name or "")
-				local isScope = name == "files" or name == "pastes"
-				local isState = CLIENT_STATE[name] or name == "sessions" or name == "export"
+				local isScope = SCOPES[name] == true
+				local isState = CLIENT_STATE[name] == true
 				if entry.isDir and not isScope and not isState then
 					-- A folder the agent made for itself (notes/, builds/). Rewritten
 					-- under files/ by full relative path, which keeps nested structure:

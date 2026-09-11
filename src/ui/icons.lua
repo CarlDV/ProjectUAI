@@ -10,6 +10,7 @@
 -- reads as homemade at any size; a small-caps label does not.
 return function(env)
 	local theme = env.require("ui/theme")
+	local config = env.require("runtime/config")
 	local caps = env.require("runtime/caps")
 	local fsx = env.require("runtime/fsx")
 	local assets = env.require("ui/assets")
@@ -48,6 +49,7 @@ return function(env)
 		book = "book-open",
 		signOut = "log-out",
 		ellipsis = "ellipsis",
+		spark = "sparkles",
 	}
 
 	local assetCache = {}
@@ -65,11 +67,19 @@ return function(env)
 		local fullPath = fsx.resolve(relPath)
 		if not fullPath then return nil end
 
-		if not fsx.exists(relPath) and assets and assets.icons and assets.icons[mapped] then
+		local targetVer = (assets and assets.VERSION) or 1
+		local currentVer = config.get("assets.icons_version", 0)
+		local needsWrite = (not fsx.exists(relPath)) or (currentVer < targetVer)
+
+		if needsWrite and assets and assets.icons and assets.icons[mapped] then
 			local decoded = assets.decode(assets.icons[mapped])
 			if decoded then
 				fsx.write(relPath, decoded)
 			end
+		end
+
+		if currentVer < targetVer then
+			config.set("assets.icons_version", targetVer)
 		end
 
 		local ok, asset = pcall(caps.fn.customasset, fullPath)
@@ -248,8 +258,9 @@ return function(env)
 	-- here that carries brand rather than function -- so it gets the accent by
 	-- default rather than the secondary text tone every other icon uses.
 	function M.spark(parent, size, colour)
-		local frame = holder(parent, size, "IconSpark")
 		local tint = colour or theme.color.accent
+		local frame, custom = customOrHolder(parent, size, "IconSpark", "spark", tint)
+		if custom then return frame end
 		for _, rotation in ipairs({ 0, 45, 90, 135 }) do
 			bar(frame, { size = UDim2.fromScale(0.82, WEIGHT), rotation = rotation, color = tint })
 		end
@@ -429,52 +440,130 @@ return function(env)
 	--
 	-- Returns the frame, and a handle for the state. Reduced motion gets the sprite and
 	-- nothing else: the handle is still there and still answers, it simply does not move.
-	local MARCH = { idle = 0.9, busy = 0.4 }
-	local HOP = { idle = 3, busy = 4 }
-	local ROCK = { idle = 5, busy = 9 }
-	local TILT = { idle = 16, busy = 30 }
-	local BLINK = { idle = 2.4, busy = 0.9 }
-
+	-- Claude Code Desktop Companion Mascot:
+	-- A friendly, high-tech animated companion perched atop the composer.
+	--
+	-- Designed with sleek rounded geometry, dark curved visor, dual glowing cybernetic
+	-- eyes, and smooth physics-based motion:
+	--  - Idle: Gentle anti-gravity hover float (Sine.InOut), antiphase breathing shadow,
+	--          subtle antenna sway, and natural lifelike eye blinks.
+	--  - Busy: Energetic rhythmic bouncy hover with perky antennae and visor glance.
 	function M.mascot(parent, size, colour)
 		local frame = holder(parent, size, "IconMascot")
 		local tint = colour or theme.color.accent
 		local bg = theme.color.canvas
+		local eyeColor = Color3.fromRGB(255, 255, 255)
 
-		-- Antennae
-		local leftAntenna = bar(frame, { size = UDim2.fromScale(0.12, 0.16), color = tint, position = UDim2.fromScale(0.26, 0.16), radius = 0 })
-		local rightAntenna = bar(frame, { size = UDim2.fromScale(0.12, 0.16), color = tint, position = UDim2.fromScale(0.74, 0.16), radius = 0 })
+		-- Soft dynamic ground shadow (scales in antiphase with the hover)
+		local shadow = bar(frame, {
+			size = UDim2.fromScale(0.60, 0.08),
+			color = bg,
+			position = UDim2.fromScale(0.5, 0.94),
+			radius = 1,
+			zIndex = 1,
+		})
+		shadow.BackgroundTransparency = 0.55
 
-		-- Head / upper body
-		bar(frame, { size = UDim2.fromScale(0.68, 0.28), color = tint, position = UDim2.fromScale(0.5, 0.38), radius = 0 })
-		-- Inset eyes
-		local leftEye = bar(frame, { size = UDim2.fromScale(0.12, 0.12), color = bg, position = UDim2.fromScale(0.34, 0.38), radius = 0, zIndex = 3 })
-		local rightEye = bar(frame, { size = UDim2.fromScale(0.12, 0.12), color = bg, position = UDim2.fromScale(0.66, 0.38), radius = 0, zIndex = 3 })
+		-- Antenna stem & glowing orb tip
+		local antennaStem = bar(frame, {
+			size = UDim2.fromScale(0.08, 0.16),
+			color = tint,
+			position = UDim2.fromScale(0.5, 0.18),
+			radius = 2,
+			zIndex = 2,
+		})
+		local antennaTip = bar(frame, {
+			size = UDim2.fromScale(0.16, 0.16),
+			color = tint,
+			position = UDim2.fromScale(0.5, 0.10),
+			radius = 1,
+			zIndex = 3,
+		})
 
-		-- Mid body & arms
-		local arms = bar(frame, { size = UDim2.fromScale(0.88, 0.22), color = tint, position = UDim2.fromScale(0.5, 0.6), radius = 0 })
+		-- Rounded side pods / arms
+		local leftArm = bar(frame, {
+			size = UDim2.fromScale(0.12, 0.26),
+			color = tint,
+			position = UDim2.fromScale(0.14, 0.54),
+			radius = 3,
+			zIndex = 2,
+		})
+		local rightArm = bar(frame, {
+			size = UDim2.fromScale(0.12, 0.26),
+			color = tint,
+			position = UDim2.fromScale(0.86, 0.54),
+			radius = 3,
+			zIndex = 2,
+		})
 
-		-- Feet
-		local leftFoot = bar(frame, { size = UDim2.fromScale(0.15, 0.16), color = tint, position = UDim2.fromScale(0.24, 0.8), radius = 0 })
-		local rightFoot = bar(frame, { size = UDim2.fromScale(0.15, 0.16), color = tint, position = UDim2.fromScale(0.76, 0.8), radius = 0 })
+		-- Main rounded bot body
+		local body = bar(frame, {
+			size = UDim2.fromScale(0.72, 0.58),
+			color = tint,
+			position = UDim2.fromScale(0.5, 0.52),
+			radius = 7,
+			zIndex = 3,
+		})
+
+		-- Curved dark visor screen
+		local visor = bar(frame, {
+			size = UDim2.fromScale(0.56, 0.30),
+			color = bg,
+			position = UDim2.fromScale(0.5, 0.44),
+			radius = 5,
+			zIndex = 4,
+		})
+
+		-- Dual expressive glowing eyes inside the visor
+		local leftEye = bar(frame, {
+			size = UDim2.fromScale(0.12, 0.16),
+			color = eyeColor,
+			position = UDim2.fromScale(0.38, 0.44),
+			radius = 2,
+			zIndex = 5,
+		})
+		local rightEye = bar(frame, {
+			size = UDim2.fromScale(0.12, 0.16),
+			color = eyeColor,
+			position = UDim2.fromScale(0.62, 0.44),
+			radius = 2,
+			zIndex = 5,
+		})
+
+		-- Tiny feet
+		local leftFoot = bar(frame, {
+			size = UDim2.fromScale(0.16, 0.12),
+			color = tint,
+			position = UDim2.fromScale(0.32, 0.84),
+			radius = 3,
+			zIndex = 2,
+		})
+		local rightFoot = bar(frame, {
+			size = UDim2.fromScale(0.16, 0.12),
+			color = tint,
+			position = UDim2.fromScale(0.68, 0.84),
+			radius = 3,
+			zIndex = 2,
+		})
 
 		local responsive = env.require("ui/responsive")
 		local clock = env.require("runtime/clock")
 		local handle = { instance = frame, busy = false }
 		local tweens, stopBlink = {}, nil
 
-		-- Where every moving part sits when nothing is playing. Kept rather than
-		-- recomputed, because reduced motion has to be able to put the sprite back
-		-- exactly, and a reversing tween that is cancelled mid-arc leaves it anywhere.
 		local rest = {
 			{ part = frame, key = "Position", value = UDim2.fromScale(0.5, 0.5) },
 			{ part = frame, key = "Rotation", value = 0 },
-			{ part = leftAntenna, key = "Rotation", value = 0 },
-			{ part = rightAntenna, key = "Rotation", value = 0 },
-			{ part = arms, key = "Size", value = UDim2.fromScale(0.88, 0.22) },
-			{ part = leftFoot, key = "Position", value = UDim2.fromScale(0.24, 0.8) },
-			{ part = rightFoot, key = "Position", value = UDim2.fromScale(0.76, 0.8) },
-			{ part = leftEye, key = "Position", value = UDim2.fromScale(0.34, 0.38) },
-			{ part = rightEye, key = "Position", value = UDim2.fromScale(0.66, 0.38) },
+			{ part = antennaStem, key = "Rotation", value = 0 },
+			{ part = antennaTip, key = "Position", value = UDim2.fromScale(0.5, 0.10) },
+			{ part = shadow, key = "Size", value = UDim2.fromScale(0.60, 0.08) },
+			{ part = shadow, key = "BackgroundTransparency", value = 0.55 },
+			{ part = leftArm, key = "Position", value = UDim2.fromScale(0.14, 0.54) },
+			{ part = rightArm, key = "Position", value = UDim2.fromScale(0.86, 0.54) },
+			{ part = leftEye, key = "Position", value = UDim2.fromScale(0.38, 0.44) },
+			{ part = rightEye, key = "Position", value = UDim2.fromScale(0.62, 0.44) },
+			{ part = leftEye, key = "Size", value = UDim2.fromScale(0.12, 0.16) },
+			{ part = rightEye, key = "Size", value = UDim2.fromScale(0.12, 0.16) },
 			{ part = leftEye, key = "BackgroundTransparency", value = 0 },
 			{ part = rightEye, key = "BackgroundTransparency", value = 0 },
 		}
@@ -492,8 +581,6 @@ return function(env)
 			end
 		end
 
-		-- One repeating, reversing tween per part. Reversing is what makes two frames out
-		-- of one tween: the goal is the second frame, and the way back is the first.
 		local function play(part, info, goals)
 			local tween = env.tween:Create(part, info, goals)
 			tween:Play()
@@ -506,58 +593,56 @@ return function(env)
 			settle()
 			if responsive.reduceMotion then return end
 
-			local key = handle.busy and "busy" or "idle"
-			local beat = MARCH[key]
-			local step = TweenInfo.new(beat, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
-			-- The body's own beat is half the march, so it lands on both feet rather than
-			-- floating over the pair of them.
-			local hop = TweenInfo.new(beat / 2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, -1, true)
+			local busy = handle.busy == true
+			local floatPeriod = busy and 0.55 or 1.8
+			local floatDistance = busy and -4 or -2.5
 
-			-- The hop, in offset rather than scale so it is the same movement at every
-			-- icon size, and the rock, which is what stops the hop reading as a lift.
-			frame.Rotation = -ROCK[key]
-			play(frame, hop, { Position = UDim2.new(0.5, 0, 0.5, -HOP[key]) })
-			play(frame, step, { Rotation = ROCK[key] })
+			-- Smooth anti-gravity hover float & gentle rocking
+			local floatInfo = TweenInfo.new(floatPeriod, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+			play(frame, floatInfo, { Position = UDim2.new(0.5, 0, 0.5, floatDistance) })
 
-			-- The feet alternate: they start level and go to different heights, so one
-			-- reversing tween gives left-down-right-up and back again.
-			play(leftFoot, step, { Position = UDim2.fromScale(0.2, 0.88) })
-			play(rightFoot, step, { Position = UDim2.fromScale(0.8, 0.71) })
+			local rockAngle = busy and 6 or 3
+			frame.Rotation = -rockAngle
+			local rockInfo = TweenInfo.new(floatPeriod, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+			play(frame, rockInfo, { Rotation = rockAngle })
 
-			-- Arms in and out on the same beat. The widest thing on the sprite changing
-			-- width by a quarter is the part that carries at this size.
-			play(arms, step, { Size = UDim2.fromScale(0.62, 0.22) })
+			-- Antiphase dynamic shadow scaling
+			local shadowInfo = TweenInfo.new(floatPeriod, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+			play(shadow, shadowInfo, {
+				Size = UDim2.fromScale(busy and 0.50 or 0.54, 0.08),
+				BackgroundTransparency = busy and 0.70 or 0.65,
+			})
 
-			-- The antennae swing against the rock, on a beat of their own so the whole
-			-- thing does not read as one rigid object being waggled.
-			local sway = TweenInfo.new(beat * 1.35, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
-			leftAntenna.Rotation = TILT[key] * 0.5
-			rightAntenna.Rotation = -TILT[key] * 0.5
-			play(leftAntenna, sway, { Rotation = -TILT[key] })
-			play(rightAntenna, sway, { Rotation = TILT[key] })
+			-- Gentle antenna tilt & sway
+			local swayInfo = TweenInfo.new(floatPeriod * 1.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+			local swayAngle = busy and 8 or 4
+			antennaStem.Rotation = -swayAngle * 0.5
+			play(antennaStem, swayInfo, { Rotation = swayAngle })
 
-			-- A slow glance, which is the one thing that makes it read as looking at you
-			-- rather than vibrating.
-			local glance = TweenInfo.new(beat * 3.1, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, -1, true)
-			play(leftEye, glance, { Position = UDim2.fromScale(0.38, 0.38) })
-			play(rightEye, glance, { Position = UDim2.fromScale(0.7, 0.38) })
+			if busy then
+				-- Playful glance when thinking
+				local glanceInfo = TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, -1, true)
+				play(leftEye, glanceInfo, { Position = UDim2.fromScale(0.42, 0.44) })
+				play(rightEye, glanceInfo, { Position = UDim2.fromScale(0.66, 0.44) })
+			end
 
-			-- Blinking is a timer rather than a tween: an eye is two frames of the body
-			-- colour showing through, and that is a step, not a fade. Twice, quickly,
-			-- because one four-pixel square going dark for a moment is easy to miss.
-			stopBlink = clock.interval(BLINK[key], function()
+			-- Natural eye blink cycle
+			stopBlink = clock.interval(busy and 1.8 or 3.6, function()
 				if not frame.Parent then return end
-				local function shut(closed)
-					leftEye.BackgroundTransparency = closed and 1 or 0
-					rightEye.BackgroundTransparency = closed and 1 or 0
+				local function setBlink(shut)
+					leftEye.Size = UDim2.fromScale(0.12, shut and 0.02 or 0.16)
+					rightEye.Size = UDim2.fromScale(0.12, shut and 0.02 or 0.16)
 				end
-				shut(true)
-				clock.delay(0.09, function()
-					shut(false)
-					clock.delay(0.09, function()
-						shut(true)
-						clock.delay(0.09, function() shut(false) end)
-					end)
+				setBlink(true)
+				clock.delay(0.10, function()
+					setBlink(false)
+					-- Occasional cute double-blink when idle
+					if not busy and math.random() > 0.6 then
+						clock.delay(0.12, function()
+							setBlink(true)
+							clock.delay(0.08, function() setBlink(false) end)
+						end)
+					end
 				end)
 			end)
 		end

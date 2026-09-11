@@ -1226,6 +1226,71 @@ return function(env)
 	local function paneSkills(container)
 		local build = builder(container)
 
+		-- Skills (playbooks) ------------------------------------------------
+		--
+		-- .md files under skills/, each a frontmatter description and a body of
+		-- instructions. The list is files on disk rather than config state, so
+		-- the honest subtitle is where they come from: dropped in by hand,
+		-- written by the agent, or installed from GitHub. The toggle is the one
+		-- bit of state kept, and it is stored per filename.
+		local skillsCard = build.section("Playbooks",
+			"Markdown skills under skills/. Nothing is injected into the system prompt: the "
+			.. "agent sees each name and description, and reads the body on demand when a "
+			.. "task matches. Drop a .md file in by hand, or ask the agent to install one "
+			.. "from GitHub.")
+		local skillsEngine = env.require("runtime/skills")
+
+		local skillsList = P.column(skillsCard, {
+			name = "SkillsList",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.sm,
+		})
+		local function refreshSkills()
+			skillsList:ClearAllChildren()
+			local list = skillsEngine.list()
+			if #list == 0 then
+				R.paragraph(skillsList, "No skills installed yet.",
+					{ layoutOrder = 1 })
+				return
+			end
+			for index, skill in ipairs(list) do
+				local row = P.row(skillsList, {
+					name = "Skill_" .. skill.file,
+					size = UDim2.new(1, 0, 0, 0),
+					auto = "Y",
+					gap = theme.space.sm,
+					layoutOrder = index,
+				})
+				local text = P.column(row, {
+					size = UDim2.new(0, 0, 0, 0), auto = "Y", flex = "Fill", gap = 0, layoutOrder = 1,
+				})
+				P.text(text, { text = skill.name, role = "small" })
+				local detail = skill.description ~= "" and util.ellipsis(skill.description, 140)
+					or (skill.unreadable and "could not be read") or "no description"
+				P.text(text, {
+					text = detail,
+					role = "caption",
+					color = theme.color.textTertiary,
+					wrap = true,
+					auto = "Y",
+				})
+				local switch = C.switch(row, {
+					value = skill.enabled,
+					onChange = function(value)
+						skillsEngine.setEnabled(skill.file, value)
+					end,
+				})
+				switch.instance.LayoutOrder = 2
+			end
+		end
+		refreshSkills()
+		local unsubscribeSkills = skillsEngine.changed:connect(function()
+			if not skillsList.Parent then return end
+			refreshSkills()
+		end)
+		skillsList.Destroying:Connect(function() pcall(unsubscribeSkills) end)
+
 		local memory = build.section("Memory",
 			"Facts the agent has chosen to keep between sessions. It writes these itself, with "
 			.. "the memory tool; this is where they can be read and removed.")
@@ -1353,6 +1418,78 @@ return function(env)
 		} })
 	end
 
+	-- Infinite Yield ------------------------------------------------------------
+
+	-- The mode picker is a segmented control rather than a toggle because there
+	-- are three honest states, not two: off, hidden (IY's engine, no IY pixels)
+	-- and visible (IY exactly as it draws itself). A toggle would have to fold
+	-- "off" and "hidden" into one position, and they are different decisions --
+	-- one withholds the commands from the agent, the other only the interface.
+	--
+	-- Changing the mode does not load anything here. Loading is a megabyte
+	-- fetch, a compile and a GUI; a settings row is not where that should spend
+	-- itself. The next iy_cmd call picks the new mode up, and the status lines
+	-- below say which state it will find.
+	local function paneInfiniteYield(container)
+		local build = builder(container)
+		local card = build.section("Infinite Yield",
+			"Run Infinite Yield inside this client and give the agent every one of its "
+			.. "commands through the iy tools.")
+
+		local iy = env.require("runtime/iy")
+		local facts = P.column(card, {
+			name = "IyStatus",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.xxs,
+		})
+		local function refresh()
+			for _, child in ipairs(facts:GetChildren()) do
+				if child:IsA("GuiObject") then child:Destroy() end
+			end
+			local status = iy.status()
+			for index, row in ipairs(status) do
+				P.text(facts, {
+					text = row[1] .. ": " .. tostring(row[2]),
+					role = "caption",
+					color = theme.color.textTertiary,
+					wrap = true,
+					auto = "Y",
+					layoutOrder = index,
+				}).Size = UDim2.new(1, 0, 0, 0)
+			end
+		end
+		refresh()
+
+		C.segmented(card, {
+			options = {
+				{ value = "off", label = "Off" },
+				{ value = "hidden", label = "Hidden" },
+				{ value = "visible", label = "With GUI" },
+			},
+			value = config.get("iy.mode", "hidden"),
+			onChange = function(value)
+				iy.setMode(value)
+				refresh()
+			end,
+		})
+
+		R.paragraph(card,
+			"Hidden loads Infinite Yield with its interface parked, so the agent has "
+			.. "every command and you keep the screen. With GUI loads it untouched. "
+			.. "Either way the agent reaches everything through the same dispatcher, and "
+			.. "iy_cmd calls still pass the permission prompt. If Infinite Yield is "
+			.. "already running when a command is sent, that copy is used as-is.",
+			{ layoutOrder = 4 })
+
+		if not caps.exec then
+			R.paragraph(card,
+				"This host cannot compile code, so an internal load is unavailable here. "
+				.. "An Infinite Yield you start yourself still works.",
+				{ color = theme.color.warn })
+		end
+	end
+
 	-- Plugins -----------------------------------------------------------------
 
 	local function panePlugins(container)
@@ -1422,6 +1559,7 @@ return function(env)
 		{ id = "developer", section = "Desktop app", label = "Developer", icon = "terminal", build = paneDeveloper },
 		{ id = "skills", section = "Customize", label = "Skills", icon = "book", build = paneSkills },
 		{ id = "connectors", section = "Customize", label = "Connectors", icon = "branch", build = paneConnectors },
+		{ id = "infinite_yield", section = "Customize", label = "Infinite Yield", icon = "terminal", build = paneInfiniteYield },
 		{ id = "plugins", section = "Customize", label = "Plugins", icon = "worktree", build = panePlugins },
 	}
 

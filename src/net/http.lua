@@ -315,10 +315,20 @@ return function(env)
 	-- transcript so a slow turn explains itself rather than just being slow. `info`
 	-- carries what the response cannot: how long the attempt took, which is the only
 	-- way to tell a refusal apart from a deadline when neither carries a body.
+	--
+	-- `info.skipStatus` is a caller's veto over the statuses it would rather handle
+	-- itself: a provider with a key pool passes 429 so the transport does not sleep
+	-- its way through a backoff on a key that rotation can replace at once.
 	function M.shouldRetry(res, err, info)
 		local elapsed = tonumber(info and info.elapsed) or 0
 		local status = res and res.status or 0
 		local body = tostring(res and res.body or "")
+
+		-- The caller's veto is consulted first and answers completely: a status it
+		-- named is not retried here, whatever the body says.
+		if info and type(info.skipStatus) == "table" and info.skipStatus[status] then
+			return false, "status " .. tostring(status) .. " (left to the caller)"
+		end
 
 		-- An attempt that ran this long and returned nothing hit a deadline, whatever
 		-- status was attached to it -- most often none at all, because the transport gave
@@ -380,7 +390,10 @@ return function(env)
 			lastRes, lastErr = res, err
 			-- Asked before the success check, because a 200 can carry the failure in
 			-- its body and returning that as a reply is worse than retrying it.
-			local retry, why = M.shouldRetry(res, err, { elapsed = res and res.ms or failedMs })
+			local retry, why = M.shouldRetry(res, err, {
+				elapsed = res and res.ms or failedMs,
+				skipStatus = spec.skipStatus,
+			})
 			if not retry then
 				-- A deadline is the one outcome the caller cannot read off the response,
 				-- because there is no response to read. The transport's own words for it

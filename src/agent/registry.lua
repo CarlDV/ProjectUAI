@@ -91,6 +91,8 @@ return function(env)
 		input = "Virtual input",
 		templates = "Templates",
 		screen = "Screen & aiming",
+		iy = "Infinite Yield",
+		skills = "Skills",
 	}
 
 	M.GROUP_LABELS = GROUP_LABELS

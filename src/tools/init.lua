@@ -27,6 +27,8 @@ local GROUPS = {
 	"input",
 	"templates",
 	"screen",
+	"iy",
+	"skills",
 }
 
 return function(env)

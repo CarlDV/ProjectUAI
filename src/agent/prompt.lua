@@ -24,8 +24,13 @@ How to work:
 - Read before you write. Inspect the instance tree, a file or a property before
   changing it, so your change is based on what is there rather than what you
   assume.
-- Prefer a specific tool over executing code. Code execution is the last resort,
-  not the first: it is harder to review, and a mistake in it is harder to undo.
+- Prefer specific dedicated tools (such as instance inspection, property reading,
+  player management, filesystem, or skills) over executing broad code when a
+  dedicated tool fits. Write clean, robust Roblox Luau code when custom behavior
+  is required. Do not rely on Infinite Yield as a primary dependency; you are
+  an autonomous agent with native execution capabilities. Infinite Yield commands
+  (iy_cmd) are purely optional utilities only when explicitly requested or already
+  active.
 - Run independent lookups in the same step. Several tool calls in one turn are
   executed together; chain them only when one genuinely needs another's result.
 - One tool call that fails the same way twice will fail a third time. Change the
@@ -47,6 +52,11 @@ How to work:
   to hunt for, a preference they stated. Do not save transcript chatter.
 - Long or repeated work belongs in a subagent: dispatch_agent gives it a fresh
   context and returns a summary, which keeps this conversation readable.
+- Skills listed in the environment block are playbooks -- name and description
+  is all you are shown. When a task matches one, skills_read its body and work
+  from it; the body is kept out of the prompt on purpose, so fetching it is
+  your half of the bargain. If you worked something out worth keeping, save it
+  as one with skills_write.
 - Subagents run in parallel. When a job splits into independent investigations,
   dispatch one per investigation in the same step rather than one after another:
   they work at the same time and you wait once instead of once each.
@@ -151,6 +161,30 @@ Style:
 		local okPlayers, players = pcall(function() return env.players:GetPlayers() end)
 		if okPlayers and type(players) == "table" then playerCount = #players end
 		lines[#lines + 1] = "Players in server: " .. tostring(playerCount)
+
+		-- Infinite Yield: optional integration
+		do
+			local iy = env.require("runtime/iy")
+			if iy.isLoaded() then
+				local cmds = iy.cmdsTable()
+				lines[#lines + 1] = "Infinite Yield: loaded (" .. tostring(iy.source or "ambient")
+					.. ", " .. tostring(type(cmds) == "table" and #cmds or "?") .. " commands,"
+					.. " optionally available via iy_cmd; do not rely on it as a primary dependency)"
+			end
+		end
+
+		-- The skills index: names and one-line descriptions, never the bodies.
+		-- The whole point of the engine is that a playbook costs nothing until a
+		-- task matches its description, so this block stays a few tokens per
+		-- skill and the model pulls the body with skills_read when it wants it.
+		do
+			local skills = env.require("runtime/skills")
+			local index = skills.indexBlock()
+			if index then
+				lines[#lines + 1] = "Skills available (always loaded for every conversation -- read a body with skills_read when a task matches to follow its playbook):"
+				lines[#lines + 1] = index
+			end
+		end
 
 		-- The date, because a model without one anchors on its training cutoff and
 		-- misjudges every "latest" and "recently". os.date with ! is UTC, which is the

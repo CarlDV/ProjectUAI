@@ -262,7 +262,8 @@ return function(env)
 				message.reasoning(into, event.text, order)
 				follow()
 		elseif event.kind == "assistant:text" then
-			if util.trim(event.text) ~= "" then
+			local trimmed = util.trim(event.text or "")
+			if trimmed ~= "" and trimmed ~= "..." and trimmed ~= "…" then
 				stopReveal(true)
 				clearWorking()
 				closeRun()

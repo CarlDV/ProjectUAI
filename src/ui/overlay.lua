@@ -68,36 +68,102 @@ return function(env)
 			if oldest then oldest.close() end
 		end
 
-		local card = P.row(M.toastColumn, {
-			name = "Toast",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			bg = theme.color.surfaceOverlay,
-			radius = theme.radius.md,
-			gap = theme.space.sm,
-			padding = { x = theme.space.md, y = theme.space.sm },
-			alignY = "Top",
-			zIndex = theme.z.toast,
-		})
-		P.stroke(card, theme.color.border)
+		local toneKey = tone or "info"
+		local toneColor = theme.toneColor(toneKey)
+
+		-- The card is a self-contained clickable notification surface.
+		-- Width is 100% of M.toastColumn (theme.size.menuWide = 320px).
+		-- Children use concrete parent-relative sizing to prevent Roblox's
+		-- UIFlexItem AutomaticSize.Y 0-width text wrap bug.
+		local card = Instance.new("TextButton", M.toastColumn)
+		card.Name = "Toast"
+		card.Text = ""
+		card.AutoButtonColor = false
+		card.BorderSizePixel = 0
+		card.BackgroundColor3 = theme.color.surfaceRaised
+		card.Size = UDim2.new(1, 0, 0, 0)
+		card.AutomaticSize = Enum.AutomaticSize.Y
+		card.ZIndex = theme.z.toast
 		card.BackgroundTransparency = 1
+		card.Position = UDim2.new(0, 0, 0, -10)
+		card.ClipsDescendants = true
+		Instance.new("UICorner", card).CornerRadius = UDim.new(0, theme.radius.md)
 
-		P.statusDot(card, {
-			color = theme.toneColor(tone or "info"),
-			layoutOrder = 1,
-			diameter = theme.size.dot,
-		})
+		local stroke = Instance.new("UIStroke", card)
+		stroke.Color = theme.color.borderSubtle
+		stroke.Thickness = theme.stroke.hair
+		stroke.Transparency = 1
 
-		local label = P.text(card, {
-			text = tostring(text),
-			role = "small",
-			color = theme.color.text,
-			wrap = true,
-			auto = "Y",
-			size = UDim2.new(0, 0, 0, 0),
-			flex = "Fill",
-			layoutOrder = 2,
-		})
+		local pad = Instance.new("UIPadding", card)
+		pad.PaddingLeft = UDim.new(0, theme.space.md)
+		pad.PaddingRight = UDim.new(0, theme.space.md)
+		pad.PaddingTop = UDim.new(0, theme.space.sm + 2)
+		pad.PaddingBottom = UDim.new(0, theme.space.sm + 2)
+
+		-- Minimum height constraint ensures comfortable touch target
+		local sizeConstraint = Instance.new("UISizeConstraint", card)
+		sizeConstraint.MinSize = Vector2.new(0, 42)
+
+		-- Distinct 22x22 tone badge on the left
+		local indicator = Instance.new("Frame", card)
+		indicator.Name = "Indicator"
+		indicator.Size = UDim2.fromOffset(22, 22)
+		indicator.Position = UDim2.new(0, 0, 0, 0)
+		indicator.BackgroundColor3 = theme.color[toneKey .. "Surface"] or theme.color.surfaceOverlay
+		indicator.BackgroundTransparency = 1
+		indicator.BorderSizePixel = 0
+		indicator.ZIndex = theme.z.toast + 1
+		Instance.new("UICorner", indicator).CornerRadius = UDim.new(1, 0)
+
+		if toneKey == "good" then
+			icons.check(indicator, 12, theme.color.success)
+		elseif toneKey == "danger" or toneKey == "bad" then
+			icons.close(indicator, 10, theme.color.danger)
+		elseif toneKey == "warn" then
+			icons.spark(indicator, 12, theme.color.warn)
+		else
+			P.statusDot(indicator, {
+				color = toneColor,
+				diameter = theme.size.dot,
+				anchor = Vector2.new(0.5, 0.5),
+				position = UDim2.fromScale(0.5, 0.5),
+			})
+		end
+
+		-- Close slot on the right
+		local closeSlot = Instance.new("Frame", card)
+		closeSlot.Name = "CloseSlot"
+		closeSlot.Size = UDim2.fromOffset(14, 14)
+		closeSlot.AnchorPoint = Vector2.new(1, 0)
+		closeSlot.Position = UDim2.new(1, 0, 0, 3)
+		closeSlot.BackgroundTransparency = 1
+		closeSlot.BorderSizePixel = 0
+		closeSlot.ZIndex = theme.z.toast + 1
+		icons.close(closeSlot, 10, theme.color.textTertiary)
+
+		-- Label is explicitly positioned between indicator and close button.
+		-- Size width is strictly parent-relative (1, -54), giving Roblox's text engine
+		-- a guaranteed concrete width (~242px) so text wrapped lines wrap cleanly and
+		-- NEVER measure at 0-width (which produced the 1-character vertical text bug).
+		local label = Instance.new("TextLabel", card)
+		label.Name = "Message"
+		label.Text = tostring(text)
+		label.TextColor3 = theme.color.text
+		label.TextTransparency = 1
+		label.BackgroundTransparency = 1
+		label.BorderSizePixel = 0
+		label.TextWrapped = true
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextYAlignment = Enum.TextYAlignment.Top
+		label.Position = UDim2.new(0, 32, 0, 1)
+		label.Size = UDim2.new(1, -54, 0, 0)
+		label.AutomaticSize = Enum.AutomaticSize.Y
+		label.ZIndex = theme.z.toast + 1
+
+		local role = theme.text.small
+		label.TextSize = role.size
+		label.Font = role.font
+		if role.face then pcall(function() label.FontFace = role.face end) end
 
 		local entry = { card = card, closed = false }
 
@@ -107,14 +173,35 @@ return function(env)
 			for index, item in ipairs(M.toasts) do
 				if item == entry then table.remove(M.toasts, index) end
 			end
-			local out = env.tween:Create(card, theme.tween("exit"), { BackgroundTransparency = 1 })
+			local out = env.tween:Create(card, theme.tween("exit"), {
+				BackgroundTransparency = 1,
+				Position = UDim2.new(0, 0, 0, -10),
+			})
 			out.Completed:Connect(function() pcall(function() card:Destroy() end) end)
 			out:Play()
+			env.tween:Create(stroke, theme.tween("exit"), { Transparency = 1 }):Play()
+			env.tween:Create(indicator, theme.tween("exit"), { BackgroundTransparency = 1 }):Play()
 			env.tween:Create(label, theme.tween("exit"), { TextTransparency = 1 }):Play()
 		end
 
+		card.Activated:Connect(entry.close)
+
+		-- Subtle hover feedback
+		card.MouseEnter:Connect(function()
+			env.tween:Create(stroke, theme.tween("quick"), { Color = theme.color.border }):Play()
+		end)
+		card.MouseLeave:Connect(function()
+			env.tween:Create(stroke, theme.tween("quick"), { Color = theme.color.borderSubtle }):Play()
+		end)
+
 		M.toasts[#M.toasts + 1] = entry
-		env.tween:Create(card, theme.tween("enter"), { BackgroundTransparency = 0 }):Play()
+		env.tween:Create(card, theme.tween("enter"), {
+			BackgroundTransparency = 0,
+			Position = UDim2.new(0, 0, 0, 0),
+		}):Play()
+		env.tween:Create(stroke, theme.tween("enter"), { Transparency = 0 }):Play()
+		env.tween:Create(indicator, theme.tween("enter"), { BackgroundTransparency = 0 }):Play()
+		env.tween:Create(label, theme.tween("enter"), { TextTransparency = 0 }):Play()
 		clock.delay(seconds or TOAST_SECONDS, entry.close)
 		return entry
 	end
@@ -413,6 +500,10 @@ return function(env)
 
 	-- A one-field prompt. Used wherever a value has to be typed without opening a
 	-- whole editor -- adding a model id from the header, for instance.
+	--
+	-- `multiline` swaps the field for a taller box that keeps newlines, for the
+	-- one case where the value is legitimately several lines: a provider's key
+	-- pool, pasted one key per line.
 	function M.prompt(props)
 		props = props or {}
 		local modal = M.modal({
@@ -426,8 +517,10 @@ return function(env)
 			name = "PromptField",
 			placeholder = props.placeholder or "",
 			text = props.value or "",
+			multiline = props.multiline == true,
+			height = props.multiline and (props.height or 120) or nil,
 			layoutOrder = 1,
-			onSubmit = function(text)
+			onSubmit = props.multiline and nil or function(text)
 				modal.close()
 				if props.onConfirm then pcall(props.onConfirm, util.trim(text)) end
 			end,
@@ -447,7 +540,9 @@ return function(env)
 			size = "sm",
 			layoutOrder = 2,
 			onClick = function()
-				local value = util.trim(field.get())
+				-- A multiline paste is trimmed at the edges only: the newlines
+				-- inside are the pool separator, not whitespace to tidy away.
+				local value = props.multiline and field.get() or util.trim(field.get())
 				modal.close()
 				if props.onConfirm then pcall(props.onConfirm, value) end
 			end,
@@ -787,7 +882,8 @@ return function(env)
 						size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
 						layoutOrder = 1,
 					})
-					icons.draw(option.icon, iconHolder, theme.size.icon, theme.color.textSecondary)
+					local iconTint = option.tone and theme.toneColor(option.tone) or theme.color.textSecondary
+					icons.draw(option.icon, iconHolder, theme.size.icon, iconTint)
 				end
 
 				local labelColumn = P.column(row, {
@@ -813,12 +909,20 @@ return function(env)
 				end
 
 				if option.shortcut then
-					local scLabel = P.text(row, {
-						text = tostring(option.shortcut),
-						role = "caption",
-						color = theme.color.textTertiary,
+					local keycap = P.frame(row, {
+						name = "Keycap",
+						bg = theme.color.surfaceRaised,
+						radius = theme.radius.xs,
+						padding = { x = theme.space.xs, y = 1 },
 						auto = "X",
 						layoutOrder = 3,
+					})
+					P.stroke(keycap, theme.color.borderSubtle)
+					local scLabel = P.text(keycap, {
+						text = tostring(option.shortcut),
+						role = "caption",
+						color = theme.color.textSecondary,
+						auto = "X",
 					})
 					scLabel.Size = UDim2.fromOffset(0, theme.text.caption.height)
 				elseif option.chevron then

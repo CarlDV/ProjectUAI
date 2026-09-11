@@ -56,8 +56,14 @@ return function(env)
 	-- "redacted in the log", the privacy pane promised only the last four characters
 	-- were kept, and the export path reduced it to exactly that.
 	local function maskedKey(record)
-		local key = util.trim(record.apiKey or "")
-		if key == "" then return "not set", "warn" end
+		local raw = tostring(record.apiKey or "")
+		if util.trim(raw) == "" then return "not set", "warn" end
+		local pool = registry.keysOf(record)
+		if #pool > 1 then
+			local last = pool[#pool]
+			return string.rep("\226\128\162", 4) .. " " .. last:sub(-4) .. "  \194\183  pool of " .. #pool .. " keys", nil
+		end
+		local key = pool[1] or ""
 		if #key <= 4 then return "set", nil end
 		return string.rep("\226\128\162", 4) .. " " .. key:sub(-4), nil
 	end
@@ -419,12 +425,17 @@ return function(env)
 				onClick = function(handle)
 					overlay.prompt({
 						title = "API key",
-						description = "Paste the key for " .. tostring(editing.label) ..
-							". It replaces whatever is stored now.",
+						description = "Paste the key for " .. tostring(editing.label)
+							.. ". It replaces whatever is stored now. Paste several keys, "
+							.. "one per line, to rotate automatically on rate limits.",
 						placeholder = (catalog.get(editing.preset) or {}).keyHint or "sk-...",
 						confirmText = "Save key",
+						multiline = true,
 						onConfirm = function(text)
-							editing.apiKey = util.trim(text)
+							-- Kept verbatim: the pool parser splits on newlines and
+							-- commas, so what was pasted is what is stored, and a
+							-- single key with a stray trailing newline is still one.
+							editing.apiKey = tostring(text or "")
 							local value, warn = maskedKey(editing)
 							keyLabel.Text = value
 							keyLabel.TextColor3 = warn and theme.color.warn or theme.color.textSecondary
