@@ -186,6 +186,29 @@ return function(env)
 		return (record.claudeUa ~= false) and "claude" or "none"
 	end
 
+	local BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	local function randomBase62(len)
+		local t = {}
+		for i = 1, len do
+			local r = math.random(1, 62)
+			t[i] = BASE62:sub(r, r)
+		end
+		return table.concat(t)
+	end
+
+	local function randomHex(len)
+		local t = {}
+		for i = 1, len do
+			local r = math.random(0, 15)
+			t[i] = string.format("%x", r)
+		end
+		return table.concat(t)
+	end
+
+	local function opencodeId(prefix)
+		return (prefix or "ses_") .. randomHex(12) .. randomBase62(14)
+	end
+
 	function M.opencodeHeaders(record)
 		if not M.isOpencode(record) then return {} end
 		-- Match the current upstream CLI defaults; saved overrides remain supported.
@@ -196,15 +219,14 @@ return function(env)
 			if configuredVersion ~= "" then version = configuredVersion end
 			if configuredClient ~= "" then client = configuredClient end
 		end
-		if util.trim(record.opencodeSession or "") == "" then
-			record.opencodeSession = string.format("ses_%08x%04x",
-				math.floor((tonumber(tostring(os.time())) or 0) % 4294967296),
-				math.floor(clock.ms() % 65536))
+		if util.trim(record.opencodeSession or "") == "" or #record.opencodeSession < 25 then
+			record.opencodeSession = opencodeId("ses_")
 			M.save(record, { quiet = true })
 		end
 		return {
 			["x-opencode-session"] = record.opencodeSession,
-			["x-opencode-request"] = string.format("req_%08x", math.floor(clock.ms() % 4294967296)),
+			["x-opencode-request"] = opencodeId("req_"),
+			["x-opencode-project"] = "global",
 			["x-opencode-client"] = client,
 			["User-Agent"] = "opencode/" .. version,
 		}

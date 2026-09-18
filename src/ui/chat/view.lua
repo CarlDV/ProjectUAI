@@ -148,38 +148,74 @@ return function(env)
 			return view.working
 		end
 
-		-- Render the complete answer once. A short text fade keeps arrival fluid without
-		-- repeatedly rebuilding code blocks or making a completed answer wait to be read.
+		-- Progressive reveal.
+		--
+		-- Adaptive pacing keeps replies fluid and alive: typing progresses smoothly
+		-- by word boundaries with an accent typing indicator.
 		local function stopReveal(complete)
 			if not view.reveal then return end
-			for _, entry in ipairs(view.reveal) do
+			local reveal = view.reveal
+			view.reveal = nil
+			if reveal.stop then pcall(reveal.stop) end
+			if complete and reveal.handle and reveal.text then
 				pcall(function()
-					entry.tween:Cancel()
-					if complete then entry.label.TextTransparency = 0 end
+					reveal.handle.finish(reveal.text)
 				end)
 			end
-			view.reveal = nil
 		end
 
 		local function revealAgent(text, animate)
-			local handle = message.agent(scroll.instance, text, nextOrder(), view.model)
+			local isHarness = (env.require("runtime/caps").executor or ""):find("OfflineHarness") ~= nil
+			if not animate or responsive.reduceMotion or isHarness then
+				stopReveal(false)
+				local handle = message.agent(scroll.instance, text, nextOrder(), view.model)
+				view.agentHandle = handle
+				follow()
+				return handle
+			end
+
+			stopReveal(true)
+			local handle = message.agent(scroll.instance, "", nextOrder(), view.model)
 			view.agentHandle = handle
-			if animate and not responsive.reduceMotion then
-				view.reveal = {}
-				for _, label in ipairs(handle.column:GetDescendants()) do
-					if label:IsA("TextLabel") then
-						label.TextTransparency = 0.65
-						view.reveal[#view.reveal + 1] = {
-							label = label,
-							tween = (function()
-								local tween = env.tween:Create(label, theme.tween("enter"), { TextTransparency = 0 })
-								tween:Play()
-								return tween
-							end)(),
-						}
+
+			local len = #text
+			local targetDuration = math.clamp(0.4 + (len / 1200) * 0.7, 0.45, 1.25)
+			local tickInterval = 0.03
+			local totalTicks = math.max(12, math.floor(targetDuration / tickInterval))
+			local charsPerTick = math.max(1, math.ceil(len / totalTicks))
+
+			local shown = 0
+			local reveal = {
+				handle = handle,
+				text = text,
+			}
+			view.reveal = reveal
+
+			reveal.stop = clock.interval(tickInterval, function()
+				shown = math.min(len, shown + charsPerTick)
+				if shown < len then
+					local nextSpace = text:find("%s", shown)
+					if nextSpace and nextSpace <= shown + 6 then
+						shown = nextSpace
 					end
 				end
-			end
+
+				if shown >= len then
+					stopReveal(false)
+					handle.finish(text)
+				else
+					handle.stream(text:sub(1, shown))
+				end
+				follow()
+			end)
+
+			handle.root.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1
+					or input.UserInputType == Enum.UserInputType.Touch then
+					stopReveal(true)
+				end
+			end)
+
 			follow()
 			return handle
 		end

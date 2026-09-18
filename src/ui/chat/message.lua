@@ -443,13 +443,18 @@ return function(env)
 			elseif block.kind == "rule" then
 				P.divider(column, { layoutOrder = index })
 			elseif block.kind == "quote" then
-				-- An aside gets a rule down its left edge and nothing else. A tinted card
-				-- would make a quoted line louder than the prose quoting it.
 				local body = ruled(column, {
 					name = "Quote",
 					layoutOrder = index,
-					color = theme.color.border,
+					color = Color3.fromRGB(220, 126, 91),
 					width = theme.stroke.focus,
+					bg = theme.color.surface,
+					radius = theme.radius.sm,
+					ruleRadius = theme.radius.xs,
+					padY = theme.space.xs,
+					padRight = theme.space.sm,
+					inset = theme.space.sm,
+					clip = true,
 				})
 				local quoted = P.text(body, {
 					text = markdown.inline(block.text),
@@ -666,8 +671,8 @@ return function(env)
 		byline(holder, {
 			name = "Assistant",
 			detail = model,
-			icon = "spark",
-			iconColor = theme.color.accent,
+			icon = "brand",
+			iconColor = Color3.fromRGB(220, 126, 91),
 			color = theme.color.textSecondary,
 			layoutOrder = 1,
 		})
@@ -680,10 +685,47 @@ return function(env)
 			gap = theme.space.md,
 			layoutOrder = 2,
 		})
+
+		local currentText = text or ""
+		local streamLabel = nil
+
 		local handle = { root = holder, column = column }
+
 		function handle.setText(value)
-			M.renderBlocks(column, value)
+			currentText = value or ""
+			streamLabel = nil
+			M.renderBlocks(column, currentText)
 		end
+
+		function handle.stream(partial)
+			local cursor = ' <font color="#dc7e5b">●</font>'
+			if partial:find("```") or partial:find("\n\n") then
+				M.renderBlocks(column, partial .. cursor)
+				streamLabel = nil
+			else
+				if not streamLabel or streamLabel.Parent ~= column then
+					for _, child in ipairs(column:GetChildren()) do
+						if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then child:Destroy() end
+					end
+					streamLabel = P.text(column, {
+						text = markdown.inline(partial) .. cursor,
+						role = "body",
+						rich = true,
+						wrap = true,
+						auto = "Y",
+						layoutOrder = 1,
+					})
+					streamLabel.Size = UDim2.new(1, 0, 0, 0)
+				else
+					streamLabel.Text = markdown.inline(partial) .. cursor
+				end
+			end
+		end
+
+		function handle.finish(finalText)
+			handle.setText(finalText or currentText)
+		end
+
 		handle.setText(text or "")
 		return handle
 	end

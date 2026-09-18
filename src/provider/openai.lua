@@ -98,6 +98,93 @@ return function(env)
 		return out
 	end
 
+	-- Standard OpenCode tool definitions required by OpenCode Zen free tier
+	local OPENCODE_TOOLS = {
+		{
+			type = "function",
+			["function"] = {
+				name = "bash",
+				description = "Execute bash command",
+				parameters = {
+					type = "object",
+					properties = {
+						command = { type = "string", description = "The command to run" },
+					},
+					required = { "command" },
+				},
+			},
+		},
+		{
+			type = "function",
+			["function"] = {
+				name = "read",
+				description = "Read file",
+				parameters = {
+					type = "object",
+					properties = {
+						path = { type = "string", description = "The path to the file" },
+					},
+					required = { "path" },
+				},
+			},
+		},
+		{
+			type = "function",
+			["function"] = {
+				name = "edit",
+				description = "Edit file",
+				parameters = {
+					type = "object",
+					properties = {
+						path = { type = "string", description = "The path to the file" },
+					},
+					required = { "path" },
+				},
+			},
+		},
+		{
+			type = "function",
+			["function"] = {
+				name = "glob",
+				description = "Find files",
+				parameters = {
+					type = "object",
+					properties = {
+						pattern = { type = "string", description = "Glob pattern" },
+					},
+					required = { "pattern" },
+				},
+			},
+		},
+		{
+			type = "function",
+			["function"] = {
+				name = "grep",
+				description = "Search pattern",
+				parameters = {
+					type = "object",
+					properties = {
+						pattern = { type = "string", description = "Regex pattern" },
+					},
+					required = { "pattern" },
+				},
+			},
+		},
+		{
+			type = "function",
+			["function"] = {
+				name = "list",
+				description = "List files",
+				parameters = {
+					type = "object",
+					properties = {
+						path = { type = "string", description = "Directory path" },
+					},
+				},
+			},
+		},
+	}
+
 	function M.buildBody(record, request)
 		local body = {
 			messages = M.wireMessages(request.messages),
@@ -115,6 +202,31 @@ return function(env)
 			body.tool_choice = request.toolChoice or "auto"
 			if request.parallelToolCalls ~= false then
 				body.parallel_tool_calls = true
+			end
+		end
+
+		-- OpenCode free-tier workaround: Console requires stream and standard tool declarations
+		if registry.isOpencode(record) then
+			body.stream = true
+			body.stream_options = { include_usage = true }
+
+			if not body.tools or #body.tools == 0 then
+				body.tools = OPENCODE_TOOLS
+				body.tool_choice = "auto"
+			else
+				local toolNames = {}
+				for _, t in ipairs(body.tools) do
+					local name = t["function"] and t["function"].name or t.name
+					if name then toolNames[name] = true end
+				end
+				local merged = { unpack(body.tools) }
+				for _, stdTool in ipairs(OPENCODE_TOOLS) do
+					if not toolNames[stdTool["function"].name] then
+						merged[#merged + 1] = stdTool
+					end
+				end
+				body.tools = merged
+				body.tool_choice = body.tool_choice or "auto"
 			end
 		end
 
@@ -209,7 +321,14 @@ return function(env)
 		local message
 		if type(decoded) == "table" then
 			if type(decoded.error) == "table" then
-				message = decoded.error.message or decoded.error.type or decoded.error.code
+				local errType = tostring(decoded.error.type or "")
+				local errMsg = tostring(decoded.error.message or "")
+				if errType == "FreeTierError" or errMsg:find("free tier can only be used from within OpenCode", 1, true) then
+					message = (errMsg ~= "" and errMsg or "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode")
+						.. " -- the OpenCode server restricts free-tier models (like big-pickle) to its official app; use paid credits or an OpenCode Go subscription."
+				else
+					message = decoded.error.message or decoded.error.type or decoded.error.code
+				end
 			elseif type(decoded.error) == "string" then
 				message = decoded.error
 			elseif type(decoded.message) == "string" then
@@ -492,7 +611,7 @@ return function(env)
 			local headers = registry.authHeaders(record, currentKey)
 			for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
 			for key, value in pairs(record.headers or {}) do headers[key] = value end
-			headers["Accept"] = wantStream and "text/event-stream" or "application/json"
+			headers["Accept"] = (wantStream or registry.isOpencode(record)) and "text/event-stream" or "application/json"
 			return headers
 		end
 

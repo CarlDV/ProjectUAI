@@ -23,6 +23,39 @@ return function(env)
 
 	local ENTRIES = {
 		{
+			version = "1.1.1",
+			date = "September 2026",
+			title = "OpenCode Zen workaround, compact composer and response polish",
+			highlights = "OpenCode Zen free-tier workaround (big-pickle), 62px compact desktop composer bar, full clipboard config transfer, Claude asterisk brand styling and progressive response reveal.",
+			sections = {
+				{
+					category = "added",
+					items = {
+						"OpenCode Zen free tier workaround: complete compatibility for free-tier models (including big-pickle) with canonical 30-character session and request IDs, global project scoping, enforced SSE streaming, and standard tool declarations.",
+						"Config import and export: full clipboard configuration transfer under Settings -> Import & export, safely preserving and applying provider keys and settings.",
+						"Progressive response reveal: smooth typewriter reveal on AI responses with terracotta accent cursor and adaptive reading cadence.",
+						"Claude brand asterisk: assistant byline icon updated to the Claude orange asterisk in warm terracotta.",
+					},
+				},
+				{
+					category = "improved",
+					items = {
+						"Desktop composer bar: compact 62px height without permanent bottom rows for a clean, spacious transcript layout.",
+						"Transparent icon styling: removed backgrounds behind assistant, thinking, tool, and subagent icons across all conversation message types.",
+						"Blockquote styling: markdown quotes rendered as sleek callout cards with warm terracotta left accent border.",
+						"Build reload safety: new script executions cleanly replace older idle client instances without duplicate mounting or orphaned threads.",
+					},
+				},
+				{
+					category = "fixed",
+					items = {
+						"OpenCode Zen FreeTierError 403: resolved Console edge restrictions for free models by matching official CLI session formatting and stream requirements.",
+						"Headless test harness compatibility: instant DOM reveal in offline harness tests to guarantee synchronous regression assertions.",
+					},
+				},
+			},
+		},
+		{
 			version = "1.1.0",
 			date = "September 2026",
 			title = "Infinite Yield, key pools and skills",
