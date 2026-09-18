@@ -227,6 +227,7 @@ return function(env)
 
 				if ctx and ctx.emit then
 					ctx.emit("ask:user", {
+						id = util.uid("ask"),
 						question = question,
 						options = options,
 						resolve = resolve,

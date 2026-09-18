@@ -270,7 +270,7 @@ Nothing on disk until then, and only three things after: `config.json`,
 A conversation can be marked isolated from the composer, which keeps it out of the
 first two entirely.
 
-## Chatting from a browser
+## Cowork: browser UI and web inference
 
 A Roblox client cannot accept a connection, so it cannot be talked to directly. A
 small local process sits in between and both sides dial out to it: the browser
@@ -280,11 +280,61 @@ holds an SSE stream, the client long-polls for whatever you typed.
 node bridge/server.js
 ```
 
-It prints a link with a one-time token in the fragment -- open that, then paste the
-same token into **Settings -> Web bridge** and turn it on. The browser joins
-whichever conversation is already open in-game rather than starting its own, so a
-turn begun in one place continues in the other, and permission prompts can be
-answered from either side.
+You can also use **Roblox → Cowork → Download bridge files**. It downloads the
+entire GitHub `bridge/` folder at one pinned revision into **`UAI/bridge`** inside
+your executor's workspace, preserving its subfolders. Open a terminal in that
+workspace and run `node UAI/bridge/server.js`. Downloads report progress and
+verify saved files; your executor must support HTTP, file I/O, and folder creation.
+
+It prints a link with a one-time token in the fragment. Open it, then paste the
+same token into **Roblox → Cowork → Token** and enable the bridge. The browser
+uses the Roblox client's warm palette, sidebar, conversation list, compact
+composer, prompt starters, and model picker. It follows the active conversation.
+
+Select **Cowork → Web · real streaming** in the browser (or **Inference runtime →
+Web** in Roblox) while work is idle. Node now owns provider HTTP connections and
+streams OpenAI-compatible or Anthropic SSE responses to the browser as they arrive.
+Roblox submits once, then retrieves the result with short authenticated requests;
+its executor's 30–60 second request limit no longer bounds model generation.
+The provider deadline defaults to 180 seconds and is configurable up to one day.
+Provider/proxy disconnects and truncated streams are reported as failures.
+
+The existing Roblox agent loop remains authoritative in both modes. Tools,
+permission rules, hooks, context compaction, provider fallback/key rotation,
+subagents, memory, skills, accounting, and background chatbots retain their existing
+behavior. Roblox must stay connected and running to execute tools and advance a
+turn; this is not a standalone Node reimplementation of the agent. Web mode also
+routes subagent and chatbot inference through Node, without posting those private
+streams into the main transcript.
+
+Browser controls include provider creation/editing/testing, model discovery,
+search and effort, conversation switching/renaming/deletion/isolation, attachments,
+per-thread drafts, tool schemas and execution, tool-group and permission controls,
+pending approvals and `ask_user` answers, subagent stops, chat-loop status/stops,
+memory/skill tools, settings, logs, usage, and configuration/transcript export.
+Full configuration exports contain API keys; ordinary state updates never include
+provider credentials. The bridge holds request credentials only in memory.
+
+Commands carry IDs and stay queued until acknowledged. The client remembers
+handled IDs, and inference submissions reuse the same ID after a lost response.
+Browser SSE reconnects use event cursors; final replies reconcile with streamed
+previews instead of appearing twice. A lost relay job is terminal and is not
+silently restarted. Refreshing the browser does not stop a turn; stopping the
+bridge/client or a turn cancels its pending provider request. Results are retained
+for five minutes, with ID tombstones preventing expired submissions from rerunning.
+
+The game connection uses continuously renewed long-polls: a waiting poll returns
+as soon as a command arrives. It does not hammer localhost with empty requests.
+Run the bridge on the same computer as the Roblox executor; it binds loopback.
+Node 18 or newer is required. There are no production npm dependencies.
+
+```bash
+node --test bridge/test-runtime.js
+luajit test/web_runtime.lua
+luajit test/bridge_install.lua
+# Optional browser checks, with Playwright installed:
+node bridge/test-browser.js
+```
 
 Loopback only, token-gated, and Origin-checked. Whoever reaches it drives an agent
 that can run code on your machine, so it stays off until you turn it on and the

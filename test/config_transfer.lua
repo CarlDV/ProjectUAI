@@ -79,7 +79,7 @@ full.providers = {
 }
 full.identity.extraHeaders = { ["X-Identity"] = "identity-secret" }
 full.memory.entries = { { key = "preference", value = "concise", at = 123 } }
-full.bridge = { enabled = true, port = 8795, token = "bridge-secret" }
+full.bridge = { enabled = true, port = 8795, token = "bridge-secret", runtime = "web", requestTimeout = 300 }
 full.logs = { level = "debug", mirror = true }
 full.skills.disabled = { ["sample.md"] = true, ["other.md"] = false }
 full.extension = { token = "extension-secret", active = false }
@@ -136,6 +136,8 @@ reject("reject missing required section", function(c) c.agent = nil end)
 reject("reject invalid known preference type", function(c) c.ui.notifications = "true" end)
 reject("reject nested known preference type", function(c) c.ui.window.width = "wide" end)
 reject("reject invalid appearance choice", function(c) c.ui.density = "very-dense" end)
+reject("reject invalid inference runtime", function(c) c.bridge.runtime = "unknown" end)
+reject("reject invalid relay timeout", function(c) c.bridge.requestTimeout = 0 end)
 reject("reject invalid permissions mode", function(c) c.permissions.mode = "sometimes" end)
 reject("reject invalid permissions verdict", function(c) c.permissions.rules.read = "maybe" end)
 reject("reject non-boolean skill preferences", function(c) c.skills.disabled["sample.md"] = "yes" end)

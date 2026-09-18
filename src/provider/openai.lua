@@ -590,6 +590,7 @@ return function(env)
 	function M.complete(record, request)
 		local wantStream = request.stream
 		if wantStream == nil then wantStream = record.stream ~= false and config.get("agent.stream", true) end
+		if config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web" then wantStream = true end
 
 		local body = M.buildBody(record, util.merge(request, { stream = wantStream }))
 		applyRemembered(record, body)
@@ -629,7 +630,8 @@ return function(env)
 		local function fire(payload)
 			-- A socket is only used when the record names one and the host has
 			-- WebSocket support; otherwise the SSE body arrives whole over HTTP.
-			if wantStream and util.trim(record.wsUrl) ~= "" and caps.ws then
+			local web = config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web"
+			if not web and wantStream and util.trim(record.wsUrl) ~= "" and caps.ws then
 				local ws = env.require("net/ws")
 				local streamBody, wsErr = ws.stream({
 					url = record.wsUrl,
@@ -648,6 +650,8 @@ return function(env)
 				log.warn("provider", "websocket stream failed, falling back to http", wsErr)
 			end
 			return http.send({
+				relay = web,
+				sessionId = request.sessionId,
 				url = url,
 				method = "POST",
 				headers = headers,
@@ -768,6 +772,7 @@ return function(env)
 		parsed.provider = record.id
 		parsed.providerLabel = record.label
 		parsed.via = res.via
+		parsed.requestId = res.inferenceId
 		parsed.streamed = parsed.frames and parsed.frames > 0 or false
 		registry.markOk(record, parsed.ms)
 		return parsed, nil, res

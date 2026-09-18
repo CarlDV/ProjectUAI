@@ -163,6 +163,40 @@ return function(env)
 		-- by whatever the tie-break happened to produce -- which is a card whose two
 		-- labels can end up over the wrong two fields.
 		local settings = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
+		local installerCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
+		P.text(installerCard, { text = "Bridge files", role = "label", layoutOrder = 1 })
+		local installStatus = P.text(installerCard, { name = "BridgeDownloadStatus",
+			text = "Download the bridge from GitHub into UAI/bridge in your executor workspace. Requires Node.js 18+ to run.",
+			role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
+		P.button(installerCard, { name = "DownloadBridge", text = "Download bridge files", icon = "folder",
+			variant = "secondary", size = "sm", fill = true, layoutOrder = 3,
+			onClick = function(button)
+				button.setEnabled(false)
+				button.setText("Downloading…")
+				task.spawn(function()
+					local ok, message = env.require("runtime/bridge_install").download(function(text)
+						if installStatus.Parent then installStatus.Text = text end
+					end)
+					if not installerCard.Parent then return end
+					installStatus.Text = message
+					button.setText(ok and "Download again" or "Retry download")
+					button.setEnabled(true)
+					overlay.toast(ok and "Bridge files downloaded" or message, ok and "good" or "warn", 4)
+				end)
+			end })
+		local runtimeCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
+		P.text(runtimeCard, { text = "Inference runtime", role = "label", layoutOrder = 1 })
+		P.text(runtimeCard, { text = "Web mode runs provider connections in Node and streams to the browser. Tools, memory, permissions, and subagents stay in this Roblox client.",
+			role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
+		C.segmented(runtimeCard, { options = { { label = "Game", value = "game" }, { label = "Web", value = "web" } },
+			value = config.get("bridge.runtime", "game"), layoutOrder = 3, onChange = function(value)
+				local ok, err = pcall(env.require("net/bridge_commands").run, { type = "runtime", value = value })
+				if not ok then overlay.toast(tostring(err), "warn", 3) end
+			end })
+		P.field(runtimeCard, { name = "BridgeRequestTimeout", text = tostring(config.get("bridge.requestTimeout", 180)),
+			placeholder = "Provider timeout in seconds", layoutOrder = 4, onBlur = function(value)
+				config.set("bridge.requestTimeout", util.clamp(tonumber(value) or 180, 10, 86400))
+			end })
 		P.text(settings, { text = "Port", role = "small", layoutOrder = 1 })
 		P.field(settings, {
 			name = "BridgePort",

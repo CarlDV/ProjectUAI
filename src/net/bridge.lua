@@ -23,11 +23,10 @@ return function(env)
 	-- Fired on a state transition only -- started, stopped, reachable, unreachable --
 	-- so the Settings panel can show the truth without polling for it.
 	local M = { running = false, online = false, lastError = nil, changed = signal.new("bridge") }
+	local clientId = env.services.HttpService:GenerateGUID(false)
 
-	-- Longest a single string may be on the wire. A tool result can be the whole
-	-- source of a script; the browser shows a preview and the in-game view remains
-	-- the place to read the rest.
-	local FIELD_CAP = 4000
+	-- Queue bounds limit offline buffering; event text itself stays lossless so
+	-- Markdown, code listings, and streamed finals agree between both interfaces.
 	local QUEUE_CAP = 200
 	local DRAIN_SECONDS = 0.15
 	local POLL_TIMEOUT = 25
@@ -61,6 +60,7 @@ return function(env)
 		["turn:start"] = true,
 		["turn:end"] = true,
 		["compact"] = true,
+		["ask:user"] = true,
 		["subagent:text"] = true,
 		["subagent:tool"] = true,
 		["subagent:tool:done"] = true,
@@ -72,7 +72,7 @@ return function(env)
 	-- not a string, number, boolean or table is dropped rather than encoded.
 	local function scrub(value, depth)
 		local kind = type(value)
-		if kind == "string" then return util.ellipsis(value, FIELD_CAP) end
+		if kind == "string" then return value end
 		if kind == "number" or kind == "boolean" then return value end
 		if kind ~= "table" or depth > 5 then return nil end
 		local out = {}
@@ -88,10 +88,13 @@ return function(env)
 
 	local queue = {}
 	local snapshotPending = nil
+	local attachedId, detach = nil, nil
 
 	local function enqueue(payload)
 		if type(payload) ~= "table" or not FORWARD[payload.kind] then return end
-		queue[#queue + 1] = scrub(payload, 0)
+		local entry = scrub(payload, 0)
+		entry.sessionId = payload.sessionId or attachedId
+		queue[#queue + 1] = entry
 		-- Dropping the oldest rather than the newest: a browser that reconnects gets
 		-- a fresh snapshot anyway, so the recent end is the half worth keeping.
 		while #queue > QUEUE_CAP do table.remove(queue, 1) end
@@ -109,8 +112,6 @@ return function(env)
 		return out
 	end
 
-	local attachedId, detach = nil, nil
-
 	-- The browser follows the active thread rather than owning one, so switching
 	-- conversations in-game moves the browser with it. Re-checked on every drain
 	-- because a switch is not announced to this module directly.
@@ -125,6 +126,8 @@ return function(env)
 		attachedId = session.id
 		detach = session.events:connect(enqueue)
 		snapshotPending = snapshotOf(session)
+		-- The snapshot already includes these events; uploading both would repeat them.
+		queue = {}
 		return session
 	end
 
@@ -133,7 +136,7 @@ return function(env)
 	end
 
 	local function headers()
-		return { ["Authorization"] = "Bearer " .. tostring(config.get("bridge.token", "")) }
+		return { ["Authorization"] = "Bearer " .. tostring(config.get("bridge.token", "")), ["X-UAI-Client"] = clientId }
 	end
 
 	-- `identity = "none"` because the Claude Code headers identify this client to an
@@ -151,19 +154,21 @@ return function(env)
 		if type(command) ~= "table" then return end
 		local sessions = env.require("agent/session")
 		local kind = tostring(command.type or "")
+		local session = command.sessionId and sessions.threads[command.sessionId] or sessions.current()
+		if not session then error("Conversation no longer exists", 0) end
 
 		if kind == "send" then
-			local session = attach()
 			local ok, why = session.send(tostring(command.text or ""))
 			-- A refusal has to travel back, or the browser shows a message it sent and
 			-- then nothing at all. session.send declines while a turn is in flight.
 			if not ok then
-				enqueue({ kind = "error", message = tostring(why or "could not send"), fatal = false })
+				error(tostring(why or "could not send"), 0)
 			end
 		elseif kind == "abort" then
-			sessions.current().abort()
+			session.abort()
 		elseif kind == "clear" then
-			sessions.current().clear()
+			if session.busy then error("Stop this conversation before clearing it", 0) end
+			session.clear()
 		elseif kind == "permission" then
 			-- The same door the in-game panel uses: the agent left a resolve function
 			-- behind and whoever answers first calls it. No new authority is created
@@ -177,6 +182,7 @@ return function(env)
 			env.require("provider/registry").setActive(tostring(command.id or ""))
 		elseif kind == "model" then
 			env.require("provider/registry").setModel(tostring(command.provider or ""), tostring(command.model or ""))
+			env.require("provider/registry").setActive(tostring(command.provider or ""))
 		elseif kind == "models:discover" then
 			-- Discovery is a network round trip, so it runs on its own thread: the
 			-- poller must not park behind it or the browser would stall for seconds.
@@ -204,7 +210,9 @@ return function(env)
 		elseif kind == "subagent:stop" then
 			env.require("agent/subagent").stop(tostring(command.id or ""))
 		else
-			log.warn("bridge", "unknown command from the browser", kind)
+			local result = env.require("net/bridge_commands").run(command)
+			if result == false then error("Unknown command: " .. kind, 0) end
+			return result
 		end
 	end
 
@@ -257,6 +265,7 @@ return function(env)
 				turns = session.turns or 0,
 				updatedAt = session.updatedAt or 0,
 				active = session.id == sessions.activeId,
+				ephemeral = session.ephemeral == true,
 			}
 		end
 
@@ -266,6 +275,11 @@ return function(env)
 			providerList[#providerList + 1] = {
 				id = record.id,
 				label = record.label,
+				baseUrl = record.baseUrl,
+				api = record.api,
+				authStyle = record.authStyle,
+				preset = record.preset,
+				hasKey = util.trim(record.apiKey or "") ~= "",
 				model = record.model,
 				models = models.list(record),
 				enabled = record.enabled ~= false,
@@ -285,6 +299,10 @@ return function(env)
 				group = tool.group,
 				description = tool.description,
 				risk = tool.risk or "write",
+				parameters = tool.parameters,
+				available = registry.missingCapability(tool) == nil,
+				enabled = registry.groupEnabled(tool.group),
+				rule = permissions.ruleFor(tool.name) or "default",
 			}
 		end
 
@@ -304,8 +322,48 @@ return function(env)
 
 		local activeRecord = providers.active()
 		local current = sessions.current()
+		local loops = {}
+		for _, job in ipairs(env.require("runtime/chatloops").list()) do
+			loops[#loops + 1] = { id = job.id, kind = job.kind, state = job.state, channel = job.channel,
+				sent = job.sent, count = job.count, completed = job.completed, reason = job.reason, scores = job.scores }
+		end
+		local pendingPermissions = {}
+		for id, request in pairs(permissions.pending) do
+			pendingPermissions[#pendingPermissions + 1] = { id = id, name = request.tool.name,
+				description = request.tool.description, args = request.args,
+				sessionId = request.session and request.session.id }
+		end
+		local asks = env.require("ui/panels/ask")
+		local questions = {}
+		local function question(request)
+			if request then questions[#questions + 1] = { id = request.id, question = request.question,
+				options = request.options, sessionTitle = request.sessionTitle } end
+		end
+		question(asks.current)
+		for _, request in ipairs(asks.queue) do question(request) end
+		local settings = {}
+		for _, section in ipairs({ "ui", "agent", "logs", "iy", "identity" }) do
+			settings[section] = {}
+			for key, value in pairs(config.get(section, {})) do
+				if type(value) ~= "table" then settings[section][key] = value end
+			end
+		end
+		local themeColors = {}
+		for _, key in ipairs({ "canvas", "sidebar", "surface", "surfaceRaised", "surfaceActive", "border", "text", "textSecondary", "textTertiary", "accent", "accentHot", "solid", "onSolid" }) do
+			themeColors[key] = "#" .. env.require("ui/theme").color[key]:ToHex()
+		end
 
 		return {
+			protocol = 2,
+			runtime = config.get("bridge.runtime", "game"),
+			relayTimeout = config.get("bridge.requestTimeout", 180),
+			sessionId = current.id,
+			player = env.plr and env.plr.DisplayName or "you",
+			settings = settings, theme = themeColors, loops = loops, todos = current.todos,
+			questions = questions, pendingPermissions = pendingPermissions,
+			logs = util.slice(log.entries, math.max(1, #log.entries - 59), #log.entries),
+			requests = http.history,
+			presets = env.require("provider/catalog").presets,
 			place = { id = place.id, name = place.label() },
 			caps = { executor = caps.executor, http = caps.http, summary = caps.summary() },
 			agent = {
@@ -332,9 +390,25 @@ return function(env)
 	end
 
 	local lastStateJson, lastStateAt = nil, 0
-	local STATE_EVERY = 1
+	local STATE_EVERY = 1000
+	local inflight, commandResults = nil, {}
 
 	local function drain()
+		if next(commandResults) then
+			local results = {}
+			for _, result in pairs(commandResults) do results[#results + 1] = result end
+			local res = call({ url = base() .. "/api/agent/ack", method = "POST", body = util.encode({ results = results }), timeout = 10 })
+			if res and res.ok then
+				for _, result in ipairs(results) do
+					if commandResults[result.id] == result then commandResults[result.id] = nil end
+				end
+			end
+		end
+		if inflight then
+			local res, err = call({ url = base() .. "/api/agent/events", method = "POST", body = inflight, timeout = 10 })
+			if res and res.ok then inflight = nil; return true end
+			return false, err or "Bridge upload failed"
+		end
 		attach()
 		local stateDue = nil
 		if clock.since(lastStateAt) >= STATE_EVERY then
@@ -354,27 +428,27 @@ return function(env)
 		queue = {}
 		snapshotPending = nil
 
+		inflight = util.encode({ batchId = env.services.HttpService:GenerateGUID(false), events = batch, snapshot = snapshot, state = stateDue,
+			sessionId = attachedId })
 		local res, err = call({
 			url = base() .. "/api/agent/events",
 			method = "POST",
-			body = util.encode({ events = batch, snapshot = snapshot, state = stateDue }),
+			body = inflight,
 			timeout = 10,
 		})
-		if res and res.ok then return true end
+		if res and res.ok then inflight = nil; return true end
 
-		-- Put the batch back in front rather than dropping it: the queue may have
-		-- grown while the request was in flight, and these are the older half. A
-		-- message the browser never receives is worse than one that arrives late.
-		snapshotPending = snapshot or snapshotPending
-		for index = #batch, 1, -1 do table.insert(queue, 1, batch[index]) end
-		while #queue > QUEUE_CAP do table.remove(queue, 1) end
+		-- Keep this exact encoded batch and ID until acknowledged. Events arriving
+		-- during the request stay in the next batch instead of being duplicated.
 		return false, err or ("status " .. tostring(res and res.status or 0))
 	end
 
-	local function uploadLoop()
+	local generation = 0
+	local function uploadLoop(mine)
 		local attempt = 0
-		while alive do
+		while alive and mine == generation do
 			local ok, reason = drain()
+			if not alive or mine ~= generation then return end
 			if ok then
 				attempt = 0
 				clock.wait(DRAIN_SECONDS)
@@ -386,9 +460,10 @@ return function(env)
 		end
 	end
 
-	local function pollLoop()
+	local handledCommands = {}
+	local function pollLoop(mine)
 		local attempt = 0
-		while alive do
+		while alive and mine == generation do
 			local res, err = call({
 				url = base() .. "/api/agent/inbox",
 				method = "GET",
@@ -396,7 +471,7 @@ return function(env)
 			})
 			-- The request parked for up to eighteen seconds; an unload during that
 			-- window means the answer is no longer wanted.
-			if not alive then return end
+			if not alive or mine ~= generation then return end
 
 			if res and res.ok then
 				attempt = 0
@@ -409,15 +484,30 @@ return function(env)
 						handled = handled + 1
 						-- One bad command must not stop the poller: that would take the
 						-- browser offline until the next reload.
-						local ok, err2 = pcall(runCommand, command)
-						if not ok then log.warn("bridge", "command failed", err2) end
+						local id = command.commandId
+						if id and handledCommands[id] then
+							if handledCommands[id] ~= true then commandResults[id] = handledCommands[id] end
+						else
+							if id then
+								handledCommands[id] = true
+								commandResults[id] = { id = id, pending = true }
+							end
+							clock.spawn(function()
+								local ok, result = pcall(runCommand, command)
+								if id then
+									local answer = { id = id, ok = ok, error = not ok and tostring(result) or nil,
+										data = ok and type(result) == "table" and result or nil }
+									handledCommands[id], commandResults[id] = answer, answer
+								elseif not ok then log.warn("bridge", "command failed", result) end
+							end)
+						end
 					end
 				end
 				-- The bridge is expected to hold this request open until it has
 				-- something to say. One that answers empty straight away -- an older
 				-- build, or a proxy that will not park a connection -- would otherwise
 				-- turn this loop into a flood of requests.
-				if handled == 0 and (res.ms or 0) < 1000 then clock.wait(1) end
+				if (res.ms or 0) < 100 then clock.wait(handled == 0 and 0.25 or 0.05) end
 			else
 				attempt = attempt + 1
 				offline(err or ("status " .. tostring(res and res.status or 0)))
@@ -429,6 +519,7 @@ return function(env)
 	local unregister = nil
 
 	local function shutdown()
+		generation = generation + 1
 		alive = false
 		M.running = false
 		M.online = false
@@ -436,6 +527,7 @@ return function(env)
 		detach, attachedId = nil, nil
 		queue = {}
 		snapshotPending = nil
+		inflight = nil
 	end
 
 	function M.start()
@@ -447,10 +539,12 @@ return function(env)
 
 		M.running = true
 		alive = true
+		generation = generation + 1
+		lastStateJson, lastStateAt = nil, 0
 		M.lastError = nil
 		attach()
-		clock.spawn(uploadLoop)
-		clock.spawn(pollLoop)
+		clock.spawn(uploadLoop, generation)
+		clock.spawn(pollLoop, generation)
 		-- Two threads that outlive the interface, so unloading has to be able to
 		-- stop them. The canceller is kept rather than discarded because stopping
 		-- from Settings has to unregister as well, or the drain would run it twice.
@@ -496,6 +590,7 @@ return function(env)
 	-- rather than orchestrate this. A port or token change aims the connection
 	-- somewhere new, so it is torn down and rebuilt rather than adjusted in place.
 	dispose.add(config.changed:connect(function(path)
+		if path == "bridge.runtime" or path == "bridge.requestTimeout" then lastStateJson = nil; return end
 		if path ~= nil and not util.startsWith(tostring(path), "bridge.") then return end
 		if M.running then M.stop() end
 		if config.get("bridge.enabled", false) == true then M.start() end

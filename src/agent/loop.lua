@@ -65,7 +65,8 @@ return function(env)
 			})
 
 			local started = clock.ms()
-			local result, err = chat.complete(record, {
+			local result, err, response = chat.complete(record, {
+				sessionId = not session.headless and session.id or nil,
 				messages = payload.request.messages,
 				tools = payload.request.tools,
 				toolChoice = payload.request.toolChoice,
@@ -108,6 +109,7 @@ return function(env)
 				error = err,
 			})
 			if err == "aborted" then return nil, "aborted" end
+			if response and response.terminal then return nil, err end
 		end
 
 		return nil, firstError or "every provider failed"
@@ -240,10 +242,10 @@ return function(env)
 			session.emit("usage", { session = usage.session, turn = usage.turn })
 
 			if util.trim(result.reasoning) ~= "" then
-				session.emit("assistant:reasoning", { text = result.reasoning })
+				session.emit("assistant:reasoning", { text = result.reasoning, requestId = result.requestId })
 			end
 			if util.trim(result.content) ~= "" then
-				session.emit("assistant:text", { text = result.content, final = #result.toolCalls == 0 })
+				session.emit("assistant:text", { text = result.content, final = #result.toolCalls == 0, requestId = result.requestId })
 			end
 
 			ctx.pushAssistant(result)

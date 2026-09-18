@@ -183,6 +183,7 @@ return function(env)
 			end
 		end
 		local enums = {
+			["bridge.runtime"] = { game = true, web = true },
 			["permissions.mode"] = { readonly = true, ask = true, auto = true, full = true },
 			["ui.density"] = { comfortable = true, compact = true },
 			["ui.reduceMotion"] = { auto = true, on = true, off = true },
@@ -193,6 +194,9 @@ return function(env)
 		}
 		for path, choices in pairs(enums) do
 			if not choices[util.get(merged, path)] then return nil, "config." .. path .. " is not a supported choice" end
+		end
+		if merged.bridge.requestTimeout < 10 or merged.bridge.requestTimeout > 86400 then
+			return nil, "config.bridge.requestTimeout must be between 10 and 86400 seconds"
 		end
 		ok, err = array(merged.memory.entries, "config.memory.entries", function(entry, path)
 			local valid, why = object(entry, path)

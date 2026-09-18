@@ -23,6 +23,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createInference } = require('./inference');
 
 const args = process.argv.slice(2);
 function flag(name, fallback) {
@@ -49,6 +50,12 @@ const HOLD_MS = 18000;
 const STALE_MS = 25000;
 
 const BACKLOG_LIMIT = 400;
+let eventSequence = 0;
+const replay = [];
+const seenBatches = new Set();
+const commands = new Map();
+const inference = createInference({ publish: broadcast });
+let gameInstance = null;
 
 const state = {
   inbox: [],        // commands waiting for the game to collect
@@ -95,7 +102,7 @@ function authorised(req, url) {
   // EventSource cannot set a header, so the stream route carries it in the query
   // instead. Same secret, same comparison.
   const supplied = bearer || url.searchParams.get('token') || '';
-  if (supplied.length !== TOKEN.length) return false;
+  if (!/^[a-f0-9]{64}$/.test(supplied)) return false;
   return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(TOKEN));
 }
 
@@ -118,7 +125,7 @@ function readBody(req, limit = 1 << 20) {
 }
 
 async function readJson(req) {
-  const text = await readBody(req);
+  const text = await readBody(req, 20 << 20);
   if (!text) return {};
   try {
     const value = JSON.parse(text);
@@ -133,17 +140,41 @@ async function readJson(req) {
 // Handing the command straight to a held-open poll is what makes this feel live
 // rather than polled: the game is already waiting when the message arrives.
 function enqueue(command) {
-  state.inbox.push(command);
+  const id = command.commandId || crypto.randomUUID();
+  if (typeof id !== 'string' || !/^[\w-]{8,100}$/.test(id)) throw new Error('Invalid command ID');
+  const fingerprint = JSON.stringify({ ...command, commandId: id });
+  if (commands.has(id)) {
+    if (commands.get(id).fingerprint !== fingerprint) throw new Error('Command ID belongs to another action');
+    return id;
+  }
+  if (commands.size >= 10000) throw new Error('Command capacity reached; restart the bridge when idle');
+  const queued = { ...command, commandId: id };
+  commands.set(id, { command: queued, state: 'queued', fingerprint });
+  state.inbox.push(queued);
   const waiter = state.waiters.shift();
-  if (!waiter) return;
+  if (!waiter) return id;
   clearTimeout(waiter.timer);
-  sendJson(waiter.res, 200, { commands: state.inbox.splice(0) });
+  for (const command of state.inbox.slice(0, 32)) commands.get(command.commandId).delivered = true;
+  sendJson(waiter.res, 200, { commands: state.inbox.slice(0, 32) });
+  return id;
 }
 
 function serveInbox(req, res) {
+  const client = req.headers['x-uai-client'];
+  if (client && gameInstance && client !== gameInstance) {
+    for (const entry of commands.values()) {
+      if ((entry.state === 'queued' && entry.delivered) || entry.state === 'running') {
+        entry.state = 'failed';
+        entry.result = { id: entry.command.commandId, ok: false, error: 'Roblox restarted during command delivery; outcome is uncertain. The command was not repeated.' };
+      }
+    }
+    state.inbox = state.inbox.filter(c => commands.get(c.commandId).state === 'queued');
+  }
+  if (client) gameInstance = client;
+  for (const command of state.inbox.slice(0, 32)) commands.get(command.commandId).delivered = true;
   touch();
   if (state.inbox.length) {
-    sendJson(res, 200, { commands: state.inbox.splice(0) });
+    sendJson(res, 200, { commands: state.inbox.slice(0, 32) });
     return;
   }
   const waiter = { res, timer: null };
@@ -165,7 +196,10 @@ function serveInbox(req, res) {
 // Game -> browser ------------------------------------------------------------
 
 function broadcast(event) {
-  const frame = `data: ${JSON.stringify(event)}\n\n`;
+  const id = ++eventSequence;
+  const frame = `id: ${id}\ndata: ${JSON.stringify(event)}\n\n`;
+  replay.push({ id, frame });
+  if (replay.length > 5000) replay.shift();
   for (const res of state.subscribers) {
     // A browser that has gone away without closing cleanly must not take the
     // loop down with it.
@@ -195,13 +229,18 @@ async function serveEvents(req, res) {
     sendJson(res, 400, { error: 'invalid json' });
     return;
   }
+  if (payload.batchId && seenBatches.has(payload.batchId)) { res.writeHead(204).end(); return; }
+  if (payload.batchId) {
+    seenBatches.add(payload.batchId);
+    if (seenBatches.size > 10000) seenBatches.delete(seenBatches.values().next().value);
+  }
   // A snapshot is the whole transcript as the game sees it, sent on connect and
   // whenever the active thread changes. It replaces the backlog rather than
   // adding to it, otherwise a reconnect would show the conversation twice.
   if (Array.isArray(payload.snapshot)) {
     state.snapshot = payload.snapshot;
     state.backlog = [];
-    broadcast({ kind: 'bridge:snapshot', events: payload.snapshot });
+    broadcast({ kind: 'bridge:snapshot', events: payload.snapshot, sessionId: payload.sessionId });
   }
   if (payload.state && typeof payload.state === 'object') {
     state.agentState = payload.state;
@@ -210,6 +249,7 @@ async function serveEvents(req, res) {
   const events = Array.isArray(payload.events) ? payload.events : [];
   for (const event of events) {
     if (!event || typeof event !== 'object') continue;
+    if (event.requestId) inference.commit(event.requestId);
     state.backlog.push(event);
     broadcast(event);
   }
@@ -228,8 +268,14 @@ function serveStream(req, res) {
   });
   // Replay before subscribing, so a browser opened mid-turn reads the
   // conversation from the top instead of joining halfway through a sentence.
+  const cursor = Number(req.headers['last-event-id'] || 0);
+  const resumable = cursor > 0 && cursor <= eventSequence && (!replay.length || cursor >= replay[0].id - 1);
+  if (resumable) {
+    for (const entry of replay) if (entry.id > cursor) res.write(entry.frame);
+  } else {
+  res.write(`data: ${JSON.stringify({ kind: 'bridge:reset' })}\n\n`);
   if (state.snapshot) {
-    res.write(`data: ${JSON.stringify({ kind: 'bridge:snapshot', events: state.snapshot })}\n\n`);
+    res.write(`data: ${JSON.stringify({ kind: 'bridge:snapshot', events: state.snapshot, sessionId: state.agentState?.sessionId })}\n\n`);
   }
   if (state.agentState) {
     res.write(`data: ${JSON.stringify({ kind: 'bridge:state', state: state.agentState })}\n\n`);
@@ -237,6 +283,9 @@ function serveStream(req, res) {
   for (const event of state.backlog) {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   }
+  for (const event of inference.previews(state.agentState?.sessionId)) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  res.write(`id: ${eventSequence}\ndata: ${JSON.stringify({ kind: 'bridge:cursor' })}\n\n`);
   res.write(`data: ${JSON.stringify({ kind: 'bridge:game', connected: state.connected })}\n\n`);
 
   state.subscribers.add(res);
@@ -318,7 +367,36 @@ const server = http.createServer(async (req, res) => {
   const post = req.method === 'POST';
   try {
     if (route === '/api/hello' && req.method === 'GET') {
-      sendJson(res, 200, { ok: true, connected: state.connected });
+      sendJson(res, 200, { ok: true, connected: state.connected, protocol: 2, instance: inference.instance });
+    } else if (route === '/api/inference' && post) {
+      const input = JSON.parse(await readBody(req, 20 << 20));
+      sendJson(res, 202, inference.start(input));
+    } else if (route.startsWith('/api/inference/')) {
+      const id = route.slice('/api/inference/'.length);
+      if (req.method === 'DELETE') sendJson(res, 200, { cancelled: inference.cancel(id) });
+      else if (req.method === 'GET') {
+        const job = inference.get(id);
+        sendJson(res, job ? 200 : 404, job || { error: 'Unknown inference ID; do not resubmit' });
+      } else sendJson(res, 405, { error: 'method not allowed' });
+    } else if (route === '/api/agent/ack' && post) {
+      touch();
+      const body = await readJson(req);
+      for (const result of body?.results || []) {
+        const entry = commands.get(result.id);
+        if (entry && ['queued', 'running'].includes(entry.state)) {
+          entry.state = result.pending ? 'running' : (result.ok === false ? 'failed' : 'completed');
+          if (!result.pending) {
+            entry.result = result;
+            entry.command = { commandId: result.id };
+          }
+          state.inbox = state.inbox.filter(c => c.commandId !== result.id);
+          if (!result.pending) broadcast({ kind: 'bridge:command', id: result.id, ok: result.ok, error: result.error });
+        }
+      }
+      sendJson(res, 200, { ok: true });
+    } else if (route.startsWith('/api/commands/') && req.method === 'GET') {
+      const entry = commands.get(route.slice('/api/commands/'.length));
+      sendJson(res, entry ? 200 : 404, entry ? { state: entry.state, result: entry.result } : { error: 'Unknown command' });
     } else if (route === '/api/stream' && req.method === 'GET') {
       serveStream(req, res);
     } else if (route === '/api/send' && post) {
@@ -328,24 +406,25 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: 'no text' });
         return;
       }
-      enqueue({ type: 'send', text });
-      sendJson(res, 202, { queued: true });
+      const id = enqueue({ type: 'send', text, sessionId: body.sessionId, commandId: body.commandId });
+      sendJson(res, 202, { queued: true, id });
     } else if ((route === '/api/abort' || route === '/api/clear') && post) {
-      enqueue({ type: route.slice(5) });
-      sendJson(res, 202, { queued: true });
+      const body = await readJson(req);
+      const id = enqueue({ type: route.slice(5), sessionId: body?.sessionId, commandId: body?.commandId });
+      sendJson(res, 202, { queued: true, id });
     } else if (route === '/api/permission' && post) {
       const body = await readJson(req);
       if (!body || typeof body.id !== 'string') {
         sendJson(res, 400, { error: 'no id' });
         return;
       }
-      enqueue({
+      const id = enqueue({
         type: 'permission',
         id: body.id,
         allow: body.allow === true,
         remember: body.remember === true,
       });
-      sendJson(res, 202, { queued: true });
+      sendJson(res, 202, { queued: true, id });
     } else if (route === '/api/command' && post) {
       // A generic door for everything that is not a message: provider and model
       // switching, thread management, permission mode, subagent control. The game
@@ -355,8 +434,8 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: 'no type' });
         return;
       }
-      enqueue(body);
-      sendJson(res, 202, { queued: true });
+      const id = enqueue(body);
+      sendJson(res, 202, { queued: true, id });
     } else if (route === '/api/agent/inbox' && req.method === 'GET') {
       serveInbox(req, res);
     } else if (route === '/api/agent/events' && post) {
@@ -390,6 +469,12 @@ server.listen(PORT, HOST, () => {
     `  Loopback only. Whoever reaches this drives an agent that can run code\n` +
     `  on this machine, so treat the token like a password. Ctrl+C to stop.\n\n`
   );
+});
+
+for (const event of ['SIGINT', 'SIGTERM']) process.on(event, () => {
+  inference.close();
+  server.closeAllConnections();
+  server.close(() => process.exit(0));
 });
 
 server.on('error', (err) => {

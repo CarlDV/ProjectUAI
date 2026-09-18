@@ -238,7 +238,10 @@ return function(env)
 		local headers = buildHeaders(spec, attempt)
 		local started = clock.ms()
 
-		local res, err = send(url, method, headers, spec.body, spec.timeout)
+		local res, err
+		if spec.relay then
+			res, err = env.require("net/relay").request(spec, headers, M.request)
+		else res, err = send(url, method, headers, spec.body, spec.timeout) end
 		local elapsed = clock.since(started)
 
 		-- `spec.silent` keeps a request out of the history and out of the log. The web
@@ -320,6 +323,7 @@ return function(env)
 	-- itself: a provider with a key pool passes 429 so the transport does not sleep
 	-- its way through a backoff on a key that rotation can replace at once.
 	function M.shouldRetry(res, err, info)
+		if (res and res.terminal) or err == "aborted" then return false end
 		local elapsed = tonumber(info and info.elapsed) or 0
 		local status = res and res.status or 0
 		local body = tostring(res and res.body or "")

@@ -229,6 +229,7 @@ return function(env)
 		["sessions"] = true,
 		["export"] = true,
 		["icons"] = true,
+		["bridge"] = true,
 	}
 
 	function M.migrate(onProgress)

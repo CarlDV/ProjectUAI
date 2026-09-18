@@ -195,6 +195,8 @@ return function(env)
 			enabled = false,
 			port = 8790,
 			token = "",
+			runtime = "game",
+			requestTimeout = 180,
 		},
 		logs = {
 			mirror = false,

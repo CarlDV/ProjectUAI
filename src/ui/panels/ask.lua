@@ -35,6 +35,10 @@ return function(env)
 			local next_request = table.remove(M.queue, 1)
 			if next_request then present(next_request) end
 		end
+		request.answer = function(text)
+			reply(text)
+			if request.close then request.close() end
+		end
 
 		-- The modal handle, so a sweep can take the card off screen as well as
 		-- answering the call behind it.
@@ -145,6 +149,7 @@ return function(env)
 		-- but the guard is cheap insurance against a host wiring one in.
 		if session and session.headless then return end
 		local request = {
+			id = event.id,
 			question = event.question,
 			options = event.options,
 			resolve = event.resolve,
@@ -156,6 +161,14 @@ return function(env)
 		else
 			present(request)
 		end
+	end
+
+	function M.answer(id, text)
+		if M.current and M.current.id == id and M.current.answer then M.current.answer(text); return true end
+		for index, request in ipairs(M.queue) do
+			if request.id == id then table.remove(M.queue, index); request.resolve(text); return true end
+		end
+		return false
 	end
 
 	-- A turn that stops mid-ask leaves a question on screen for a conversation that

@@ -476,6 +476,7 @@ return function(env)
 		if wantStream == nil then
 			wantStream = record.stream ~= false and config.get("agent.stream", true)
 		end
+		if config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web" then wantStream = true end
 
 		local body = M.buildBody(record, util.merge(request, { stream = wantStream }))
 		local pool = registry.keysOf(record)
@@ -499,6 +500,8 @@ return function(env)
 
 		local function fire(payload)
 			return http.send({
+				relay = config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web",
+				sessionId = request.sessionId,
 				url = M.endpoint(record),
 				method = "POST",
 				headers = headers,
@@ -625,6 +628,7 @@ return function(env)
 		parsed.provider = record.id
 		parsed.providerLabel = record.label
 		parsed.via = res.via
+		parsed.requestId = res.inferenceId
 		parsed.streamed = (parsed.frames or 0) > 0
 		registry.markOk(record, parsed.ms)
 		return parsed, nil, res
