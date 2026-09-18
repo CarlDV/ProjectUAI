@@ -143,6 +143,7 @@ end
 local PROPERTY_TYPES = {
 	AnchorPoint = "Vector2", AbsolutePosition = "Vector2", AbsoluteSize = "Vector2",
 	CanvasPosition = "Vector2", AbsoluteCanvasSize = "Vector2", AbsoluteWindowSize = "Vector2",
+	AbsoluteContentSize = "Vector2",
 	MinSize = "Vector2", MaxSize = "Vector2", OnScreenKeyboardSize = "Vector2",
 	CanvasSize = "UDim2",
 	CornerRadius = "UDim", PaddingTop = "UDim", PaddingBottom = "UDim",
@@ -385,6 +386,9 @@ function M.build(dt)
 			out.ScrollingEnabled = true
 		end
 		if className == "CanvasGroup" then out.GroupTransparency = 0 end
+		-- A real, readable property even before the engine's first layout pass. The
+		-- mock does not solve lists; focused tests can provide measured bounds.
+		if className == "UIListLayout" then out.AbsoluteContentSize = "Vector2.zero" end
 		if className == "UIStroke" then out.Thickness = 1 end
 		if className == "UIScale" then out.Scale = 1 end
 		if className == "ScreenGui" then

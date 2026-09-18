@@ -37,4 +37,28 @@ check("escaped inline code", tick .. "<value>&" .. tick,
 	'<font color="#CCAABB"><font face="Code">&lt;value&gt;&amp;</font></font>')
 check("links keep identifiers", "[snake_case_name](https://example.test/foo_bar_baz)",
 	'<b>snake_case_name</b> <font color="#CCAABB">https://example.test/foo_bar_baz</font>')
+check("backslash escapes are literal", "\\*not emphasis\\* \\_plain\\_ \\| \\\\ \\<tag>",
+	"*not emphasis* _plain_ | \\ &lt;tag&gt;")
+check("multiple backticks protect pipes and emphasis", "``a ` | **b**``",
+	'<font color="#CCAABB"><font face="Code">a ` | **b**</font></font>')
+check("code delimiters match the entire run", "``a ` b``",
+	'<font color="#CCAABB"><font face="Code">a ` b</font></font>')
+check("unmatched code runs stay visible", "before ``a | b` after", "before ``a | b` after")
+check("code span edge-space normalisation", "`` `a` ``",
+	'<font color="#CCAABB"><font face="Code">`a`</font></font>')
+check("code span all-space content survives", "`   `",
+	'<font color="#CCAABB"><font face="Code">   </font></font>')
+check("backslashes do not escape code closers", "`a\\` tail",
+	'<font color="#CCAABB"><font face="Code">a\\</font></font> tail')
+check("escaped first tick leaves a shorter opener", "\\``a|b`",
+	'`<font color="#CCAABB"><font face="Code">a|b</font></font>')
+check("non-ASCII and markup stay visible", "**東京 café 😀** <font size=\"99\">&lt;b&gt;</font>",
+	'<b>東京 café 😀</b> &lt;font size=&quot;99&quot;&gt;&amp;lt;b&amp;gt;&lt;/font&gt;')
+check("literal placeholder cannot consume content", "\1CODE1\1 `kept`",
+	'\1CODE1\1 <font color="#CCAABB"><font face="Code">kept</font></font>')
+check("new placeholder cannot be forged", "\1\1\1\1\1 `safe` \1\1\1\1\1",
+	'\1\1\1\1\1 <font color="#CCAABB"><font face="Code">safe</font></font> \1\1\1\1\1')
+theme.codeFontEnumName = "RobotoMono"
+check("code font follows theme", "`café | 東京`",
+	'<font color="#CCAABB"><font face="RobotoMono">café | 東京</font></font>')
 print("markdown regressions: " .. checked .. " passed")

@@ -114,7 +114,8 @@ return function(env)
 		-- third modeButton line to bring it back.
 		local modeRow = P.row(sidebar, {
 			name = "ModeSwitcher",
-			size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget())),
+			size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget(),
+				theme.text.caption.height) + theme.space.hair * 2),
 			bg = theme.color.surface,
 			radius = theme.radius.lg,
 			padding = theme.space.hair,
@@ -128,7 +129,8 @@ return function(env)
 			local selected = host.panel == id
 			local button = P.rowButton(modeRow, {
 				name = "Segment_" .. id,
-				size = UDim2.new(0.5, -theme.space.hair, 1, 0),
+				size = UDim2.new(0, 0, 1, 0),
+				flex = "Fill",
 				height = theme.size.controlSmall,
 				radius = theme.radius.md,
 				bgSelected = theme.color.surfaceActive,
@@ -136,6 +138,7 @@ return function(env)
 				alignX = "Center",
 				gap = theme.space.xxs,
 				padding = theme.space.none,
+				layoutOrder = order,
 				onClick = function()
 					host.show(id)
 				end,
@@ -146,14 +149,17 @@ return function(env)
 				text = label,
 				role = "caption",
 				color = selected and theme.color.text or theme.color.textTertiary,
+				size = UDim2.new(0, 0, 0, theme.text.caption.height),
 				auto = "X",
+				flex = "Shrink",
+				truncate = true,
 				layoutOrder = 2,
 			})
 			modes[id] = { button = button, label = label2 }
 			return button
 		end
 		modeButton("cowork", "Cowork", "terminal", 1)
-		modeButton("chat", "Code", "code", 2)
+		modeButton("chat", "Chat", "spark", 2)
 		-- Archived with the code editor panel:
 		-- modeButton("code", "Code", "terminal", 3)
 
@@ -287,6 +293,12 @@ return function(env)
 			gap = theme.space.xs,
 			padding = { top = theme.space.xs, bottom = theme.space.sm },
 		})
+		-- Expanded navigation can exceed a short window by itself. It shares the
+		-- scroll viewport with history so the profile remains reachable below it.
+		actions.Parent = history.instance
+		actions.LayoutOrder = 1
+		local historyList = P.column(history.instance, { name = "HistoryList",
+			size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs, layoutOrder = 2 })
 
 		-- Which place groups are folded, by placeId.
 		--
@@ -349,14 +361,16 @@ return function(env)
 		end
 
 		function handle.renderHistory()
-			history.clear()
+			for _, child in ipairs(historyList:GetChildren()) do
+				if child:IsA("GuiObject") then child:Destroy() end
+			end
 			local active = sessions.current()
 			local groups = sessions.groups()
 			local order = 0
 
 			for _, group in ipairs(groups) do
 				order = order + 1
-				local column = P.column(history.instance, {
+				local column = P.column(historyList, {
 					name = "Place_" .. tostring(group.placeId),
 					size = UDim2.new(1, 0, 0, 0),
 					auto = "Y",
@@ -516,7 +530,7 @@ return function(env)
 			end
 
 			if order == 0 then
-				local empty = P.text(history.instance, {
+				local empty = P.text(historyList, {
 					name = "NoHistory",
 					text = "Your conversations will appear here, organized by place.",
 					role = "caption",
@@ -669,16 +683,18 @@ return function(env)
 		-- every tool call a child makes and this rebuilds a list of rows -- and
 		-- debounced rather than throttled so the last change in a burst, which is the
 		-- one that drops the count back to nothing, is not the one that gets dropped.
-		local unsubscribeAgents = subagent.changed:connect(clock.debounce(function()
+		local refreshAgents, cancelAgents = clock.debounce(function()
 			if not sidebar.Parent then return end
 			handle.syncMore()
-		end, 0.3))
+		end, 0.3)
+		local unsubscribeAgents = subagent.changed:connect(refreshAgents)
 
 		sidebar.Destroying:Connect(function()
 			pcall(unsubscribeSessions)
 			pcall(unsubscribeProviders)
 			pcall(unsubscribePlace)
 			pcall(unsubscribeAgents)
+			cancelAgents()
 		end)
 
 		handle.instance = sidebar

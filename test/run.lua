@@ -2843,7 +2843,7 @@ scenario("effort reads as a scale rather than a number", function()
 		table.concat(harness.instanceState.typeErrors, "\n"))
 end)
 
-scenario("reasoning arrives open, sized, and answers its switch", function()
+scenario("reasoning arrives folded, sized, and answers its switch", function()
 	local harness, handle = bootWith({
 		handler = function()
 			return { StatusCode = 200, Body = chatBody({
@@ -2865,7 +2865,7 @@ scenario("reasoning arrives open, sized, and answers its switch", function()
 
 	local card = harness.byName("Reasoning")
 	truthy("the row exists", card ~= nil)
-	truthy("and is open on arrival, not folded away", card and card.Visible ~= false)
+	truthy("and its body starts folded", card and harness.byName("Aside", card).Visible == false)
 
 	-- The switch used to be read only while a row was being built, so turning it off
 	-- left the conversation exactly as it was and read as a dead toggle.
@@ -2909,7 +2909,8 @@ scenario("reasoning and a context window can be declared by hand", function()
 	truthy("the picker states it is a guess-free list",
 		harness.byName("NoEffort") ~= nil, harness.dump())
 
-	local claim = harness.byName("ForceReasoning")
+	harness.click(harness.byName("ModelOptions"))
+	local claim = harness.byName("Option_reasoning")
 	truthy("a model row offers a reasoning claim", claim ~= nil, harness.dump())
 	harness.click(claim)
 	harness.settle(2)
@@ -2921,7 +2922,8 @@ scenario("reasoning and a context window can be declared by hand", function()
 		traits.nearestEffort("relay/unknown-large-model", "high"), "high")
 
 	-- A declared context window is what the badge shows and the slider works against.
-	local window = harness.byName("ForceContext")
+	harness.click(harness.byName("ModelOptions"))
+	local window = harness.byName("Option_context")
 	truthy("and a context claim", window ~= nil, harness.dump())
 	harness.click(window)
 	harness.settle(2)
@@ -4927,15 +4929,16 @@ scenario("the model picker separates endpoint, model and effort", function()
 
 	-- Every row is a real record. The provider row states the health the registry has
 	-- actually recorded rather than claiming to be well.
-	local providerRow = harness.byName("Provider_harness")
+	harness.click(harness.byName("Section_Endpoint"))
+	local providerRow = harness.byName("Option_harness")
 	truthy("the endpoint this client has is listed", providerRow ~= nil)
 	contains("with its real URL", harness.textOf(providerRow), "harness.test")
-	contains("and the health that was recorded", harness.textOf(providerRow), "not tried yet")
+	harness.click(providerRow)
 
 	local modelRow = harness.byName("Model_claude-opus-5")
 	truthy("the model it is pointed at is listed", modelRow ~= nil)
 	contains("with the window this client documents", harness.textOf(modelRow), "1M")
-	contains("and where the id came from", harness.textOf(modelRow), "added on this client")
+	truthy("model rows are compact", modelRow.Size.Y.Offset <= 44)
 
 	-- Effort is the model's own scale, and Opus 5 documents five levels.
 	truthy("the effort scale is the model's own", harness.byName("Effort_xhigh") ~= nil)
@@ -4944,7 +4947,7 @@ scenario("the model picker separates endpoint, model and effort", function()
 	check("picking one writes the real setting", handle.config.get("agent.effort"), "low")
 
 	-- A filter appears only once the list is long enough to need one.
-	truthy("a six-model list gets no filter", harness.byName("ModelFilter") == nil)
+	truthy("search is always available", harness.byName("ModelFilter") ~= nil)
 	harness.click(harness.byName("FetchModels"))
 	harness.settle(6)
 	local asked = nil
@@ -5039,12 +5042,14 @@ scenario("a form modal stays on screen and keeps its footer reachable", function
 		harness.settle(1)
 	end
 
-	-- The unbounded mode is still the default: a confirmation is two sentences and a
-	-- pair of buttons, and giving that a fixed height would leave it mostly empty.
+	-- Small confirmations measure their content but keep a scrollable body when the
+	-- keyboard leaves too little room. They should not reserve a full-height dialog.
 	handle.env.require("ui/overlay").confirm({ title = "Remove it?", description = "It will not come back." })
 	harness.settle(1)
-	check("a plain modal still sizes to its content",
-		tostring(harness.byName("Modal").AutomaticSize), "Enum.AutomaticSize.Y")
+	local confirmation = harness.byName("Modal")
+	truthy("a plain modal stays content-sized and bounded",
+		confirmation.Size.Y.Offset > 0 and confirmation.Size.Y.Offset < 300)
+	truthy("a plain modal retains a scrollable body", harness.byName("BodyScroll", confirmation) ~= nil)
 	handle.env.require("ui/overlay").closeAll()
 	harness.settle(1)
 
@@ -5133,6 +5138,8 @@ scenario("chat and virtual input tools are registered and callable", function()
 	local histResult = chatHist.run({})
 	contains("chat_history handles empty history", histResult, "No recent in-game chat messages")
 
+	local chatFixture = require("gamechat")(harness)
+	handle.env.services.TextChatService = harness.services.TextChatService
 	local sendResult = chatSend.run({ message = "Hello from AI" })
 	contains("chat_send reports sent message", sendResult, "Hello from AI")
 
@@ -5223,7 +5230,9 @@ scenario("mobile panel can be moved and resized, and burger menu stays within sc
 	harness.drag(harness.byName("Header"), 600, 30, 450, 60)
 	harness.settle(4)
 	truthy("dragging header moves the mobile panel horizontally", window.root.Position.X.Offset ~= startPosX)
-	truthy("and vertically", window.root.Position.Y.Offset ~= startPosY)
+	local safe = responsive.usableRect(window.root.Parent, handle.env.require("ui/theme").space.sm)
+	truthy("full-height panel stays inside safe vertical bounds", window.root.Position.Y.Offset >= safe.y
+		and window.root.Position.Y.Offset + window.root.Size.Y.Offset <= safe.y + safe.height)
 	truthy("panel geometry saved to mobilePanel", config.get("ui.mobilePanel.placed", false))
 	check("desktop window geometry was not touched", config.get("ui.window.placed", false), false)
 
@@ -5236,6 +5245,11 @@ scenario("mobile panel can be moved and resized, and burger menu stays within sc
 	truthy("panel width resized", window.root.Size.X.Offset ~= widthBefore)
 	truthy("panel height resized", window.root.Size.Y.Offset ~= heightBefore)
 	truthy("panel stays on screen", window.root.Position.Y.Offset >= 0)
+	local beforeY = window.root.Position.Y.Offset
+	local headerPos = window.header.AbsolutePosition
+	harness.drag(window.header, headerPos.X + 30, headerPos.Y + 20, headerPos.X + 10, headerPos.Y + 45)
+	harness.settle(1)
+	truthy("shorter panel can move vertically", window.root.Position.Y.Offset ~= beforeY)
 
 	-- Hamburger menu positioning on mobile
 	local burger = harness.byName("Nav_menu")

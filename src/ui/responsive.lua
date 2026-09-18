@@ -16,6 +16,7 @@ return function(env)
 	local clock = env.require("runtime/clock")
 	local signal = env.require("runtime/signal")
 	local log = env.require("runtime/log")
+	local dispose = env.require("runtime/dispose")
 
 	local BREAKPOINTS = {
 		{ name = "xs", max = 520 },
@@ -114,18 +115,21 @@ return function(env)
 		end)
 
 		-- The topbar overlaps the top of the screen; GetGuiInset reports by how much.
+		local platformBottom = 0
 		pcall(function()
-			local top = env.guisvc:GetGuiInset()
+			local top, bottom = env.guisvc:GetGuiInset()
 			if top then M.inset = Vector2.new(top.X, top.Y) end
+			if bottom then platformBottom = math.max(0, bottom.Y) end
 		end)
 
 		-- Mobile chat and the jump button sit at the bottom on a touch device.
-		M.bottomInset = M.touch and 24 or 0
+		M.bottomInset = math.max(platformBottom, M.touch and 24 or 0)
 
+		M.keyboardHeight = 0
 		pcall(function()
 			if env.uis.OnScreenKeyboardVisible then
 				local size = env.uis.OnScreenKeyboardSize
-				M.keyboardHeight = (size and size.Y or 0)
+				M.keyboardHeight = math.max(0, math.min(height, size and size.Y or 0))
 			else
 				M.keyboardHeight = 0
 			end
@@ -152,60 +156,85 @@ return function(env)
 	end
 
 	local debouncedRefresh
+	local releases = {}
+	local cameraRelease
+	local generation = 0
+
+	function M.destroy()
+		generation = generation + 1
+		for _, release in ipairs(releases) do release() end
+		releases = {}
+		if cameraRelease then cameraRelease(); cameraRelease = nil end
+		M.ready = false
+		M.screen = nil
+	end
 
 	function M.init(screenGui)
+		M.destroy()
 		M.screen = screenGui
 		sample()
 		M.ready = true
 
-		debouncedRefresh = clock.debounce(function() refresh("viewport") end, 0.12)
-
-		local okCamera, camera = pcall(function() return env.services.Workspace.CurrentCamera end)
-		if okCamera and camera then
-			camera:GetPropertyChangedSignal("ViewportSize"):Connect(debouncedRefresh)
+		local mine = generation
+		debouncedRefresh = clock.debounce(function()
+			if mine == generation then refresh("viewport") end
+		end, 0.12)
+		local function watch(connection)
+			releases[#releases + 1] = dispose.connection(connection, "responsive")
 		end
+		local function bindCamera()
+			if cameraRelease then cameraRelease(); cameraRelease = nil end
+			local okCamera, camera = pcall(function() return env.services.Workspace.CurrentCamera end)
+			if okCamera and camera then
+				cameraRelease = dispose.connection(camera:GetPropertyChangedSignal("ViewportSize"):Connect(debouncedRefresh), "viewport")
+			end
+		end
+
+		bindCamera()
 		-- The camera instance itself is replaced on respawn in some games, so the
 		-- workspace is watched too.
 		pcall(function()
-			env.services.Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-				local okNew, newCamera = pcall(function() return env.services.Workspace.CurrentCamera end)
-				if okNew and newCamera then
-					newCamera:GetPropertyChangedSignal("ViewportSize"):Connect(debouncedRefresh)
-				end
+			watch(env.services.Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+				bindCamera()
 				refresh("camera")
-			end)
+			end))
 		end)
 
 		-- The on-screen keyboard is not a resize: the viewport does not change, so
 		-- it has to be watched separately or the composer ends up behind it.
 		for _, property in ipairs({ "OnScreenKeyboardVisible", "OnScreenKeyboardSize" }) do
 			pcall(function()
-				env.uis:GetPropertyChangedSignal(property):Connect(function()
-					sample()
-					M.changed:fire({ reason = "keyboard", mode = M.mode, breakpoint = M.breakpoint })
-				end)
+				watch(env.uis:GetPropertyChangedSignal(property):Connect(function() refresh("keyboard") end))
 			end)
 		end
 
 		for _, property in ipairs({ "ReducedMotionEnabled", "PreferredTransparency" }) do
 			pcall(function()
-				env.guisvc:GetPropertyChangedSignal(property):Connect(function() refresh(property) end)
+				watch(env.guisvc:GetPropertyChangedSignal(property):Connect(function() refresh(property) end))
 			end)
 		end
 
 		pcall(function()
-			env.uis.LastInputTypeChanged:Connect(function(inputType)
+			watch(env.uis.LastInputTypeChanged:Connect(function(inputType)
 				local name = tostring(inputType and inputType.Name or "")
 				local wasGamepad = M.gamepad
 				if name:find("Gamepad") then M.gamepad = true end
 				if wasGamepad ~= M.gamepad then refresh("input") end
-			end)
+			end))
 		end)
 
 		local config = env.require("runtime/config")
-		config.changed:connect(function(path)
+		releases[#releases + 1] = dispose.add(config.changed:connect(function(path)
 			if path == "ui.layout" or path == "ui.reduceMotion" then refresh("setting") end
-		end)
+		end), "responsive settings")
+		watch(screenGui.Destroying:Connect(function()
+			if M.screen == screenGui then M.destroy() end
+		end))
+		releases[#releases + 1] = dispose.add(function()
+			generation = generation + 1
+			M.ready = false
+			M.screen = nil
+		end, "responsive lifetime")
 
 		log.info("responsive", string.format("%s / %s at %dx%d, touch %s, gamepad %s",
 			M.breakpoint, M.mode, M.viewport.X, M.viewport.Y,
@@ -268,8 +297,22 @@ return function(env)
 	-- How much of the bottom of the screen is unusable: the on-screen keyboard when
 	-- it is up, otherwise the platform's own bottom furniture.
 	function M.bottomObstruction()
-		if M.keyboardHeight > 0 then return M.keyboardHeight end
-		return M.bottomInset
+		return math.max(M.keyboardHeight, M.bottomInset)
+	end
+
+	-- Safe bounds in the caller's coordinate space. ScreenGui already removes its
+	-- inset; subtracting it again is what displaced centred surfaces below headers.
+	function M.usableRect(relative, margin)
+		margin = margin or 0
+		local origin = relative and relative.AbsolutePosition or Vector2.new(0, 0)
+		local size = relative and relative.AbsoluteSize or M.viewport
+		if size.X <= 0 or size.Y <= 0 then size = M.viewport end
+		margin = math.max(0, math.min(margin, (math.min(size.X, size.Y) - 1) / 2))
+		local left = math.max(0, M.inset.X - origin.X) + margin
+		local top = math.max(0, M.inset.Y - origin.Y) + margin
+		local right = math.min(size.X, M.viewport.X - origin.X) - margin
+		local bottom = math.min(size.Y, M.viewport.Y - M.bottomObstruction() - origin.Y) - margin
+		return { x = left, y = top, width = math.max(1, right - left), height = math.max(1, bottom - top) }
 	end
 
 	function M.describe()

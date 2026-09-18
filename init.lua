@@ -19,7 +19,7 @@ end
 
 local hostContext = ...
 
-local VERSION = "1.1.1"
+local VERSION = "1.2.0"
 local FOLDER = "UAI"
 local BUILD = type(__UAI_BUILD) == "string" and __UAI_BUILD or VERSION
 
@@ -68,11 +68,17 @@ if globalTable and type(globalTable.UAI) == "table" then
 				end
 			end
 			local composer = existing.app.chatPanel and existing.app.chatPanel.composer
+			local chatLoops = existing.env.loadedModules and existing.env.loadedModules["runtime/chatloops"]
+			if chatLoops and #chatLoops.running() > 0 then
+				return "Update ready. Stop your chat loops before running the loader again."
+			end
+			local composerModule = existing.env.loadedModules and existing.env.loadedModules["ui/chat/composer"]
 			local quick = existing.env.loadedModules and existing.env.loadedModules["ui/quickchat"]
 			local function hasText(field)
 				return field and type(field.get) == "function" and tostring(field.get()):find("%S") ~= nil
 			end
-			if composer and (hasText(composer.field) or #(composer.attachments or {}) > 0) then
+			if (composer and (hasText(composer.field) or #(composer.attachments or {}) > 0))
+				or (composerModule and composerModule.hasDrafts and composerModule.hasDrafts()) then
 				return "Update ready. Send or clear your draft and attachments before running the loader again."
 			end
 			if quick and hasText(quick.field) then

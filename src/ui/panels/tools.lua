@@ -27,6 +27,7 @@ return function(env)
 	function M.new(parent)
 		local panel = {}
 		local filter = ""
+		local expanded = {}
 
 		local column = P.column(parent, {
 			name = "ToolsPanel",
@@ -63,6 +64,8 @@ return function(env)
 		local scroll
 
 		local function rebuild()
+			if not column.Parent or not scroll then return end
+			local scrollPosition = scroll.instance.CanvasPosition
 			scroll.clear()
 			local needle = filter:lower()
 			local grouped = {}
@@ -146,12 +149,14 @@ return function(env)
 						name = tool.name,
 						layoutOrder = position,
 						gap = theme.space.xs,
+						padding = theme.space.md,
+						bg = theme.color.surface,
+						radius = theme.radius.md,
 					})
 
-					local top = P.row(card, {
+					local top = P.column(card, {
 						size = UDim2.new(1, 0, 0, 0),
 						auto = "Y",
-						wrap = true,
 						gap = theme.space.xs,
 						layoutOrder = 1,
 					})
@@ -159,19 +164,19 @@ return function(env)
 						text = tool.name,
 						role = "monoSmall",
 						color = missing and theme.color.textDisabled or theme.color.text,
+						wrap = true,
+						auto = "Y",
 						layoutOrder = 1,
 					})
-					name.Size = UDim2.new(1, 0, 0, 0)
-					name.AutomaticSize = Enum.AutomaticSize.Y
-					name.TextWrapped = true
-
-					P.badge(top, {
+					local badges = P.row(top, { size = UDim2.new(1, 0, 0, 0), auto = "Y",
+						wrap = true, gap = theme.space.xs, layoutOrder = 2 })
+					P.badge(badges, {
 						text = tool.risk,
 						tone = tool.risk == "read" and "info" or (tool.risk == "danger" and "bad" or "warn"),
 						layoutOrder = 2,
 					})
 					if missing then
-						P.badge(top, { text = "unavailable", tone = "warn", layoutOrder = 3 })
+						P.badge(badges, { text = "unavailable", tone = "warn", layoutOrder = 3 })
 					end
 
 					local description = P.text(card, {
@@ -184,7 +189,16 @@ return function(env)
 					})
 					description.Size = UDim2.new(1, 0, 0, 0)
 
-					local params = P.text(card, {
+					local details = P.column(card, { name = "ToolDetails", size = UDim2.new(1, 0, 0, 0),
+						auto = "Y", gap = theme.space.sm, layoutOrder = 4, visible = expanded[tool.name] == true })
+					P.button(card, { name = "ToolDetailsToggle",
+						text = expanded[tool.name] and "Hide details" or "Parameters & permissions", variant = "ghost",
+						size = "sm", fill = true, align = "Left", tight = true, layoutOrder = 3, onClick = function(button)
+							details.Visible = not details.Visible
+							expanded[tool.name] = details.Visible
+							button.setText(details.Visible and "Hide details" or "Parameters & permissions")
+						end })
+					local params = P.text(details, {
 						text = schema.describe(tool.parameters),
 						role = "caption",
 						color = theme.color.textTertiary,
@@ -195,7 +209,7 @@ return function(env)
 					params.Size = UDim2.new(1, 0, 0, 0)
 
 					if missing then
-						local reason = P.text(card, {
+						local reason = P.text(details, {
 							text = caps.reason(missing),
 							role = "caption",
 							color = theme.color.warn,
@@ -205,7 +219,7 @@ return function(env)
 						})
 						reason.Size = UDim2.new(1, 0, 0, 0)
 					else
-						C.segmented(card, {
+						C.segmented(details, {
 							options = RULE_OPTIONS,
 							value = permissions.ruleFor(tool.name) or "default",
 							layoutOrder = 4,
@@ -216,6 +230,7 @@ return function(env)
 					end
 				end
 			end
+			scroll.instance.CanvasPosition = scrollPosition
 		end
 
 		-- Third in the head block, stated rather than left to the tie-break: the two
@@ -227,10 +242,16 @@ return function(env)
 			onChange = function(text)
 				filter = util.trim(text)
 				rebuild()
+				if scroll then scroll.instance.CanvasPosition = Vector2.new(0, 0) end
 			end,
 		})
+		P.button(head, { name = "ManageChatLoops", text = "Chat loops & quiz scores", variant = "ghost", size = "sm", fill = true, align = "Left",
+			layoutOrder = 4, onClick = function(button) env.require("ui/chat/loops").open(button.instance) end })
 
-		scroll = P.scroll(column, {
+		-- Keep the flex item outside the clearable list contents.
+		local listHolder = P.frame(column, { name = "ToolListHolder", size = UDim2.new(1, 0, 0, 0),
+			flex = "Fill", layoutOrder = 2 })
+		scroll = P.scroll(listHolder, {
 			name = "ToolList",
 			size = UDim2.new(1, 0, 1, 0),
 			gap = theme.space.sm,
@@ -239,12 +260,11 @@ return function(env)
 			padding = { x = theme.space.lg, top = theme.space.md, bottom = theme.space.xl },
 			layoutOrder = 2,
 		})
-		local flex = Instance.new("UIFlexItem", scroll.instance)
-		flex.FlexMode = Enum.UIFlexMode.Fill
 
 		rebuild()
 		panel.refresh = rebuild
 		panel.unsubscribe = permissions.changed:connect(rebuild)
+		column.Destroying:Connect(function() pcall(panel.unsubscribe) end)
 		return panel
 	end
 

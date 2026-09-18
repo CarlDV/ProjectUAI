@@ -195,6 +195,7 @@ return function(env)
 		local buttons = P.row(settings, {
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
+			wrap = true,
 			gap = theme.space.sm,
 			layoutOrder = 6,
 		})
@@ -230,6 +231,11 @@ return function(env)
 		})
 
 		describe()
+		local unsubscribeConfig = config.changed:connect(function(path)
+			if path == nil or path == "bridge" or path == "bridge.enabled" then
+				toggle.set(config.get("bridge.enabled", false) == true, true)
+			end
+		end)
 		local unsubscribeBridge = bridge.changed:connect(function()
 			if not statusCard.Parent then return end
 			describe()
@@ -241,6 +247,7 @@ return function(env)
 		statusCard.Destroying:Connect(function()
 			pcall(unsubscribeBridge)
 			pcall(unsubscribeSessions)
+			pcall(unsubscribeConfig)
 		end)
 
 		return statusCard

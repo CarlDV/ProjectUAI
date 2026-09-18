@@ -261,7 +261,9 @@ return function(env)
 		end
 
 		function session.abort()
-			if not session.busy then return false end
+			local loops = env.loadedModules and env.loadedModules["runtime/chatloops"]
+			local stoppedLoops = loops and loops.stop(nil, session) or 0
+			if not session.busy then return stoppedLoops > 0 end
 			session.abortFlag = true
 			session.emit("status", { text = "Stopping" })
 			permissions.denyAll("aborted", session)

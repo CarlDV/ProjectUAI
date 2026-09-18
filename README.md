@@ -82,6 +82,32 @@ and usage controls are always available from the same menu. The contrast
 of every pair the interface puts together is computed in the test suite, so a retune
 cannot quietly make something unreadable.
 
+**Markdown tables and compact thinking.** Replies support aligned pipe tables with
+formatted cells and horizontal scrolling on narrow screens. Long tables and thinking
+traces have bounded scroll areas without dropping their content. Thinking starts
+collapsed; consecutive trace updates share a disclosure until a tool separates them.
+The model picker keeps search and selection stable, and its provider selector and
+the composer's model chip size to their actual labels.
+
+**Managed in-game chat loops.** Ask for a quiz, rotating announcements, or keyword
+replies. `quiz_bot`, `auto_chat`, and `auto_reply` return a background job immediately;
+`chat_loop_status` reports progress and quiz scores, and `chat_loop_stop` stops jobs.
+Active jobs also have a Stop all control in chat. Loops have configurable intervals,
+counts, and durations, and stop when their conversation is cleared or removed, chat
+is disabled, or the client unloads.
+
+**Independent in-game chatbot.** `chat_bot` listens to new player messages and
+answers with the selected AI provider/model using its own short conversation memory.
+Set `instructions` for its personality, `prefix` (default `[AGENT]`), and optionally
+`user_ids` to choose players. It returns immediately and appears in the chat-loop
+indicator; `chat_loop_status` reports its progress and `chat_loop_stop` stops it.
+By default it runs for 600 seconds, sends at most 100 replies, and waits at least
+5 seconds between sends. Rapid messages are batched into one response. Incoming
+message IDs and short-window repeats are deduplicated, self/system/tagged-bot
+messages are ignored, and repeated reply text is suppressed for the entire run.
+Only one managed job owns a channel, and manual `chat_send` calls are blocked there
+while the chatbot runs. A failed or ambiguous chat send stops the bot without retrying.
+
 **Every listing the model produced, in the transcript.** A tool call that carries
 code -- the Luau it is about to execute, the body it is about to write to a file, the
 property map it is about to apply -- draws it under the row as numbered, horizontally
@@ -128,7 +154,7 @@ collapses from the header and comes back the same way, and a conversation reopen
 after a restart shows what was said in it rather than a greeting -- the transcript is
 written to disk alongside the model's own context, which is the half that used to
 travel alone. An
-empty conversation opens on the activity card: conversations, messages, tokens,
+empty conversation opens with prompt starters and an expandable activity card: conversations, messages, tokens,
 active days, streaks, the busiest hour, the model that did the most work, and six
 months of daily activity as a grid. Every figure on it is counted from what this
 client observed and kept -- there is no sample data anywhere in the interface, and
@@ -187,6 +213,12 @@ luajit test/audit_regressions.lua
 luajit test/controls_loading.lua
 luajit test/controls_interactions.lua
 luajit test/markdown_regressions.lua
+luajit test/markdown_tables.lua
+luajit test/shared_ui_layout.lua
+luajit test/panel_layout_regressions.lua
+luajit test/model_picker.lua
+luajit test/chat_loops.lua
+luajit test/chat_bot.lua
 ```
 
 `test/run.lua` loads `dist/uai.lua` -- the actual artifact -- into a mocked

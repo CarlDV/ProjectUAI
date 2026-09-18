@@ -22,7 +22,7 @@ return function(env)
 			name = "Transcript",
 			size = props.size or UDim2.new(1, 0, 1, 0),
 			gap = theme.space.lg,
-			padding = { x = theme.space.lg, top = theme.space.lg, bottom = theme.space.sm },
+			padding = { x = theme.space.lg, top = theme.space.xl, bottom = theme.space.lg },
 			fade = false,
 		})
 
@@ -45,7 +45,10 @@ return function(env)
 		local latest = P.button(parent, {
 			name = "Latest",
 			text = "Jump to latest",
-			variant = "primary",
+			variant = "secondary",
+			icon = "chevron",
+			iconDirection = "down",
+			radius = theme.radius.pill,
 			size = "sm",
 			anchor = Vector2.new(0.5, 1),
 			position = UDim2.new(0.5, 0, 1, -theme.space.sm),
@@ -63,12 +66,13 @@ return function(env)
 		local followQueued = false
 		local function follow(force)
 			if force then view.pinned = true end
+			if view.welcomeCard then return end
 			if not view.pinned or followQueued then return end
 			followQueued = true
 			-- Let text measurement settle before following; several events can land together.
 			clock.delay(0, function()
 				followQueued = false
-				if scroll.instance.Parent and view.pinned then scroll.toBottom() end
+				if scroll.instance.Parent and view.pinned and not view.welcomeCard then scroll.toBottom() end
 			end)
 		end
 		scroll.layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() follow() end)
@@ -81,11 +85,15 @@ return function(env)
 		-- jumping here is the "still at the bottom" the user left.
 		function view.repin()
 			view.pinned = true
-			scroll.toBottom()
+			if view.welcomeCard then
+				scroll.instance.CanvasPosition = Vector2.new(0, 0)
+			else
+				scroll.toBottom()
+			end
 		end
 
 		scroll.instance:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
-			view.pinned = scroll.atBottom(theme.space.huge)
+			view.pinned = view.welcomeCard ~= nil or scroll.atBottom(theme.space.huge)
 			latest.instance.Visible = not view.pinned
 		end)
 
@@ -166,20 +174,26 @@ return function(env)
 
 		local function revealAgent(text, animate)
 			local isHarness = (env.require("runtime/caps").executor or ""):find("OfflineHarness") ~= nil
-			if not animate or responsive.reduceMotion or isHarness then
+			-- Structured replies render once. Rebuilding a table or code viewport at
+			-- every reveal tick creates layout jumps and repeatedly resets its scroll.
+			local structured = false
+			for _, block in ipairs(env.require("ui/markdown").blocks(text)) do
+				if block.kind == "table" or block.kind == "code" then structured = true; break end
+			end
+			if not animate or responsive.reduceMotion or isHarness or structured then
 				stopReveal(false)
-				local handle = message.agent(scroll.instance, text, nextOrder(), view.model)
+				local handle = message.agent(scroll.instance, text, nextOrder(), view.model, props)
 				view.agentHandle = handle
 				follow()
 				return handle
 			end
 
 			stopReveal(true)
-			local handle = message.agent(scroll.instance, "", nextOrder(), view.model)
+			local handle = message.agent(scroll.instance, "", nextOrder(), view.model, props)
 			view.agentHandle = handle
 
 			local len = #text
-			local targetDuration = math.clamp(0.4 + (len / 1200) * 0.7, 0.45, 1.25)
+			local targetDuration = util.clamp(0.4 + (len / 1200) * 0.7, 0.45, 1.25)
 			local tickInterval = 0.03
 			local totalTicks = math.max(12, math.floor(targetDuration / tickInterval))
 			local charsPerTick = math.max(1, math.ceil(len / totalTicks))
@@ -204,7 +218,14 @@ return function(env)
 					stopReveal(false)
 					handle.finish(text)
 				else
-					handle.stream(text:sub(1, shown))
+					-- Reveal only complete UTF-8 characters, including emoji and CJK text.
+					local boundary = shown
+					while boundary > 0 do
+						local byte = text:byte(boundary + 1)
+						if not byte or byte < 128 or byte >= 192 then break end
+						boundary = boundary - 1
+					end
+					handle.stream(text:sub(1, boundary))
 				end
 				follow()
 			end)
@@ -248,16 +269,17 @@ return function(env)
 				pcall(function() view.welcomeCard:Destroy() end)
 				view.welcomeCard = nil
 			end
-			view.welcomeCard = env.require("ui/panels/home").card(scroll.instance, nextOrder())
+			view.welcomeCard = env.require("ui/panels/home").card(scroll.instance, nextOrder(), props)
+			scroll.instance.CanvasPosition = Vector2.new(0, 0)
 			if providers.count() == 0 then
-				C.emptyState(scroll.instance, {
+				C.emptyState(view.welcomeCard, {
 					title = "No provider configured",
 					description = "Add an OpenAI-compatible endpoint to start. Anything that speaks /v1/chat/completions works: a hosted API, a relay, or a local server.",
 					action = "Open providers",
 					onAction = function()
 						env.require("ui/app").show("providers")
 					end,
-					layoutOrder = nextOrder(),
+					layoutOrder = 5,
 				})
 			end
 		end
@@ -274,7 +296,7 @@ return function(env)
 					view.welcomeCard = nil
 				end
 				view.agentHandle = nil
-				message.user(scroll.instance, event.text, nextOrder())
+				message.user(scroll.instance, event.text, nextOrder(), props)
 				view.pinned = true
 				follow(true)
 			elseif event.kind == "status" then
@@ -293,8 +315,10 @@ return function(env)
 				ensureWorking().set("Contacting " .. tostring(event.provider))
 				follow()
 			elseif event.kind == "assistant:reasoning" then
-				local into, order = target()
-				message.reasoning(into, event.text, order)
+				if util.trim(event.text or "") == "" then return end
+				local run = openRun()
+				if run.thought then run.thought.append(event.text)
+				else run.thought = message.reasoning(run.rows, event.text, run.slot()) end
 				follow()
 			elseif event.kind == "assistant:text" then
 				local trimmed = util.trim(event.text or "")
@@ -315,6 +339,7 @@ return function(env)
 				-- restarted the spinner's phase and left the following request with no
 				-- indicator at all.
 				local run = openRun(event.name)
+				run.thought = nil
 				local handle = message.toolCall(run.rows, event, run.slot())
 				handle.run = run
 				run.opened()
@@ -329,7 +354,7 @@ return function(env)
 				local handle = view.tools[event.id]
 				if handle then
 					handle.finish(event)
-					if handle.run then handle.run.closed(event.ok) end
+					if handle.run then handle.run.closed(event.kind ~= "tool:error" and event.ok ~= false) end
 					view.tools[event.id] = nil
 				else
 					local into, order = target()

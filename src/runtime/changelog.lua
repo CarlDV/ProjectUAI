@@ -23,6 +23,34 @@ return function(env)
 
 	local ENTRIES = {
 		{
+			version = "1.2.0",
+			date = "September 19, 2026",
+			title = "UI repair, Markdown tables, and managed chat loops",
+			highlights = "A measured, compact chat interface with Markdown tables, a refined model picker, bounded thinking, and background quizzes and chat automation.",
+			sections = {
+				{ category = "added", items = {
+					"Markdown tables: aligned headers and cells, escaped pipes and inline code, responsive columns, and scrollable wide or long tables without dropping content.",
+					"Managed chat tools: quiz_bot hosts and scores quizzes, auto_chat rotates messages, and auto_reply handles keyword responses; chat_loop_status and chat_loop_stop expose progress and cancellation.",
+					"Independent chat_bot: AI conversation in Roblox chat with its own memory, configurable personality and player scope, duplicate-safe replies, and shared status/stop controls.",
+					"Chat loop status and Stop all controls, with per-conversation cleanup and automatic shutdown on unload.",
+					"Prompt starters and per-conversation draft/attachment retention across navigation and UI rebuilds.",
+				} },
+				{ category = "improved", items = {
+					"Compact composer with content-sized model chips, optional multiline input, and secondary controls in one menu. Message copy/reuse/quote action bars have been removed.",
+					"Model picker: content-sized provider selector, stable search and model rows, clear selection, optional effort controls, and a single scroll owner on small screens.",
+					"Thinking stays collapsed initially, renders readable inline formatting when expanded, and uses a bounded scroll area for long traces.",
+					"Provider tabs size to their labels; settings, tool details, logs, subagent rows, and quick chat use more consistent spacing and preserve reading position.",
+				} },
+				{ category = "fixed", items = {
+					"Modal headers and content no longer compete for flex height; footer space follows its visible actions and respects keyboard/safe-area bounds.",
+					"Narrow menus, segmented controls, badges, key/value rows, and large-text layouts keep labels and touch targets inside their bounds.",
+					"UI teardown releases subscriptions and stale animation callbacks; repeated layout changes no longer accumulate camera listeners or revive closed surfaces.",
+					"Chat sending reports missing channels and rejected sends accurately. Loops honor stop, permission changes, channel selection, pacing, and session removal.",
+					"Unicode response reveal avoids splitting emoji and CJK characters; structured replies render without repeated table/code layout jumps.",
+				} },
+			},
+		},
+		{
 			version = "1.1.1",
 			date = "September 2026",
 			title = "OpenCode Zen workaround, compact composer and response polish",

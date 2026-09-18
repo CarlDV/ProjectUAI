@@ -167,7 +167,7 @@ return function(env)
 		})
 		R.toggle(appearance, {
 			label = "Show token counts",
-			hint = "The running token and cost line under the composer.",
+			hint = "Token and cost details in the composer's options menu.",
 			path = "ui.showUsage",
 		})
 		R.toggle(appearance, {
@@ -229,6 +229,7 @@ return function(env)
 				-- Captured rather than typed: a user thinks "this key", and a character
 				-- would not survive a different keyboard layout.
 				quickchat.captureNext(function(name)
+					if not keyButton.instance.Parent then return end
 					keyButton.setText(name)
 					describeKey()
 				end)
@@ -1368,7 +1369,10 @@ return function(env)
 			gap = theme.space.sm,
 		})
 		local function refreshSkills()
-			skillsList:ClearAllChildren()
+			-- Keep the layout: clearing it stacked every installed skill at (0, 0).
+			for _, child in ipairs(skillsList:GetChildren()) do
+				if child:IsA("GuiObject") then child:Destroy() end
+			end
 			local list = skillsEngine.list()
 			if #list == 0 then
 				R.paragraph(skillsList, "No skills installed yet.",
@@ -1386,7 +1390,7 @@ return function(env)
 				local text = P.column(row, {
 					size = UDim2.new(0, 0, 0, 0), auto = "Y", flex = "Fill", gap = 0, layoutOrder = 1,
 				})
-				P.text(text, { text = skill.name, role = "small" })
+				P.text(text, { text = skill.name, role = "small", wrap = true, auto = "Y" })
 				local detail = skill.description ~= "" and util.ellipsis(skill.description, 140)
 					or (skill.unreadable and "could not be read") or "no description"
 				P.text(text, {

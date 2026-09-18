@@ -312,6 +312,7 @@ return function(env)
 			stopRelease()
 		end)
 
+		handle.value = quantise(handle.value)
 		paint()
 		return handle
 	end
@@ -328,19 +329,16 @@ return function(env)
 	local SEGMENT_MIN = 64
 	local SEGMENT_CAP = 860
 
-	-- Average glyph advance as a fraction of the font size, for this family at label
-	-- weight. Derived rather than hardcoded in pixels, so the measurement follows the
-	-- text scale instead of silently mis-measuring every label at 1.4.
-	local GLYPH_RATIO = 0.53
-
+	-- Measure the selected font rather than estimating byte counts at one density.
 	local function segmentedWidth(options)
-		local perCharacter = theme.text.label.size * GLYPH_RATIO
-		local total = 0
+		local widest = 0
 		for _, option in ipairs(options or {}) do
 			local text = tostring(option.label or option.value or option)
-			total = total + math.max(SEGMENT_MIN, math.floor(#text * perCharacter) + theme.space.md * 2)
+			widest = math.max(widest, SEGMENT_MIN, math.ceil(P.measureText(text, { role = "label" }).X) + theme.space.md * 2)
 		end
-		total = total + theme.space.xxs + math.max(#(options or {}) - 1, 0) * theme.space.hair
+		-- Fill gives each segment an equal share, so reserve the widest label in every
+		-- share rather than summing unequal widths and truncating only the long label.
+		local total = widest * #(options or {}) + theme.space.hair * 2 + math.max(#(options or {}) - 1, 0) * theme.space.hair
 		return math.min(total, SEGMENT_CAP)
 	end
 
@@ -353,7 +351,10 @@ return function(env)
 
 	function C.segmented(parent, props)
 		props = props or {}
-		local height = math.max(theme.size.tab, responsive.minTarget())
+		-- Padding belongs outside the hit target: a 44px well with a 2px inset leaves
+		-- only 40px for its buttons. Keep both scaled labels and the platform floor.
+		local height = math.max(theme.size.tab,
+			math.max(responsive.minTarget(), theme.text.label.height) + theme.space.hair * 2)
 		local cap = segmentedWidth(props.options)
 		-- An inset well: the container is a step *below* whatever it sits on and has
 		-- no outline of its own, so the selected segment reads as raised out of it
@@ -474,7 +475,7 @@ return function(env)
 	function C.keyValue(parent, props)
 		props = props or {}
 		local keyWidth = props.keyWidth or theme.size.keyColumn
-		local row = P.row(parent, {
+		local row, layout = P.row(parent, {
 			name = "KeyValue",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
@@ -499,7 +500,23 @@ return function(env)
 			auto = "Y",
 			layoutOrder = 2,
 		})
-		value.Size = UDim2.new(1, -(keyWidth + theme.space.sm), 0, 0)
+		local stacked
+		local function fit()
+			-- Use this row's width, not the screen breakpoint: a desktop sidebar or a
+			-- narrow card can have less room than a phone's full-width panel.
+			local narrow = row.AbsoluteSize.X < keyWidth * 2 + theme.space.sm
+			if stacked == narrow then return end
+			stacked = narrow
+			layout.FillDirection = narrow and Enum.FillDirection.Vertical or Enum.FillDirection.Horizontal
+			layout.Padding = UDim.new(0, narrow and theme.space.xxs or theme.space.sm)
+			key.AutomaticSize = narrow and Enum.AutomaticSize.Y or Enum.AutomaticSize.None
+			key.TextWrapped = narrow
+			key.TextTruncate = narrow and Enum.TextTruncate.None or Enum.TextTruncate.AtEnd
+			key.Size = narrow and UDim2.new(1, 0, 0, 0) or UDim2.fromOffset(keyWidth, theme.text.small.height)
+			value.Size = UDim2.new(1, narrow and 0 or -(keyWidth + theme.space.sm), 0, 0)
+		end
+		row:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
+		fit()
 		return row, value
 	end
 

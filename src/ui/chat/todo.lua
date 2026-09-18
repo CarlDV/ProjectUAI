@@ -45,7 +45,7 @@ return function(env)
 			name = "Rule",
 			size = UDim2.new(1, 0, 0, theme.stroke.hair),
 			bg = theme.color.borderSubtle,
-			layoutOrder = 3,
+			layoutOrder = 4,
 		})
 
 		local toggle = P.rowButton(shell, {
@@ -71,13 +71,23 @@ return function(env)
 			layoutOrder = 2,
 		})
 		summary.Size = UDim2.new(1, -(theme.size.icon + theme.space.xs), 1, 0)
+		local trackHolder = P.frame(shell, {
+			name = "PlanProgress", size = UDim2.new(1, 0, 0, theme.size.track + theme.space.sm), layoutOrder = 2,
+		})
+		local track = P.frame(trackHolder, {
+			name = "Track", size = UDim2.new(1, -theme.space.xl * 2, 0, theme.size.track),
+			position = UDim2.fromOffset(theme.space.xl, 0), bg = theme.color.surfaceOverlay, radius = theme.radius.pill,
+		})
+		local progress = P.frame(track, {
+			name = "Completed", size = UDim2.fromScale(0, 1), bg = theme.color.accent, radius = theme.radius.pill,
+		})
 
 		local planScroll = P.scroll(shell, {
 			name = "Items",
 			size = UDim2.new(1, 0, 0, 0),
 			gap = theme.space.xs,
 			padding = { x = theme.space.xl, top = theme.space.xxs, bottom = theme.space.md },
-			layoutOrder = 2,
+			layoutOrder = 3,
 			visible = false,
 		})
 
@@ -114,6 +124,8 @@ return function(env)
 			shell.Visible = true
 
 			local counts = state.todoCounts(handle.session)
+			P.animate(progress, "hover", { Size = UDim2.fromScale(counts.done / math.max(counts.total, 1), 1),
+				BackgroundColor3 = counts.done == counts.total and theme.color.success or theme.color.accent })
 			local activeText
 			for _, item in ipairs(items) do
 				if item.status == "active" then activeText = item.text end

@@ -118,13 +118,28 @@ Scope:
 
 	local STYLE = [[
 Style:
-- Plain text. No markdown headings, no emoji, no decorative characters. Short
-  fenced code blocks are fine when the user asked for code.
+- Keep replies easy to scan: short paragraphs, a few bullets when useful, and
+  fenced code with a language tag. Use headings only for genuinely long answers.
+- Avoid decorative emoji, repeated summaries, and narrating your internal reasoning.
 - Answer first, detail second. Two or three sentences is usually right; go longer
   only when the user asked for depth or the result genuinely needs it.
 - Report what you did in terms of what changed, not which tools you called -- the
   interface already shows the calls.
 - Say "I could not" plainly when something failed, with the reason.]]
+	STYLE = STYLE .. [[
+
+Background chat:
+- Use quiz_bot to host a quiz, auto_chat to rotate messages, or auto_reply for
+  keyword responses in Roblox chat. Supply the content and a sensible interval.
+- Use chat_bot for an independent AI chatbot that converses with players, with
+  its own instructions and memory. It uses the selected provider/model, responds
+  only to new messages, and prevents duplicate replies. Do not run a polling
+  script, keep generating chat_send calls, or start another bot alongside it.
+- These return immediately and keep running independently. Report the loop ID;
+  do not poll in a tight loop or hold an agent turn open waiting for them.
+- Use chat_loop_status for progress and quiz scores, chat_loop_stop to stop.
+  The chat UI also offers a Stop all control. Never claim a message was delivered
+  when the chat transport reports failure.]]
 
 	local function environmentBlock()
 		local lines = {}

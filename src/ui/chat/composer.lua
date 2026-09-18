@@ -28,6 +28,21 @@ return function(env)
 	local traits = env.require("provider/traits")
 
 	local M = {}
+	-- UI-only drafts survive conversation switches and layout/theme rebuilds.
+	local drafts = {}
+	local draftViews = {}
+	local pendingSends = {}
+	local function copyAttachments(list)
+		local out = {}
+		for index, entry in ipairs(list or {}) do out[index] = entry end
+		return out
+	end
+	function M.hasDrafts()
+		for id, draft in pairs(drafts) do
+			if sessions.threads[id] and (util.trim(draft.text or "") ~= "" or #(draft.attachments or {}) > 0) then return true end
+		end
+		return false
+	end
 
 	-- How much of an attached file travels with the message. The agent can read the
 	-- rest with its own tools; this is context, not a transfer.
@@ -45,16 +60,35 @@ return function(env)
 			zIndex = theme.z.raised,
 		})
 		local composer = { expanded = false, busy = false, attachments = {} }
+		local draftId
+		local restoring = false
+		local destroyed = false
+		local draftView
+		local function alive() return not destroyed and shell.Parent ~= nil end
+		composer.isAlive = alive
+		local function saveDraft()
+			if not destroyed and draftId and sessions.threads[draftId] and composer.field and not restoring then
+				local previous = drafts[draftId] or {}
+				local text = composer.field.get()
+				drafts[draftId] = {
+					text = text, attachments = copyAttachments(composer.attachments), expanded = composer.expanded,
+					-- Rebuilds retain this version; real edits (even edit-away-and-back)
+					-- advance it so a returning send cannot erase a newer question.
+					textVersion = (previous.textVersion or 0) + (previous.text ~= text and 1 or 0),
+				}
+			end
+		end
 		local surface = P.frame(shell, {
 			name = "ComposerSurface", size = UDim2.new(1, -theme.space.lg * 2, 0, controlHeight + inset * 2),
 			position = UDim2.fromOffset(theme.space.lg, theme.space.xxs),
-			bg = theme.color.surfaceRaised, radius = theme.radius.md,
+			bg = theme.color.surface, radius = theme.radius.lg,
 		})
 		local boxStroke = P.stroke(surface, theme.color.border)
 		local sendButton
 		local function syncSend()
-			if sendButton then
-				sendButton.setEnabled(composer.busy or (composer.field and util.trim(composer.field.get()) ~= ""))
+			if alive() and sendButton then
+				sendButton.setEnabled(not pendingSends[draftId] and (composer.busy
+					or (composer.field and util.trim(composer.field.get()) ~= "")))
 			end
 		end
 
@@ -76,6 +110,7 @@ return function(env)
 			layoutOrder = 2,
 		})
 
+		local scopeChips = {}
 		local function chip(name, iconName, labelText, order, onClick)
 			local handle = P.rowButton(scopeRow, {
 				name = "Chip_" .. name,
@@ -100,6 +135,7 @@ return function(env)
 					layoutOrder = 2,
 				})
 			end
+			scopeChips[#scopeChips + 1] = handle
 			return handle
 		end
 
@@ -221,41 +257,66 @@ return function(env)
 
 		-- 5. Attach. Real files from the client's own folder, and the memory it keeps.
 		local attachRow
+		local attachmentHandles = {}
+		local function fitAttachments()
+			if not alive() then return end
+			local width = math.max(0, surface.AbsoluteSize.X - inset * 2)
+			for _, item in ipairs(attachmentHandles) do
+				local reserve = theme.space.xs * 2 + theme.space.xxs * 2
+					+ item.leading.Size.X.Offset + item.close.Size.X.Offset
+				local wanted = math.ceil(P.measureText(item.label.Text, { role = "caption" }).X) + reserve
+				item.button.instance.Size = UDim2.fromOffset(math.min(width, math.max(chipHeight, wanted)), chipHeight)
+			end
+		end
 		local function renderAttachments()
+			if not alive() then return end
 			for _, child in ipairs(attachRow:GetChildren()) do
 				if child:IsA("GuiObject") then child:Destroy() end
 			end
+			attachmentHandles = {}
 			attachRow.Visible = #composer.attachments > 0
 			for index, entry in ipairs(composer.attachments) do
 				local handle = P.rowButton(attachRow, {
 					name = "Attachment_" .. tostring(index),
-					auto = "X",
 					height = chipHeight,
-					size = UDim2.fromOffset(0, chipHeight),
+					size = UDim2.fromOffset(chipHeight, chipHeight),
 					bg = theme.color.surfaceRaised,
 					radius = theme.radius.sm,
 					gap = theme.space.xxs,
 					padding = { x = theme.space.xs },
 					layoutOrder = index,
 					onClick = function()
-						table.remove(composer.attachments, index)
-						renderAttachments()
+						if not alive() then return end
+						for position, attachment in ipairs(composer.attachments) do
+							if attachment == entry then
+								table.remove(composer.attachments, position)
+								renderAttachments()
+								break
+							end
+						end
 					end,
 				})
-				handle.icon("document", 1, theme.color.accent, theme.size.icon - theme.space.hair)
-				P.text(handle.row, {
-					text = util.ellipsis(entry.label, 32),
+				local leading = handle.icon("document", 1, theme.color.accent, theme.size.icon - theme.space.hair)
+				local label = P.text(handle.row, {
+					text = entry.label,
 					role = "caption",
 					color = theme.color.textSecondary,
-					auto = "X",
+					size = UDim2.new(0, 0, 0, theme.text.caption.height),
+					flex = "Fill",
+					truncate = true,
 					layoutOrder = 2,
 				})
-				handle.icon("close", 3, theme.color.textTertiary, theme.size.icon - theme.space.xxs)
+				local close = handle.icon("close", 3, theme.color.textTertiary, theme.size.icon - theme.space.xxs)
+				-- The whole chip remains the removal target, including the close icon.
+				attachmentHandles[#attachmentHandles + 1] = { button = handle, label = label, leading = leading, close = close }
 			end
+			fitAttachments()
 			if resizeComposer then resizeComposer() end
+			saveDraft()
 		end
 
 		local function attachMenu(target)
+			if not alive() then return end
 			local options = {}
 			-- The agent's workspace, which is where the model's own files live and where
 			-- an attached note is expected to be.
@@ -287,7 +348,9 @@ return function(env)
 				width = theme.size.menuWide,
 				options = options,
 				onSelect = function(value)
+					if not alive() then return end
 					local function attachFile(path)
+						if not alive() then return end
 						-- The agent's workspace first, then pastes, so a path the toast
 						-- just showed ("pastes/composer-...") is attachable as-is.
 						local body, err = fsx.read(path, { scope = "files" })
@@ -383,16 +446,42 @@ return function(env)
 		end
 
 		local function submit()
-			if composer.busy then return false end
+			if not alive() or composer.busy or not draftId or pendingSends[draftId] then return false end
+			local id = draftId
+			if not sessions.threads[id] or sessions.current().id ~= id then return false end
 			local text = util.trim(composer.field.get())
 			if text == "" then return end
 			local payload = compose(text)
 			if not props.onSend then return false end
-			local accepted = props.onSend(payload)
+			saveDraft()
+			local sent = drafts[id]
+			pendingSends[id] = true
+			syncSend()
+			-- The callback may yield, switch conversations, or destroy and replace
+			-- this composer before it returns. Settle against the session's draft.
+			local ok, accepted = pcall(props.onSend, payload)
+			local live = draftViews[id]
+			if live then live.capture() end
+			if ok and accepted ~= false and sessions.threads[id] and drafts[id] then
+				local current = drafts[id]
+				local clearText = current.textVersion == sent.textVersion and current.text == sent.text
+				local submitted, kept = {}, {}
+				for _, entry in ipairs(sent.attachments) do submitted[entry] = true end
+				for _, entry in ipairs(current.attachments) do
+					if not submitted[entry] then kept[#kept + 1] = entry end
+				end
+				drafts[id] = {
+					text = clearText and "" or current.text,
+					textVersion = current.textVersion + (clearText and 1 or 0),
+					attachments = kept,
+					expanded = current.expanded and not (clearText and #kept == 0 and current.expanded == sent.expanded),
+				}
+				if live then live.restore() end
+			end
+			pendingSends[id] = nil
+			if draftViews[id] then draftViews[id].sync() end
+			if not ok then error(accepted, 0) end
 			if accepted == false then return false end
-			composer.field.clear()
-			composer.attachments = {}
-			renderAttachments()
 			return true
 		end
 
@@ -402,38 +491,39 @@ return function(env)
 		-- keyboard shortcut that opens quick chat is a printable character, so "is this
 		-- focused" decides where the next keystroke goes.
 		local function paintFocus(focused)
+			if not alive() then return end
 			P.animate(boxStroke, "hover", {
 				Color = focused and theme.color.accent or theme.color.border,
 				Thickness = focused and theme.stroke.focus or theme.stroke.hair,
 			})
 			P.animate(surface, "hover", {
-				BackgroundColor3 = focused and theme.color.surfaceOverlay or theme.color.surfaceRaised,
+				BackgroundColor3 = focused and theme.color.surfaceRaised or theme.color.surface,
 			})
 		end
 
-		-- One line at rest, which is what a single-line field is.
-		--
-		-- It was briefly two, on the theory that the primary surface of the app deserves
-		-- the room. It does not: `multiline` is false at rest, so the second line was
-		-- empty space under one line of text with the caret at the top of it -- a tall
-		-- grey box, which is exactly what it looked like. The expand toggle is what asks
-		-- for room, and that is the mode where the extra lines can actually be typed
-		-- into.
+		local function promptHeight()
+			if composer.expanded then
+				return math.max(theme.text.body.height * 2 + theme.space.md,
+					math.min(theme.size.composerExpanded, responsive.viewport.Y * 0.25))
+			end
+			return math.max(theme.size.control, theme.text.body.height, responsive.minTarget())
+		end
 		local function buildField(carried)
 			local previousLength = #(carried or "")
 			return P.field(fieldHolder, {
 				name = "Prompt",
 				bare = true,
-				placeholder = props.placeholder or "Describe a task or ask a question…",
+				placeholder = props.placeholder or "Message UAI…",
 				multiline = composer.expanded,
-				height = composer.expanded and math.max(theme.text.body.height * 2 + theme.space.md,
-					math.min(theme.text.body.height * 5 + theme.space.md, responsive.viewport.Y * 0.25)) or theme.size.control,
+				height = promptHeight(),
 				text = carried,
 				onFocus = function() paintFocus(true) end,
 				onBlur = function() paintFocus(false) end,
 				onChange = function(text)
-					if type(text) ~= "string" then return end
+					if not alive() or type(text) ~= "string" then return end
 					syncSend()
+					saveDraft()
+					if restoring then previousLength = #text; return end
 					local cap = sessions.PASTE_CAP
 					local jumped = #text > cap and (#text - previousLength) > cap
 					previousLength = #text
@@ -459,11 +549,13 @@ return function(env)
 		end
 		composer.field = buildField(nil)
 
-		sendButton = P.iconButton(inputRow, {
+		local metaRow = P.frame(inputRow, { name = "Meta", size = UDim2.fromScale(1, 1) })
+		sendButton = P.iconButton(metaRow, {
 			name = "Send",
 			icon = "send",
 			variant = "primary",
-			diameter = theme.size.control,
+			diameter = controlHeight,
+			radius = theme.radius.lg,
 			layoutOrder = 2,
 			onClick = function()
 				if composer.busy then
@@ -475,33 +567,46 @@ return function(env)
 		})
 		sendButton.instance.LayoutOrder = 2
 
-		-- All primary input controls share one line. More holds secondary controls.
-		local metaRow = P.frame(inputRow, { name = "Meta", size = UDim2.fromScale(1, 1) })
 		local details = P.frame(shell, { name = "ComposerState", size = UDim2.fromOffset(0, 0), visible = false })
-		local permissionLabel = P.text(details, { name = "PermissionLabel", text = "", role = "caption" })
-		local statusLabel = P.text(details, { name = "Status", text = "", role = "caption" })
-		local plusButton = P.iconButton(inputRow, {
+		local permissionLabel = P.text(scopeRow, { name = "PermissionLabel", text = "", role = "caption", auto = "X", layoutOrder = 6 })
+		local statusLabel = P.text(details, { name = "Status", text = "", role = "caption", color = theme.color.textTertiary,
+			size = UDim2.fromScale(1, 1), truncate = true })
+		local plusButton = P.iconButton(metaRow, {
 			name = "AddContext", icon = "plus", variant = "ghost", diameter = theme.size.chip,
 			onClick = function(handle) attachMenu(handle.instance) end,
 		})
 		local modelChip = P.rowButton(metaRow, {
-			name = "ModelChip", size = UDim2.fromOffset(140, chipHeight), height = chipHeight,
-			radius = theme.radius.sm, gap = theme.space.xxs, padding = { x = theme.space.xs },
+			name = "ModelChip", size = UDim2.fromOffset(theme.size.composerModel, chipHeight), height = chipHeight,
+			radius = theme.radius.sm, gap = theme.space.xs, padding = { x = theme.space.xs },
 			onClick = function(handle) M.providerMenu(handle.instance, composer) end,
 		})
 		local modelLabel = P.text(modelChip.row, {
 			name = "ModelLabel", text = "", role = "caption", color = theme.color.textSecondary,
-			size = UDim2.new(1, -(theme.size.dot + theme.space.xxs + theme.space.xs * 2), 0, theme.text.caption.height),
-			truncate = true, layoutOrder = 1,
+			size = UDim2.new(0, 0, 0, theme.text.caption.height), flex = "Fill",
+			truncate = true, layoutOrder = 2,
 		})
-		local effortLabel = P.text(details, { name = "EffortLabel", text = "", role = "caption" })
+		local effortLabel = P.text(scopeRow, { name = "EffortLabel", text = "", role = "caption", auto = "X", layoutOrder = 7 })
 		local contextDot = P.statusDot(modelChip.row, {
-			diameter = theme.size.dot, color = theme.color.textTertiary, layoutOrder = 2,
+			diameter = theme.size.dot, color = theme.color.textTertiary, layoutOrder = 1,
 		})
+		modelChip.icon("chevron", 3, theme.color.textTertiary, theme.size.icon)
+		local function promptMenu(target)
+			local options = {}
+			for _, entry in ipairs(env.require("ui/chat/prompts").items) do
+				options[#options + 1] = { label = entry.label, detail = entry.detail, icon = entry.icon, value = entry.id }
+			end
+			overlay.menu({ target = target, width = theme.size.menuWide, options = options, onSelect = function(value)
+				for _, entry in ipairs(env.require("ui/chat/prompts").items) do
+					if entry.id == value then composer.insert(entry.text) end
+				end
+			end })
+		end
 		local moreButton = P.iconButton(metaRow, {
 			name = "ComposerOptions", icon = "ellipsis", variant = "ghost", diameter = theme.size.chip,
 			onClick = function(handle)
 				local options = {
+					{ label = "Chat loops", detail = "Status, quiz scores, and stop controls", value = "loops", icon = "sliders" },
+					{ label = "Prompt library", detail = "Explore, create, or diagnose", value = "prompts", icon = "spark" },
 					{ label = "Model and effort", detail = modelLabel.Text, value = "model", icon = "spark" },
 					{ label = "Permissions", detail = permissionLabel.Text, value = "permissions", icon = "sliders" },
 					{ label = scopeScroll.instance.Visible and "Hide context details" or "Show context details", value = "context", icon = "folder" },
@@ -513,7 +618,9 @@ return function(env)
 				options[#options + 1] = { divider = true }
 				options[#options + 1] = { label = "Clear conversation", value = "clear", icon = "trash", tone = "bad" }
 				overlay.menu({ target = handle.instance, options = options, onSelect = function(value)
-					if value == "model" then M.providerMenu(handle.instance, composer)
+					if value == "prompts" then promptMenu(handle.instance)
+					elseif value == "loops" then env.require("ui/chat/loops").open(handle.instance)
+					elseif value == "model" then M.providerMenu(handle.instance, composer)
 					elseif value == "permissions" then
 						local modes = {}
 						for _, mode in ipairs(permissions.MODES) do
@@ -533,24 +640,34 @@ return function(env)
 			end,
 		})
 		local function fitLabels()
+			if not alive() then return end
 			local width = math.max(surface.AbsoluteSize.X - inset * 2, 0)
-			local modelWidth = width >= 560 and math.min(160, width * 0.22) or 0
+			local left = chipHeight + theme.space.xs
+			local right = controlHeight + chipHeight + theme.space.sm * 2
+			-- Size to the actual label, not a permanent 144px slot around 'big-pickle'.
+			local measured = math.max(P.measureText(modelLabel.Text, { role = "caption" }).X, modelLabel.TextBounds.X)
+			local wanted = math.ceil(measured) + theme.size.dot + theme.size.icon + theme.space.xs * 4
+			local available = width - left - right - (composer.expanded and 0 or theme.size.composerFieldMin)
+			local modelWidth = math.max(0, math.min(wanted, theme.size.composerModel, available))
+			if modelWidth < math.min(wanted, theme.size.composerModelMin) then modelWidth = 0 end
 			modelChip.instance.Visible = modelWidth > 0
 			modelChip.instance.Size = UDim2.fromOffset(modelWidth, chipHeight)
-			modelChip.instance.AnchorPoint = Vector2.new(1, 0.5)
-			modelChip.instance.Position = UDim2.new(1, -(controlHeight + chipHeight + inset * 2), 0.5, 0)
+			modelChip.instance.AnchorPoint = composer.expanded and Vector2.new(0, 0.5) or Vector2.new(1, 0.5)
+			modelChip.instance.Position = composer.expanded and UDim2.new(0, left, 0.5, 0) or UDim2.new(1, -right, 0.5, 0)
 			plusButton.instance.AnchorPoint = Vector2.new(0, 0.5)
 			plusButton.instance.Position = UDim2.fromScale(0, 0.5)
 			moreButton.instance.AnchorPoint = Vector2.new(1, 0.5)
-			moreButton.instance.Position = UDim2.new(1, -(controlHeight + inset), 0.5, 0)
+			moreButton.instance.Position = UDim2.new(1, -(controlHeight + theme.space.sm), 0.5, 0)
 			sendButton.instance.AnchorPoint = Vector2.new(1, 0.5)
 			sendButton.instance.Position = UDim2.fromScale(1, 0.5)
-			local left = chipHeight + inset
-			local right = controlHeight + chipHeight + inset * 2 + (modelWidth > 0 and modelWidth + inset or 0)
-			fieldHolder.Position = UDim2.fromOffset(left, 0)
-			fieldHolder.Size = UDim2.new(1, -(left + right), 1, 0)
+			fieldHolder.Position = UDim2.fromOffset(composer.expanded and 0 or left, 0)
+			fieldHolder.Size = UDim2.new(1, composer.expanded and 0
+				or -(left + right + (modelWidth > 0 and modelWidth + theme.space.sm or 0)), 0, promptHeight())
 		end
+		local resizing = false
 		resizeComposer = function()
+			if not alive() or resizing then return end
+			resizing = true
 			local top = inset
 			if scopeScroll.instance.Visible then
 				scopeScroll.instance.Position = UDim2.fromOffset(inset, top)
@@ -562,21 +679,31 @@ return function(env)
 				attachRow.Size = UDim2.new(1, -inset * 2, 0, 0)
 				top = top + math.max(attachRow.AbsoluteSize.Y, chipHeight) + inset
 			end
-			local fieldHeight = composer.expanded and math.max(theme.text.body.height * 2 + theme.space.md,
-				math.min(theme.text.body.height * 5 + theme.space.md, responsive.viewport.Y * 0.25)) or controlHeight
+			local fieldHeight = promptHeight()
 			inputHolder.Position = UDim2.fromOffset(inset, top)
-			inputHolder.Size = UDim2.new(1, -inset * 2, 0, fieldHeight)
-			local surfaceHeight = top + fieldHeight + inset
+			local inputHeight = fieldHeight + (composer.expanded and controlHeight + theme.space.xs or 0)
+			inputHolder.Size = UDim2.new(1, -inset * 2, 0, inputHeight)
+			composer.field.shell.Size = UDim2.new(1, 0, 0, fieldHeight)
+			metaRow.Position = UDim2.fromOffset(0, composer.expanded and fieldHeight + theme.space.xs or 0)
+			metaRow.Size = UDim2.new(1, 0, 0, controlHeight)
+			local surfaceHeight = top + inputHeight + inset
 			surface.Size = UDim2.new(1, -theme.space.lg * 2, 0, surfaceHeight)
-			shell.Size = UDim2.new(1, 0, 0, surfaceHeight + theme.space.xxs + inset)
+			shell.Size = UDim2.new(1, 0, 0, surfaceHeight + theme.space.xxs + theme.space.sm)
 			fitLabels()
+			fitAttachments()
+			resizing = false
 		end
-		surface:GetPropertyChangedSignal("AbsoluteSize"):Connect(fitLabels)
+		surface:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+			fitLabels()
+			fitAttachments()
+		end)
+		modelLabel:GetPropertyChangedSignal("TextBounds"):Connect(fitLabels)
 		attachRow:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() resizeComposer() end)
 
 		-- Everything on the meta row, from the real records ---------------------
 
 		function composer.syncContext()
+			if not alive() then return end
 			local shortModes = { ask = "Ask first", auto = "Auto", full = "Full access" }
 			permissionLabel.Text = shortModes[permissions.mode()] or permissions.MODE_LABELS[permissions.mode()] or permissions.mode()
 			permissionLabel.TextColor3 = permissions.mode() == "full"
@@ -626,32 +753,71 @@ return function(env)
 				tone = theme.color.warn
 			end
 			contextDot.BackgroundColor3 = tone
+			if not record or util.trim(tostring(record.model or "")) == "" then
+				contextDot.BackgroundColor3 = theme.color.warn
+			end
 			fitLabels()
 		end
 
 		-- Rebuilding the field is the honest way to switch MultiLine: changing the
 		-- property on a live TextBox leaves its alignment and height wrong.
-		function composer.setExpanded(value)
+		function composer.setExpanded(value, keepFocus)
+			if not alive() then return end
 			composer.expanded = value == true
 			paintFocus(false)
 			local carried = composer.field.get()
 			pcall(function() composer.field.shell:Destroy() end)
 			composer.field = buildField(carried)
-			composer.field.focus()
+			if keepFocus ~= false then composer.field.focus() end
 			resizeComposer()
 			syncSend()
+			saveDraft()
+		end
+
+		function composer.insert(text)
+			if not alive() then return end
+			local previous = composer.field.get()
+			composer.field.set(previous == "" and text or (previous .. "\n\n" .. text))
+			if previous ~= "" or tostring(text):find("\n") then composer.setExpanded(true) end
+			composer.focus()
+		end
+
+		local function restoreDraft()
+			if not alive() then return end
+			restoring = true
+			local draft = drafts[draftId] or {}
+			composer.attachments = copyAttachments(draft.attachments)
+			composer.field.set(draft.text or "")
+			if composer.expanded ~= (draft.expanded == true) then composer.setExpanded(draft.expanded == true, false) end
+			renderAttachments()
+			restoring = false
+			syncSend()
+		end
+		draftView = { capture = saveDraft, restore = restoreDraft, sync = syncSend }
+		function composer.attach(session)
+			if not alive() or not session or draftId == session.id then return end
+			saveDraft()
+			if draftId and draftViews[draftId] == draftView then draftViews[draftId] = nil end
+			draftId = session.id
+			draftViews[draftId] = draftView
+			restoreDraft()
 		end
 
 		function composer.setBusy(value)
+			if not alive() then return end
 			composer.busy = value == true
 			if composer.mascot then pcall(composer.mascot.setBusy, composer.busy) end
 			sendButton.setIcon(composer.busy and "stop" or "send")
 			sendButton.setVariant(composer.busy and "danger" or "primary")
+			composer.field.instance.PlaceholderText = composer.busy and "Write a follow-up…"
+				or props.placeholder or "Message UAI…"
 			syncSend()
 		end
 
 		function composer.setStatus(text)
+			if not alive() then return end
 			statusLabel.Text = tostring(text or "")
+			statusLabel.TextColor3 = theme.color.accentHot
 		end
 
 		-- The running token line, which is a setting rather than progress: it is the one
@@ -659,6 +825,8 @@ return function(env)
 		-- them. Kept separate from setStatus so turning it off cannot also hide "Working
 		-- (step 3)".
 		function composer.setUsage(text)
+			if not alive() then return end
+			statusLabel.TextColor3 = theme.color.textTertiary
 			if config.get("ui.showUsage", true) ~= true then
 				statusLabel.Text = ""
 				return
@@ -667,12 +835,23 @@ return function(env)
 		end
 
 		function composer.focus()
-			composer.field.focus()
+			if alive() then composer.field.focus() end
 		end
 
 		-- Keep model and permission controls usable when the keyboard reduces height.
 		local unsubscribeResponsive = responsive.changed:connect(function()
-			if not metaRow.Parent then return end
+			if not alive() then return end
+			chipHeight = math.max(theme.size.chip, responsive.minTarget())
+			controlHeight = math.max(theme.size.control, responsive.minTarget())
+			plusButton.instance.Size = UDim2.fromOffset(chipHeight, chipHeight)
+			moreButton.instance.Size = UDim2.fromOffset(chipHeight, chipHeight)
+			sendButton.instance.Size = UDim2.fromOffset(controlHeight, controlHeight)
+			scopeRow.Size = UDim2.fromOffset(0, chipHeight)
+			mascotSlot.Size = UDim2.fromOffset(mascotSize, chipHeight)
+			for _, handle in ipairs(scopeChips) do
+				handle.instance.Size = UDim2.fromOffset(0, chipHeight)
+				handle.row.Size = UDim2.fromOffset(0, chipHeight)
+			end
 			resizeComposer()
 		end)
 		resizeComposer()
@@ -688,23 +867,37 @@ return function(env)
 			if not metaRow.Parent then return end
 			composer.syncContext()
 		end)
+		local unsubscribeConfig = config.changed:connect(function(path)
+			if path == nil or path == "agent" or path == "agent.effort"
+				or path == "agent.forceReasoning" or path == "agent.forceContext" or path == "agent.contextTokens" then
+				composer.syncContext()
+			end
+		end)
 		local unsubscribePlace = place.changed:connect(function()
 			if not scopeRow.Parent then return end
 			if placeChip.text then placeChip.text.Text = util.ellipsis(place.label(), 24) end
 		end)
 		local unsubscribeSessions = sessions.listChanged:connect(function()
 			if not scopeRow.Parent then return end
+			for id in pairs(drafts) do
+				if not sessions.threads[id] then drafts[id] = nil; draftViews[id] = nil end
+			end
 			paintIsolate()
 		end)
 		shell.Destroying:Connect(function()
+			saveDraft()
+			destroyed = true
+			if draftId and draftViews[draftId] == draftView then draftViews[draftId] = nil end
 			pcall(unsubscribeResponsive)
 			pcall(unsubscribeProviders)
 			pcall(unsubscribePermissions)
+			pcall(unsubscribeConfig)
 			pcall(unsubscribePlace)
 			pcall(unsubscribeSessions)
 		end)
 
 		composer.shell = shell
+		composer.attach(sessions.current())
 		composer.setBusy(false)
 		composer.syncContext()
 		return composer
@@ -718,7 +911,7 @@ return function(env)
 	-- anchored menu needed, and the chip still passes it.
 	function M.providerMenu(target, composer)
 		return env.require("ui/panels/modelpicker").open(function()
-			if composer then composer.syncContext() end
+			if composer and composer.isAlive() then composer.syncContext() end
 		end)
 	end
 

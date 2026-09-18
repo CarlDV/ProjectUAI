@@ -49,6 +49,7 @@ return function(env)
 
 	function M.new(parent)
 		local panel = {}
+		local elapsedLabels = {}
 
 		local scroll = P.scroll(parent, {
 			name = "Agents",
@@ -214,7 +215,7 @@ return function(env)
 				layoutOrder = 2,
 			})
 			local elapsed = record.ms or clock.since(record.startedAt or clock.ms())
-			P.text(head, {
+			local elapsedLabel = P.text(head, {
 				name = "Elapsed",
 				text = elapsed >= 1000 and util.formatDuration(elapsed) or "",
 				role = "caption",
@@ -223,6 +224,7 @@ return function(env)
 				size = UDim2.fromOffset(theme.size.metaColumn, theme.text.small.height),
 				layoutOrder = 3,
 			})
+			if live then elapsedLabels[record.id] = { record = record, label = elapsedLabel } end
 
 			-- One line of provenance. Which conversation asked, how deep it sits, and
 			-- what it is allowed to touch: none of that is on the transcript card, and
@@ -285,10 +287,11 @@ return function(env)
 				name = "Actions",
 				size = UDim2.new(1, 0, 0, 0),
 				auto = "Y",
+				wrap = true,
+				alignX = "Right",
 				gap = theme.space.xs,
 				layoutOrder = 4,
 			})
-			P.spacer(actions, { grow = true, layoutOrder = 1 })
 			P.button(actions, {
 				name = "Open",
 				text = "Details",
@@ -318,6 +321,8 @@ return function(env)
 		end
 
 		local function render()
+			if not scroll.instance.Parent then return end
+			elapsedLabels = {}
 			for _, child in ipairs(list:GetChildren()) do
 				if child:IsA("GuiObject") then child:Destroy() end
 			end
@@ -490,19 +495,32 @@ return function(env)
 		-- kept a record on screen as running after it had reported back. The clock on a
 		-- running card needs a tick of its own, and stops costing anything once nothing
 		-- is running.
-		local redraw = clock.debounce(function()
+		local redraw, cancelRedraw = clock.debounce(function()
 			if not scroll.instance.Parent then return end
 			render()
 		end, 0.2)
 		local unsubscribe = subagent.changed:connect(redraw)
+		local unsubscribeConfig = config.changed:connect(function(path)
+			if path == nil or path == "agent" or util.startsWith(tostring(path), "agent.subagent") then
+				redraw()
+			end
+		end)
 		local stop = clock.interval(0.5, function()
 			if not scroll.instance.Parent then return end
-			if #subagent.running() == 0 then return end
-			render()
+			-- A clock tick changes text, not the whole register. Rebuilding cards
+			-- twice a second replaced focused buttons and resubscribed every spinner.
+			for _, entry in pairs(elapsedLabels) do
+				if entry.label.Parent and isLive(entry.record) then
+					local elapsed = clock.since(entry.record.startedAt or clock.ms())
+					entry.label.Text = elapsed >= 1000 and util.formatDuration(elapsed) or ""
+				end
+			end
 		end)
 		scroll.instance.Destroying:Connect(function()
 			pcall(unsubscribe)
+			pcall(unsubscribeConfig)
 			pcall(stop)
+			cancelRedraw()
 		end)
 
 		panel.scroll = scroll

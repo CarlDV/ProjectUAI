@@ -19,26 +19,30 @@ return function(env)
 	-- the rendered value instead of leaving competing tweens behind.
 	local transitions = setmetatable({}, { __mode = "k" })
 
-	function P.animate(instance, motion, goals)
+	function P.animate(instance, motion, goals, onComplete)
 		local state = transitions[instance]
 		if not state then
 			state = {}
 			transitions[instance] = state
 			instance.Destroying:Connect(function()
+				state.dead = true
 				if state.finished then state.finished:Disconnect() end
 				if state.tween then state.tween:Cancel() end
 				transitions[instance] = nil
 			end)
 		end
 		if state.finished then state.finished:Disconnect() end
-		if state.tween then state.tween:Cancel() end
+		local previous = state.tween
+		state.tween = nil
+		if previous then previous:Cancel() end
 		local tween = env.tween:Create(instance, theme.tween(motion), goals)
 		state.tween = tween
-		state.finished = tween.Completed:Connect(function()
-			if state.tween ~= tween then return end
+		state.finished = tween.Completed:Connect(function(playback)
+			if state.dead or state.tween ~= tween then return end
 			state.tween = nil
 			if state.finished then state.finished:Disconnect() end
 			state.finished = nil
+			if playback ~= Enum.PlaybackState.Cancelled and onComplete then onComplete() end
 		end)
 		tween:Play()
 		return tween
@@ -204,9 +208,32 @@ return function(env)
 	-- which is why the order here is not arbitrary.
 	local function applyFont(label, role, props)
 		label.Font = props.font or role.font
-		if props.font then return end
-		local face = props.face or role.face
+		local face = props.face or (not props.font and role.face)
 		if face then pcall(function() label.FontFace = face end) end
+	end
+
+	-- Synchronous measurement for control widths. GetTextSize is the legacy fallback;
+	-- byte counts overestimate UTF-8 and cannot distinguish a W from an i.
+	function P.measureText(text, props)
+		props = props or {}
+		local role = theme.textRole(props.role or "body")
+		local size = props.textSize or role.size
+		local value = tostring(text or "")
+		local width = props.width and math.max(1, props.width) or math.huge
+		local ok, bounds = pcall(function()
+			return env.services.TextService:GetTextSize(value, size, props.font or role.font,
+				Vector2.new(width, math.huge))
+		end)
+		if ok and bounds then
+			return Vector2.new(bounds.X, math.ceil(bounds.Y * (props.line or role.line or 1)))
+		end
+		local longest, lines = 0, 0
+		for line in (value .. "\n"):gmatch("(.-)\n") do
+			local _, characters = line:gsub("[^\128-\191]", "")
+			longest = math.max(longest, characters * size)
+			lines = lines + math.max(1, math.ceil(characters * size / width))
+		end
+		return Vector2.new(math.min(width, longest), lines * (role.height or size))
 	end
 
 	function P.text(parent, props)
@@ -242,7 +269,8 @@ return function(env)
 				-- is a label that is not there at all. Twenty-odd call sites papered over
 				-- it by assigning Size on the next line; the ones that forgot simply
 				-- vanished.
-				label.Size = UDim2.fromOffset(0, role.height or (role.size + 4))
+				label.Size = UDim2.fromOffset(0, math.max(role.height or role.size,
+					math.ceil((props.textSize or role.size) * (props.line or role.line))))
 			elseif props.auto == "Y" then
 				label.Size = UDim2.new(1, 0, 0, 0)
 			else
@@ -413,14 +441,17 @@ return function(env)
 
 		local label
 		if props.text and props.text ~= "" then
+			-- Keep icon and text together at their natural width. Fill stretches the
+			-- label alone, pinning the icon to the edge even in a centred button.
+			-- Shrink still lets bounded buttons truncate when the pair cannot fit.
 			label = P.text(content, {
 				text = props.text,
-				role = variant.font,
+				role = props.size == "sm" and "small" or variant.font,
 				color = variant.text,
 				align = props.align or "Center",
-				auto = autoWidth and "XY" or nil,
+				auto = autoWidth and "XY" or "X",
 				size = not autoWidth and UDim2.new(0, 0, 1, 0) or nil,
-				flex = not autoWidth and "Fill" or nil,
+				flex = not autoWidth and "Shrink" or nil,
 				truncate = not autoWidth,
 				layoutOrder = 2,
 			})
@@ -523,7 +554,7 @@ return function(env)
 
 		function handle.setVariant(name)
 			variant = (VARIANTS[name] or VARIANTS.secondary)()
-			if label then applyFont(label, theme.textRole(variant.font), {}) end
+			if label then applyFont(label, theme.textRole(props.size == "sm" and "small" or variant.font), {}) end
 			paint()
 		end
 
@@ -600,9 +631,12 @@ return function(env)
 
 		local inner = P.row
 		if props.vertical then inner = P.column end
+		local autoX = props.auto == "X" or props.auto == "XY"
+		local autoY = props.auto == "Y" or props.auto == "XY"
 		local row = inner(button, {
 			name = "Content",
-			size = props.auto and UDim2.new(0, 0, 0, contentHeight) or UDim2.fromScale(1, 1),
+			size = UDim2.new(autoX and 0 or 1, 0, (autoX or autoY) and 0 or 1,
+				(autoX and not autoY) and contentHeight or 0),
 			auto = props.auto,
 			gap = props.gap or theme.space.xs,
 			padding = props.padding or { x = theme.space.xs },
@@ -670,8 +704,9 @@ return function(env)
 				role = role or "caption",
 				color = colour or theme.color.textSecondary,
 				size = UDim2.new(0, 0, 0, theme.textRole(role or "caption").height),
-				flex = "Fill",
-				truncate = true,
+				auto = autoX and "X" or nil,
+				flex = not autoX and "Fill" or nil,
+				truncate = not autoX,
 				layoutOrder = order or 2,
 			})
 		end
@@ -819,12 +854,13 @@ return function(env)
 		local tone = props.tone or "neutral"
 		local holder = P.row(parent, {
 			name = "Badge",
-			size = UDim2.fromOffset(0, theme.size.controlSmall - theme.space.xs),
-			auto = "X",
+			size = UDim2.fromOffset(0, math.max(theme.size.controlSmall - theme.space.xs,
+				theme.text.caption.height + theme.space.hair * 2)),
+			auto = "XY",
 			bg = props.bg or theme.toneSurface(tone),
 			radius = theme.radius.sm,
 			gap = theme.space.xxs,
-			padding = { x = theme.space.xs },
+			padding = { x = theme.space.xs, y = theme.space.hair },
 			layoutOrder = props.layoutOrder,
 		})
 		if props.dot then
@@ -895,9 +931,25 @@ return function(env)
 		layout.Padding = UDim.new(0, props.gap or theme.space.sm)
 		if props.alignX then layout.HorizontalAlignment = Enum.HorizontalAlignment[props.alignX] end
 
-		if props.padding then P.pad(scroll, props.padding) end
+		local padding = props.padding and P.pad(scroll, props.padding) or nil
 
 		local handle = { instance = scroll, layout = layout }
+
+		-- The room a fixed-height child can actually use. AbsoluteSize includes the
+		-- scrollbar and padding, which makes a nested list overflow its outer canvas
+		-- when callers use it as the child's height.
+		function handle.viewportSize()
+			local size = scroll.AbsoluteWindowSize
+			if size.X <= 0 or size.Y <= 0 then size = scroll.AbsoluteSize end
+			local width, height = size.X, size.Y
+			if padding then
+				width = width - (padding.PaddingLeft.Scale + padding.PaddingRight.Scale) * size.X
+					- padding.PaddingLeft.Offset - padding.PaddingRight.Offset
+				height = height - (padding.PaddingTop.Scale + padding.PaddingBottom.Scale) * size.Y
+					- padding.PaddingTop.Offset - padding.PaddingBottom.Offset
+			end
+			return Vector2.new(math.max(0, width), math.max(0, height))
+		end
 
 		function handle.toBottom()
 			if props.horizontal then
@@ -908,15 +960,16 @@ return function(env)
 		end
 
 		function handle.atBottom(slack)
-			local visible = scroll.AbsoluteWindowSize.Y
-			local total = scroll.AbsoluteCanvasSize.Y
+			local axis = props.horizontal and "X" or "Y"
+			local visible = scroll.AbsoluteWindowSize[axis]
+			local total = scroll.AbsoluteCanvasSize[axis]
 			if total <= visible then return true end
-			return (total - visible - scroll.CanvasPosition.Y) <= (slack or theme.space.huge)
+			return (total - visible - scroll.CanvasPosition[axis]) <= (slack or theme.space.huge)
 		end
 
 		function handle.clear()
 			for _, child in ipairs(scroll:GetChildren()) do
-				if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then child:Destroy() end
+				if not child:IsA("UIComponent") then child:Destroy() end
 			end
 		end
 

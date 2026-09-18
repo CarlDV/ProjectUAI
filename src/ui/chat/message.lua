@@ -11,6 +11,7 @@ return function(env)
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
 	local markdown = env.require("ui/markdown")
+	local tableBlock = env.require("ui/chat/table")
 	local icons = env.require("ui/icons")
 	local P = env.require("ui/primitives")
 	local C = env.require("ui/controls")
@@ -419,6 +420,8 @@ return function(env)
 					unterminated = block.unterminated,
 					layoutOrder = 1,
 				})
+			elseif block.kind == "table" then
+				tableBlock.render(column, { block = block, layoutOrder = index })
 			elseif block.kind == "heading" then
 				-- A heading belongs to what is under it, so it needs more air above than
 				-- the uniform paragraph gap gives it. Without this a section title sits
@@ -446,7 +449,7 @@ return function(env)
 				local body = ruled(column, {
 					name = "Quote",
 					layoutOrder = index,
-					color = Color3.fromRGB(220, 126, 91),
+					color = theme.color.accent,
 					width = theme.stroke.focus,
 					bg = theme.color.surface,
 					radius = theme.radius.sm,
@@ -611,7 +614,7 @@ return function(env)
 	end
 
 	-- Sent prompts keep their byline inside one quiet, bordered surface.
-	function M.user(parent, text, order)
+	function M.user(parent, text, order, props)
 		local holder = P.column(parent, {
 			name = "User",
 			size = UDim2.new(1, 0, 0, 0),
@@ -621,11 +624,11 @@ return function(env)
 		})
 		local body = P.column(holder, {
 			name = "Bubble", size = UDim2.new(1, 0, 0, 0), auto = "Y",
-			bg = theme.color.bubbleUser, radius = theme.radius.lg,
-			padding = theme.space.md, gap = theme.space.xs, layoutOrder = 1,
+			bg = theme.color.bubbleUser, radius = theme.radius.md,
+			padding = { x = theme.space.md, y = theme.space.sm }, gap = theme.space.xxs, layoutOrder = 1,
 		})
 		P.stroke(body, theme.color.bubbleUserBorder)
-		byline(body, { name = localName(), color = theme.color.textSecondary, layoutOrder = 1 })
+		byline(body, { name = localName(), color = theme.color.textTertiary, layoutOrder = 1 })
 
 		local label = P.text(body, {
 			text = util.truncate(tostring(text), 1200),
@@ -656,12 +659,12 @@ return function(env)
 		return { root = holder, label = label }
 	end
 
-	function M.agent(parent, text, order, attribution)
+	function M.agent(parent, text, order, attribution, props)
 		local holder = P.column(parent, {
 			name = "Agent",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
-			gap = theme.space.xs,
+			gap = theme.space.sm,
 			layoutOrder = order or 0,
 		})
 		-- Replay keeps the attribution from the request that produced this response.
@@ -672,7 +675,7 @@ return function(env)
 			name = "Assistant",
 			detail = model,
 			icon = "brand",
-			iconColor = Color3.fromRGB(220, 126, 91),
+			iconColor = theme.color.accent,
 			color = theme.color.textSecondary,
 			layoutOrder = 1,
 		})
@@ -698,9 +701,13 @@ return function(env)
 		end
 
 		function handle.stream(partial)
-			local cursor = ' <font color="#dc7e5b">●</font>'
-			if partial:find("```") or partial:find("\n\n") then
-				M.renderBlocks(column, partial .. cursor)
+			local color = theme.color.accentHot
+			local cursor = string.format(' <font color="#%02x%02x%02x">●</font>',
+				math.floor(color.R * 255), math.floor(color.G * 255), math.floor(color.B * 255))
+			if partial:find("\n", 1, true) then
+				M.renderBlocks(column, partial)
+				P.text(column, { name = "StreamCursor", text = cursor, role = "body", rich = true,
+					auto = "Y", layoutOrder = #markdown.blocks(partial) + 1 })
 				streamLabel = nil
 			else
 				if not streamLabel or streamLabel.Parent ~= column then
@@ -740,6 +747,7 @@ return function(env)
 	-- saying the same thing twice, which is exactly what it looks like when a model
 	-- restates its conclusion in prose.
 	function M.reasoning(parent, text, order)
+		text = tostring(text or "")
 		local holder = wrapper(parent, { name = "Reasoning", layoutOrder = order })
 		local card = P.column(holder, {
 			size = UDim2.new(1, 0, 0, 0),
@@ -778,7 +786,7 @@ return function(env)
 
 		local sparkBadge = P.frame(row, {
 			name = "SparkBadge",
-			size = UDim2.fromOffset(18, 18),
+			size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
 			layoutOrder = 2,
 		})
 		icons.spark(sparkBadge, theme.size.icon, theme.color.accent)
@@ -787,8 +795,7 @@ return function(env)
 			text = "Thinking",
 			role = "label",
 			color = theme.color.textSecondary,
-			size = UDim2.new(0, 0, 1, 0),
-			flex = "Fill",
+			auto = "X",
 			layoutOrder = 3,
 		})
 
@@ -805,39 +812,71 @@ return function(env)
 			color = theme.color.textTertiary,
 			auto = "X",
 		})
+		local function fitHeader()
+			local required = P.measureText(title.Text, { role = "label" }).X
+				+ P.measureText(tokenText.Text, { role = "caption" }).X
+				+ theme.size.icon * 2 + theme.space.sm * 5 + theme.space.xxs * 2
+			tokenPill.Visible = header.AbsoluteSize.X >= required
+		end
+		header:GetPropertyChangedSignal("AbsoluteSize"):Connect(fitHeader)
+		fitHeader()
 
-		local asideBody, bodyRow = ruled(card, {
-			name = "Aside",
-			layoutOrder = 2,
-			color = theme.color.borderSubtle,
-			width = theme.stroke.hair,
-			ruleAt = math.floor(theme.size.icon / 2),
-			inset = theme.space.md,
-		})
-		local body = P.text(asideBody, {
-			text = markdown.plain(text),
-			role = "small",
-			color = theme.color.textTertiary,
-			wrap = true,
-			auto = "Y",
-		})
-		body.Size = UDim2.new(1, 0, 0, 0)
-
-		local open = config.get("ui.expandThinking", true) == true
-		P.animate(caret, "hover", { Rotation = open and 90 or 0 })
-		bodyRow.Visible = open
-		local function toggle()
-			open = not open
+		local bodyRow = P.frame(card, { name = "Aside", size = UDim2.new(1, 0, 0, 0), layoutOrder = 2, visible = false })
+		P.frame(bodyRow, { name = "Rule", size = UDim2.new(0, theme.stroke.hair, 1, 0),
+			position = UDim2.fromOffset(theme.space.sm, 0), bg = theme.color.borderSubtle })
+		local viewport = P.scroll(bodyRow, { name = "ThoughtViewport", size = UDim2.new(1, -theme.space.xl, 0, 0),
+			position = UDim2.fromOffset(theme.space.xl, 0), gap = theme.space.sm,
+			padding = { right = theme.space.sm, y = theme.space.xxs } })
+		local body = P.text(viewport.instance, { name = "ThoughtText", text = markdown.inline(text), role = "small",
+			color = theme.color.textSecondary, rich = true, wrap = true, auto = "Y",
+			alignY = "Top", size = UDim2.new(1, 0, 0, 0) })
+		local open = config.get("ui.expandThinking", false) == true
+		local fitting = false
+		local function fit()
+			if not bodyRow.Parent or fitting then return end
+			fitting = true
+			local width = math.max(1, viewport.instance.AbsoluteSize.X - theme.space.sm)
+			local measured = math.max(body.TextBounds.Y, body.AbsoluteSize.Y,
+				P.measureText(markdown.plain(text), { role = "small", width = width }).Y)
+			local height = math.min(math.max(theme.text.small.height, measured) + theme.space.xxs * 2,
+				math.max(theme.text.small.height * 2, math.min(theme.size.thinkingViewport, responsive.viewport.Y * 0.3)))
+			bodyRow.Size = UDim2.new(1, 0, 0, height)
+			viewport.instance.Size = UDim2.new(1, -theme.space.xl, 0, height)
+			fitting = false
+		end
+		body:GetPropertyChangedSignal("TextBounds"):Connect(fit)
+		body:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
+		local lastWidth = 0
+		viewport.instance:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+			local width = viewport.instance.AbsoluteSize.X
+			if width ~= lastWidth then lastWidth = width; fit() end
+		end)
+		local unsubscribe = responsive.changed:connect(fit)
+		holder.Destroying:Connect(unsubscribe)
+		local function setOpen(value)
+			open = value
 			bodyRow.Visible = open
 			P.animate(caret, "hover", { Rotation = open and 90 or 0 })
+			if open then fit() end
 		end
-		header.Activated:Connect(toggle)
+		header.Activated:Connect(function() setOpen(not open) end)
+		setOpen(open)
 		disclosure(header, thinkStroke)
 		-- The wrapper, not the card: hiding the card alone left its frame in the list
 		-- layout, so a hidden reasoning row still pushed the reply down by its padding.
 		if config.get("ui.showReasoning", true) == false then holder.Visible = false end
 
-		return { root = holder, body = body }
+		local handle = { root = holder, body = body }
+		function handle.append(value)
+			value = tostring(value or "")
+			if value == "" or value == text then return end
+			text = text .. "\n\n" .. value
+			body.Text = markdown.inline(text)
+			tokenText.Text = "~" .. util.formatNumber(usage.estimateText(text)) .. " tokens"
+			fitHeader()
+			if open then fit() end
+		end
+		return handle
 	end
 
 	-- Which argument on a call is a listing rather than a value, and what language it
@@ -983,6 +1022,7 @@ return function(env)
 	function M.toolRun(parent, order)
 		local holder = wrapper(parent, { name = "ToolRun", layoutOrder = order })
 		local card = P.column(holder, {
+			name = "ActivitySurface",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
 			gap = theme.space.xs,
@@ -1126,7 +1166,6 @@ return function(env)
 				if handle.settled < handle.calls then paint() end
 			end)
 		end
-		startClock()
 		holder.Destroying:Connect(function() pcall(stop) end)
 
 		-- Called by the view for each call it puts in here.

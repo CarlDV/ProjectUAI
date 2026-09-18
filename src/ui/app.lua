@@ -666,6 +666,7 @@ return function(env)
 			layoutOrder = 1,
 			session = sessions.current(),
 		})
+		panel.loops = env.require("ui/chat/loops").new(column)
 
 		local middle = P.frame(column, {
 			name = "TranscriptHolder",
@@ -673,7 +674,9 @@ return function(env)
 			layoutOrder = 2,
 		})
 
-		panel.view = env.require("ui/chat/view").new(middle, {})
+		panel.view = env.require("ui/chat/view").new(middle, {
+			onInsert = function(text) if panel.composer then panel.composer.insert(text) end end,
+		})
 
 		panel.composer = env.require("ui/chat/composer").new(column, {
 			layoutOrder = 3,
@@ -703,6 +706,9 @@ return function(env)
 		local function sizeTranscript()
 			if not middle.Parent then return end
 			local planHeight = panel.todos.shell.Visible and panel.todos.shell.AbsoluteSize.Y or 0
+			local loopHeight = panel.loops.shell.Visible and panel.loops.shell.Size.Y.Offset or 0
+			panel.loops.shell.Position = UDim2.fromOffset(0, planHeight)
+			planHeight = planHeight + loopHeight
 			local composerHeight = panel.composer.shell.AbsoluteSize.Y
 			middle.Position = UDim2.fromOffset(0, planHeight)
 			middle.Size = UDim2.new(1, 0, 1, -(planHeight + composerHeight))
@@ -710,6 +716,7 @@ return function(env)
 		panel.composer.shell:GetPropertyChangedSignal("AbsoluteSize"):Connect(sizeTranscript)
 		panel.todos.shell:GetPropertyChangedSignal("AbsoluteSize"):Connect(sizeTranscript)
 		panel.todos.shell:GetPropertyChangedSignal("Visible"):Connect(sizeTranscript)
+		panel.loops.shell:GetPropertyChangedSignal("Visible"):Connect(sizeTranscript)
 		sizeTranscript()
 
 		function panel.destroy()
@@ -1272,6 +1279,7 @@ return function(env)
 
 	function M.attachSession()
 		local session = sessions.current()
+		if M.chatPanel and M.chatPanel.composer then M.chatPanel.composer.attach(session) end
 		if M.chatPanel and M.chatPanel.view then M.chatPanel.view.attach(session) end
 		-- The plan the strip shows belongs to this conversation, so it moves with it.
 		if M.chatPanel and M.chatPanel.todos then M.chatPanel.todos.attach(session) end

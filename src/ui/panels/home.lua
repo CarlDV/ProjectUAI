@@ -329,7 +329,8 @@ return function(env)
 
 	-- The card, and the greeting above it. `order` is the layout order inside whatever
 	-- column it is being dropped into -- the transcript, in practice.
-	function M.card(parent, order)
+	function M.card(parent, order, props)
+		props = props or {}
 		local name = "there"
 		local okName, display = pcall(function()
 			return env.plr and env.plr.DisplayName
@@ -346,7 +347,7 @@ return function(env)
 			auto = "Y",
 			alignX = "Center",
 			gap = theme.space.xl,
-			padding = { y = theme.space.lg },
+			padding = { top = theme.space.xxl, bottom = theme.space.lg },
 			layoutOrder = order,
 		})
 
@@ -360,13 +361,13 @@ return function(env)
 		})
 		local brandSlot = P.frame(greeting, {
 			name = "HomeBrand",
-			size = UDim2.fromOffset(theme.size.iconLarge + theme.space.sm, theme.size.iconLarge + theme.space.sm),
+			size = UDim2.fromOffset(theme.size.controlLarge, theme.size.controlLarge),
 			layoutOrder = 1,
 		})
-		icons.brand(brandSlot, theme.size.iconLarge + theme.space.sm)
+		icons.brand(brandSlot, theme.size.controlLarge)
 		P.text(greeting, {
 			name = "GreetingText",
-			text = string.format("What shall we work on, %s?", name),
+			text = string.format("What will we create, %s?", name),
 			role = "display",
 			color = theme.color.text,
 			align = "Center",
@@ -374,6 +375,48 @@ return function(env)
 			auto = "Y",
 			layoutOrder = 2,
 		})
+
+		P.text(greeting, {
+			name = "GreetingSubtitle", text = "Your ideas. Your game. An agent to help make it happen.",
+			role = "small", color = theme.color.textTertiary, align = "Center", wrap = true,
+			auto = "Y", size = UDim2.new(1, 0, 0, 0), layoutOrder = 3,
+		})
+		if props.onInsert then
+			local grid = P.frame(holder, {
+				name = "PromptStarters", size = UDim2.new(1, 0, 0, 0),
+				maxSize = Vector2.new(theme.size.statCard, math.huge), layoutOrder = 2,
+			})
+			local cards = {}
+			for index, entry in ipairs(env.require("ui/chat/prompts").items) do
+				local card = P.rowButton(grid, {
+					name = "Starter_" .. entry.id, vertical = true, size = UDim2.fromOffset(0, theme.size.promptCard),
+					bg = theme.color.surface, stroke = true, radius = theme.radius.lg, gap = theme.space.xs,
+					padding = theme.space.md, alignX = "Left", alignY = "Top",
+					onClick = function() props.onInsert(entry.text) end,
+				})
+				card.icon(entry.icon, 1, theme.color.accentHot, theme.size.icon)
+				P.text(card.row, { text = entry.label, role = "label", layoutOrder = 2,
+					size = UDim2.new(1, 0, 0, theme.text.label.height), truncate = true })
+				P.text(card.row, { text = entry.detail, role = "caption", color = theme.color.textTertiary,
+					layoutOrder = 3, size = UDim2.new(1, 0, 0, 0), auto = "Y", wrap = true })
+				cards[index] = card.instance
+			end
+			local function fitStarters()
+				local columns = grid.AbsoluteSize.X >= theme.size.promptColumns and 2 or 1
+				local gap = theme.space.sm
+				local height = math.max(theme.size.promptCard,
+					theme.size.icon + theme.text.label.height + theme.text.caption.height * 2 + theme.space.md * 2 + theme.space.xs * 2)
+				for index, card in ipairs(cards) do
+					local col = (index - 1) % columns
+					local row = math.floor((index - 1) / columns)
+					card.Size = UDim2.new(1 / columns, -gap * (columns - 1) / columns, 0, height)
+					card.Position = UDim2.new(col / columns, col * gap / columns, 0, row * (height + gap))
+				end
+				grid.Size = UDim2.new(1, 0, 0, math.ceil(#cards / columns) * (height + gap) - gap)
+			end
+			grid:GetPropertyChangedSignal("AbsoluteSize"):Connect(fitStarters)
+			fitStarters()
+		end
 
 		if config.get("ui.showActivity", true) ~= true then return holder end
 
@@ -388,9 +431,18 @@ return function(env)
 			radius = theme.radius.xl,
 			gap = theme.space.md,
 			padding = theme.space.lg,
-			layoutOrder = 2,
+			layoutOrder = 4,
 		})
 		P.stroke(card, theme.color.borderSubtle)
+		card.Visible = false
+		P.button(holder, {
+			name = "ToggleActivity", text = "Your activity", icon = "chevron", iconDirection = "down",
+			variant = "ghost", size = "sm", layoutOrder = 3,
+			onClick = function(button)
+				card.Visible = not card.Visible
+				button.setText(card.Visible and "Hide activity" or "Your activity")
+			end,
+		})
 
 		local state = {
 			tab = "overview",

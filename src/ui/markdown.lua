@@ -24,19 +24,66 @@ return function(env)
 			:gsub("'", "&apos;"))
 	end
 
+	-- Index exact-length backtick runs once. Unmatched openers stay literal; a
+	-- backslash inside a code span cannot escape its closing delimiter. Sharing
+	-- this index with pipe splitting keeps the two interpretations in agreement.
+	local function codeRuns(text)
+		local runs, following, indexed = {}, {}, {}
+		for start, ticks, after in text:gmatch("()(`+)()") do
+			runs[#runs + 1] = { start = start, after = after, width = #ticks }
+		end
+		for index = #runs, 1, -1 do
+			local run = runs[index]
+			run.close = following[run.width]
+			-- Escaping the first tick leaves the rest of a run eligible to open a
+			-- span. Closers still have to match a complete, unshortened run.
+			if run.width > 1 then
+				indexed[run.start + 1] = { after = run.after, close = following[run.width - 1] }
+			end
+			following[run.width] = run
+			indexed[run.start] = run
+		end
+		return indexed
+	end
+
 	-- Inline spans, applied to already-escaped text. Order matters: the two-marker
 	-- forms are consumed before the one-marker forms, or **bold** turns into an
 	-- italic asterisk.
 	function M.inline(text)
-		local out = M.escape(text)
+		text = tostring(text or "")
 		local codeColour = "#" .. theme.color.accentHot:ToHex()
 
-		-- Inline code first: its contents must not then be read as emphasis.
-		local codeSpans = {}
-		out = out:gsub("`([^`\n]+)`", function(inner)
-			codeSpans[#codeSpans + 1] = inner
-			return "\1CODE" .. tostring(#codeSpans) .. "\1"
-		end)
+		-- Protect both code and backslash escapes before emphasis. Pick a sentinel
+		-- absent from the input so literal control characters cannot forge a slot.
+		local sentinel = "\1"
+		while text:find(sentinel, 1, true) do sentinel = sentinel .. "\1" end
+		local spans, parts, runs = {}, {}, codeRuns(text)
+		local function protect(value)
+			spans[#spans + 1] = value
+			parts[#parts + 1] = sentinel .. tostring(#spans) .. sentinel
+		end
+		local index = 1
+		while index <= #text do
+			local char, nextChar = text:sub(index, index), text:sub(index + 1, index + 1)
+			local run = runs[index]
+			if char == "\\" and nextChar:match("%p") then
+				protect(M.escape(nextChar))
+				index = index + 2
+			elseif run and run.close then
+				local inner = text:sub(run.after, run.close.start - 1):gsub("[\r\n]", " ")
+				if inner:sub(1, 1) == " " and inner:sub(-1) == " " and inner:find("[^ ]") then
+					inner = inner:sub(2, -2)
+				end
+				protect(string.format('<font color="%s"><font face="%s">%s</font></font>',
+					codeColour, theme.codeFontEnumName or "Code", M.escape(inner)))
+				index = run.close.after
+			else
+				local after = run and run.after or (index + 1)
+				parts[#parts + 1] = M.escape(text:sub(index, after - 1))
+				index = after
+			end
+		end
+		local out = table.concat(parts)
 
 		out = out:gsub("%*%*%*(.-)%*%*%*", "<b><i>%1</i></b>")
 		out = out:gsub("%*%*(.-)%*%*", "<b>%1</b>")
@@ -68,14 +115,8 @@ return function(env)
 			return string.format("<b>%s</b> <font color=\"%s\">%s</font>", label, "#" .. theme.color.textTertiary:ToHex(), href)
 		end)
 
-		out = out:gsub("\1CODE(%d+)\1", function(index)
-			local inner = codeSpans[tonumber(index)] or ""
-			-- RichText's `face` attribute takes an Enum.Font name and knows nothing about
-			-- FontFace, so the theme publishes the legacy name of whichever code family is
-			-- selected. It said "Code" unconditionally before, which meant switching the
-			-- code font changed fenced blocks and left every inline span behind.
-			return string.format('<font color="%s"><font face="%s">%s</font></font>',
-				codeColour, theme.codeFontEnumName or "Code", inner)
+		out = out:gsub(sentinel .. "(%d+)" .. sentinel, function(slot)
+			return spans[tonumber(slot)]
 		end)
 
 		return out
@@ -166,12 +207,92 @@ return function(env)
 		return table.concat(out)
 	end
 
+	-- Cells keep inline source, including escapes, until M.inline renders them.
+	-- Only structural pipes split a row. Optional outer pipes remove precisely one
+	-- empty cell each, so || still represents an empty cell rather than disappearing.
+	local function pipeCells(line)
+		local text = util.trim(line)
+		local cells, parts, pipes, runs = {}, {}, {}, codeRuns(text)
+		local index = 1
+		while index <= #text do
+			local char = text:sub(index, index)
+			local run = runs[index]
+			if char == "\\" and text:sub(index + 1, index + 1):match("%p") then
+				parts[#parts + 1] = text:sub(index, index + 1)
+				index = index + 2
+			elseif run and run.close then
+				-- GFM allows \| inside code cells too; remove that table-level escape.
+				parts[#parts + 1] = text:sub(index, run.close.after - 1):gsub("\\|", "|")
+				index = run.close.after
+			elseif char == "|" then
+				cells[#cells + 1] = util.trim(table.concat(parts))
+				parts = {}
+				pipes[#pipes + 1] = index
+				index = index + 1
+			else
+				local after = run and run.after or (index + 1)
+				parts[#parts + 1] = text:sub(index, after - 1)
+				index = after
+			end
+		end
+		cells[#cells + 1] = util.trim(table.concat(parts))
+		if pipes[#pipes] == #text then table.remove(cells) end
+		if pipes[1] == 1 then table.remove(cells, 1) end
+		return cells, #pipes > 0
+	end
+
+	local function fenceOf(line)
+		local fence, tail = line:match("^%s*(```+)(.*)$")
+		if not fence then fence, tail = line:match("^%s*(~~~+)(.*)$") end
+		return fence, tail
+	end
+
+	local function interruptsTable(line)
+		return util.trim(line) == "" or fenceOf(line) ~= nil
+			or line:match("^%s*#+%s+") or line:match("^%s*>")
+			or line:match("^%s*[%-%*%+]%s+") or line:match("^%s*%d+[%.%)]%s+")
+			or (line:match("^%s*[%-%*_][%s%-%*_]*$") and #util.trim(line) >= 3)
+	end
+
+	local function tableAt(lines, index)
+		if not lines[index + 1] then return nil end
+		local header, headerPipes = pipeCells(lines[index])
+		local delimiter, delimiterPipes = pipeCells(lines[index + 1])
+		if #header == 0 or #header ~= #delimiter or not (headerPipes or delimiterPipes) then return nil end
+		local align = {}
+		for column, cell in ipairs(delimiter) do
+			-- GFM permits one or more hyphens, with at most one colon per edge.
+			if not cell:match("^:?-+:?$") then return nil end
+			local left, right = cell:sub(1, 1) == ":", cell:sub(-1) == ":"
+			align[column] = right and (left and "center" or "right") or "left"
+		end
+		local rows, source, columns = {}, { lines[index], lines[index + 1] }, #header
+		local after = index + 2
+		while lines[after] and not interruptsTable(lines[after]) do
+			local cells = pipeCells(lines[after])
+			rows[#rows + 1] = cells
+			source[#source + 1] = lines[after]
+			columns = math.max(columns, #cells)
+			after = after + 1
+		end
+		-- Missing cells are empty. Unlike GFM's lossy extra-cell rule, retain excess
+		-- cells in unnamed columns: model output must never silently lose values.
+		for column = #header + 1, columns do header[column], align[column] = "", "left" end
+		for _, row in ipairs(rows) do
+			for column = #row + 1, columns do row[column] = "" end
+		end
+		return { kind = "table", header = header, rows = rows, align = align,
+			columns = columns, text = table.concat(source, "\n") }, after
+	end
+
 	-- Splits a reply into blocks the renderer can lay out:
 	--   { kind = "text",    text = "..." }             inline markdown, RichText-ready
 	--   { kind = "code",    text = "...", lang = "" }  verbatim, monospace
 	--   { kind = "bullets", items = { { text, marker, depth }, ... } }
 	--   { kind = "quote",   text = "..." }             an aside, inline markdown
 	--   { kind = "heading", text = "...", level = 1 }
+	--   { kind = "table", header = { ... }, rows = { { ... }, ... },
+	--     align = { "left", "center", "right", ... }, columns = N, text = source }
 	--   { kind = "rule" }
 	--
 	-- A bullet item is a table rather than a string because a numbered list has to keep
@@ -218,10 +339,13 @@ return function(env)
 			return math.min(math.floor(#indent / 2), 3)
 		end
 
-		for _, line in ipairs(lines) do
-			local fence, lang = line:match("^%s*(```+)%s*(%a*)")
+		local index = 1
+		while index <= #lines do
+			local line = lines[index]
+			local fence, tail = fenceOf(line)
 			if code then
-				if fence and #fence >= #codeFence then
+				if fence and fence:sub(1, 1) == codeFence:sub(1, 1)
+					and #fence >= #codeFence and util.trim(tail) == "" then
 					blocks[#blocks + 1] = { kind = "code", text = table.concat(code, "\n"), lang = codeLang }
 					code, codeLang, codeFence = nil, nil, nil
 				else
@@ -231,13 +355,21 @@ return function(env)
 				flushParagraph()
 				flushBullets()
 				flushQuote()
-				code, codeLang, codeFence = {}, (lang ~= "" and lang or nil), fence
+				code, codeLang, codeFence = {}, tail:match("^%s*(%S+)"), fence
 			else
 				local heading, headingText = line:match("^%s*(#+)%s+(.*)$")
 				local quoted = line:match("^%s*>%s?(.*)$")
 				local bullet = line:match("^%s*[%-%*%+]%s+(.*)$")
 				local number, ordered = line:match("^%s*(%d+)[%.%)]%s+(.*)$")
-				if heading then
+				local tabular, after
+				if not interruptsTable(line) then tabular, after = tableAt(lines, index) end
+				if tabular then
+					flushParagraph()
+					flushBullets()
+					flushQuote()
+					blocks[#blocks + 1] = tabular
+					index = after - 1
+				elseif heading then
 					flushParagraph()
 					flushBullets()
 					flushQuote()
@@ -271,6 +403,7 @@ return function(env)
 					paragraph[#paragraph + 1] = line
 				end
 			end
+			index = index + 1
 		end
 
 		-- An unterminated fence is normal when a reply was cut off by a token limit;

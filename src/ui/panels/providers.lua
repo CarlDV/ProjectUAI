@@ -239,7 +239,6 @@ return function(env)
 					flex = "Fill",
 					layoutOrder = 1,
 				})
-				linkText.Size = UDim2.new(1, -(theme.size.controlSmall + theme.space.xs), 0, 0)
 				if caps.clipboard then
 					P.iconButton(docsRow, {
 						name = "CopyKeyLink",
@@ -533,8 +532,14 @@ return function(env)
 			setModelNote("Asking " .. registry.endpoint(target, "/models") .. "...", false)
 			task.spawn(function()
 				local found, note = models.discover(target, { force = true })
-				fetched = found
+				if modal.closed or not handle.instance.Parent then return end
 				handle.setEnabled(true)
+				if target.baseUrl ~= registry.normaliseBaseUrl(editing.baseUrl)
+					or target.preset ~= editing.preset or target.apiKey ~= editing.apiKey then
+					setModelNote(DEFAULT_MODEL_NOTE, false)
+					return
+				end
+				fetched = found
 				setModelNote(note, #found == 0)
 				-- Straight back into the list. Picking one is the reason to fetch, and a
 				-- notice that says "42 models" while the menu stays shut makes someone press
@@ -677,6 +682,7 @@ return function(env)
 						maxTokens = 12,
 						attempts = 1,
 					})
+					if modal.closed or not handle.instance.Parent then return end
 					handle.setText("Test")
 					handle.setEnabled(true)
 					if result then
@@ -821,7 +827,6 @@ return function(env)
 				flex = "Fill",
 				layoutOrder = 1,
 			})
-			linkText.Size = UDim2.new(1, -(theme.size.controlSmall + theme.space.xs), 0, 0)
 			if caps.clipboard then
 				P.iconButton(linkRow, {
 					name = "CopyFeaturedLink",
@@ -872,17 +877,15 @@ return function(env)
 		local wide = responsive.mode == "window"
 			and parent.AbsoluteSize.X >= (theme.size.dialogNav * 3)
 
-		local root
-		if wide then
-			root = P.row(parent, { name = "ProvidersRoot", size = UDim2.fromScale(1, 1), gap = 0 })
-		else
-			root = P.column(parent, { name = "ProvidersRoot", size = UDim2.fromScale(1, 1), gap = 0 })
-		end
+		local root, rootLayout = P.row(parent, { name = "ProvidersRoot", size = UDim2.fromScale(1, 1), gap = 0 })
+		rootLayout.FillDirection = wide and Enum.FillDirection.Horizontal or Enum.FillDirection.Vertical
+		local railHeight = math.max(theme.size.controlLarge, responsive.minTarget(),
+			theme.text.small.height + theme.space.xs * 2)
 
 		local railHolder = P.frame(root, {
 			name = "ProviderRail",
 			size = wide and UDim2.new(0, theme.size.dialogNav, 1, 0)
-				or UDim2.new(1, 0, 0, math.max(theme.size.controlLarge, responsive.minTarget()) + theme.space.md + theme.size.scrollbar),
+				or UDim2.new(1, 0, 0, railHeight + theme.space.xs * 2 + theme.size.scrollbar),
 			bg = theme.color.sidebar,
 			layoutOrder = 1,
 		})
@@ -892,7 +895,7 @@ return function(env)
 			padding = theme.space.xs,
 		})
 		local railScrollHolder = P.frame(rail, {
-			size = UDim2.new(1, 0, 1, 0),
+			size = UDim2.new(1, 0, 0, 0),
 			flex = "Fill",
 			layoutOrder = 1,
 		})
@@ -901,26 +904,25 @@ return function(env)
 			size = UDim2.fromScale(1, 1),
 			gap = theme.space.hair,
 			horizontal = not wide,
+			alignX = "Left",
 		})
 		-- Under the list where there is a column to put it under, and at the end of the
 		-- strip where there is not -- so there is exactly one of it either way.
-		if wide then
-			local addButton = P.button(rail, {
-				name = "AddProvider",
-				text = "Add a provider",
-				icon = "plus",
-				variant = "secondary",
-				size = "sm",
-				fill = true,
-				layoutOrder = 2,
-				onClick = function(handle)
-					M.add(function(id) panel.select(id) end)
-				end,
-			})
-			addButton.instance.LayoutOrder = 2
-		end
+		local addButton = P.button(rail, {
+			name = "AddProvider",
+			text = "Add a provider",
+			icon = "plus",
+			variant = "secondary",
+			size = "sm",
+			fill = true,
+			layoutOrder = 2,
+			onClick = function()
+				M.add(function(id) panel.select(id) end)
+			end,
+		})
+		addButton.instance.Visible = wide
 
-		P.divider(root, {
+		local divider = P.divider(root, {
 			vertical = wide,
 			color = theme.color.borderSubtle,
 			layoutOrder = 2,
@@ -951,6 +953,7 @@ return function(env)
 		end
 
 		function panel.renderRail()
+			local position = railScroll.instance.CanvasPosition
 			railScroll.clear()
 			railRows = {}
 			local list = registry.list()
@@ -959,8 +962,9 @@ return function(env)
 				local isActive = active and active.id == record.id
 				local row = P.rowButton(railScroll.instance, {
 					name = "Provider_" .. tostring(record.id),
-					size = (not wide) and UDim2.fromOffset(theme.size.menu, math.max(theme.size.controlLarge, responsive.minTarget())) or nil,
-					height = theme.size.controlLarge,
+					size = (not wide) and UDim2.fromOffset(0, railHeight) or nil,
+					auto = (not wide) and "X" or nil,
+					height = railHeight,
 					padding = { x = theme.space.sm },
 					radius = theme.radius.md,
 					selected = record.id == selected,
@@ -978,8 +982,16 @@ return function(env)
 					anchor = Vector2.new(0.5, 0.5),
 					position = UDim2.fromScale(0.5, 0.5),
 				})
-				row.label(record.label, 2,
-					record.id == selected and theme.color.text or theme.color.textSecondary, "small")
+				local colour = record.id == selected and theme.color.text or theme.color.textSecondary
+				if wide then
+					row.label(record.label, 2, colour, "small")
+				else
+					-- Intrinsic tabs: no menu-width reserve and no Fill child in an
+					-- auto-width row. Long names stop growing before consuming the strip.
+					P.text(row.row, { name = "Label", text = record.label, role = "small",
+						color = colour, auto = "X", truncate = true,
+						maxSize = Vector2.new(theme.size.menuMin, math.huge), layoutOrder = 2 })
+				end
 				-- A badge, not text appended to the title. It used to be "  (active)"
 				-- concatenated into a truncating label, so on a narrow rail the one fact
 				-- that says which endpoint is in use was the first thing cut.
@@ -1018,11 +1030,44 @@ return function(env)
 				})
 				add.instance.LayoutOrder = #list + 1
 			end
+			railScroll.instance.CanvasPosition = position
 		end
+
+		-- AbsoluteSize may still be zero at construction, and desktop resizing does
+		-- not change responsive.mode. Reflow the existing detail rather than replacing
+		-- a form somebody is typing into.
+		local function reflow()
+			local width = root.AbsoluteSize.X
+			if width <= 0 then return end
+			local nextWide = responsive.mode == "window" and width >= theme.size.dialogNav * 3
+			local changed = nextWide ~= wide
+			wide = nextWide
+			rootLayout.FillDirection = wide and Enum.FillDirection.Horizontal or Enum.FillDirection.Vertical
+			rootLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+			railHolder.Size = wide and UDim2.new(0, theme.size.dialogNav, 1, 0)
+				or UDim2.new(1, 0, 0, railHeight + theme.space.xs * 2 + theme.size.scrollbar)
+			addButton.instance.Visible = wide
+			divider.Size = wide and UDim2.new(0, theme.stroke.hair, 1, 0)
+				or UDim2.new(1, 0, 0, theme.stroke.hair)
+			detailHolder.Size = wide and UDim2.new(0, 0, 1, 0) or UDim2.new(1, 0, 0, 0)
+			railScroll.layout.FillDirection = wide and Enum.FillDirection.Vertical or Enum.FillDirection.Horizontal
+			railScroll.instance.AutomaticCanvasSize = wide and Enum.AutomaticSize.Y or Enum.AutomaticSize.X
+			railScroll.instance.ScrollingDirection = wide and Enum.ScrollingDirection.Y or Enum.ScrollingDirection.X
+			railScroll.instance.VerticalScrollBarInset = wide and Enum.ScrollBarInset.ScrollBar or Enum.ScrollBarInset.None
+			railScroll.instance.HorizontalScrollBarInset = wide and Enum.ScrollBarInset.None or Enum.ScrollBarInset.ScrollBar
+			if changed then
+				railScroll.instance.CanvasPosition = Vector2.new(0, 0)
+				panel.renderRail()
+			end
+		end
+		root:GetPropertyChangedSignal("AbsoluteSize"):Connect(reflow)
+		local unsubscribeLayout = responsive.changed:connect(reflow)
+		reflow()
 
 		-- Detail ---------------------------------------------------------------
 
 		local statusBox = nil
+		local healthError = nil
 
 		local function order()
 			panel.__order = (panel.__order or 0) + 1
@@ -1090,6 +1135,7 @@ return function(env)
 		function panel.renderDetail()
 			detail.clear()
 			statusBox = nil
+			healthError = nil
 			panel.__order = 0
 			local record = selected and registry.get(selected) or nil
 			if not record then
@@ -1104,7 +1150,7 @@ return function(env)
 				end
 				C.emptyState(detail.instance, {
 					title = registry.count() == 0 and "No provider configured"
-						or "Pick a provider on the left",
+						or "Pick a provider from the list",
 					description = registry.count() == 0
 						and "Add an endpoint to start. Anything that speaks /v1/chat/completions works: "
 							.. "a hosted API, a relay, or a local server reachable from this host."
@@ -1154,10 +1200,6 @@ return function(env)
 				auto = "Y",
 			})
 			subtitle.Size = UDim2.new(1, 0, 0, 0)
-			if isActive then
-				local badge = P.badge(head, { text = "Active", tone = "accent", layoutOrder = 2 })
-				badge.LayoutOrder = 2
-			end
 
 			-- Status ------------------------------------------------------------
 			local status = R.section(detail.instance, {
@@ -1170,9 +1212,9 @@ return function(env)
 			statusBox = R.facts(status, factsFor(record), { name = "StatusFacts", layoutOrder = 1 })
 
 			local health = record.health or {}
-			if util.trim(health.lastError or "") ~= "" then
-				R.paragraph(status, health.lastError, { color = theme.color.danger, layoutOrder = 2 })
-			end
+			healthError = R.paragraph(status, health.lastError or "",
+				{ name = "HealthError", color = theme.color.danger, layoutOrder = 2 })
+			healthError.Visible = util.trim(health.lastError or "") ~= ""
 			-- The preset's own guidance, which the registry copies onto every record and
 			-- nothing has ever rendered: Azure's deployment-path rule, Ollama's loopback
 			-- warning, DeepSeek's reasoning field.
@@ -1478,6 +1520,9 @@ return function(env)
 		-- Wiring ---------------------------------------------------------------
 
 		function panel.select(id)
+			if not root.Parent then return end
+			local previous = selected
+			local position = detail.instance.CanvasPosition
 			local list = registry.list()
 			if id and registry.get(id) then
 				selected = id
@@ -1487,7 +1532,7 @@ return function(env)
 			end
 			panel.renderRail()
 			panel.renderDetail()
-			detail.instance.CanvasPosition = Vector2.new(0, 0)
+			detail.instance.CanvasPosition = previous == selected and position or Vector2.new(0, 0)
 		end
 
 		-- Health arrives on every single completion, and the panel used to rebuild
@@ -1509,6 +1554,10 @@ return function(env)
 				pcall(function() statusBox:Destroy() end)
 				statusBox = replacement
 			end
+			if record and healthError and healthError.Parent then
+				healthError.Text = tostring((record.health or {}).lastError or "")
+				healthError.Visible = util.trim(healthError.Text) ~= ""
+			end
 		end
 
 		panel.select(nil)
@@ -1521,7 +1570,10 @@ return function(env)
 				panel.select(selected)
 			end
 		end)
-		root.Destroying:Connect(function() pcall(panel.unsubscribe) end)
+		root.Destroying:Connect(function()
+			pcall(panel.unsubscribe)
+			pcall(unsubscribeLayout)
+		end)
 
 		panel.root = root
 		panel.scroll = detail

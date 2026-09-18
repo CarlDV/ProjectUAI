@@ -74,6 +74,7 @@ return function(env)
 			onChange = function(value)
 				panel.view = value
 				render()
+				scroll.instance.CanvasPosition = Vector2.new(0, 0)
 			end,
 		})
 
@@ -123,7 +124,9 @@ return function(env)
 		})
 		clear.instance.LayoutOrder = 4
 
-		scroll = P.scroll(column, {
+		local listHolder = P.frame(column, { name = "LogListHolder", size = UDim2.new(1, 0, 0, 0),
+			flex = "Fill", layoutOrder = 2 })
+		scroll = P.scroll(listHolder, {
 			name = "LogList",
 			size = UDim2.new(1, 0, 1, 0),
 			-- Tight, because the rows now carry their own banding and padding; a six
@@ -132,8 +135,6 @@ return function(env)
 			padding = { x = theme.space.lg, top = theme.space.sm, bottom = theme.space.xl },
 			layoutOrder = 2,
 		})
-		local flex = Instance.new("UIFlexItem", scroll.instance)
-		flex.FlexMode = Enum.UIFlexMode.Fill
 
 		local function requestRow(entry, order)
 			local tone = "good"
@@ -159,6 +160,7 @@ return function(env)
 				-- which left thirty-five pixels stranded on every card.
 				size = UDim2.new(0, 0, 0, theme.text.monoSmall.height),
 				flex = "Fill",
+				truncate = true,
 				layoutOrder = 2,
 			})
 			local meta = P.text(top, {
@@ -268,6 +270,7 @@ return function(env)
 
 		render = function()
 			if not column.Parent then return end
+			local position = scroll.instance.CanvasPosition
 			scroll.clear()
 			if panel.view == "requests" then
 				local entries = util.reverse(http.history)
@@ -291,6 +294,7 @@ return function(env)
 				end
 				for index, entry in ipairs(entries) do logRow(entry, index) end
 			end
+			scroll.instance.CanvasPosition = position
 		end
 
 		render()
@@ -304,7 +308,11 @@ return function(env)
 		panel.unsubscribeHttp = http.changed:connect(function()
 			if panel.view == "requests" then refreshLater() end
 		end)
-		column.Destroying:Connect(cancelRefresh)
+		column.Destroying:Connect(function()
+			cancelRefresh()
+			pcall(panel.unsubscribeLog)
+			pcall(panel.unsubscribeHttp)
+		end)
 		return panel
 	end
 

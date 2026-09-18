@@ -346,6 +346,20 @@ return function(env)
 		rowTight = 22,
 		bar = 36,
 		chip = 26,
+		-- Chat-only geometry: a full-width prompt above an independent toolbar.
+		composerPrompt = 44,
+		composerExpanded = 144,
+		composerModel = 144,
+		composerModelMin = 76,
+		composerFieldMin = 240,
+		promptCard = 88,
+		promptColumns = 480,
+		modelPicker = 480,
+		modelPickerHeight = 500,
+		thinkingViewport = 180,
+		tableColumnMin = 104,
+		tableColumnMax = 320,
+		tableViewport = 380,
 		-- The home card: its column, one metric tile, and one cell of the activity
 		-- grid. All three were literals in the surface that drew them.
 		statCard = 560,

@@ -43,6 +43,7 @@ return function(env)
 
 	function M.mount(layer)
 		if M.mounted and M.root and M.root.Parent then return M.root end
+		M.visible = false
 
 		M.root = P.frame(layer, {
 			name = "QuickChat",
@@ -63,39 +64,44 @@ return function(env)
 		scrim.BackgroundTransparency = 1
 		scrim.ZIndex = theme.z.quick
 		M.scrim = scrim
+		scrim.Activated:Connect(function() M.hide() end)
 
-		local card = P.column(M.root, {
+		local card = P.frame(M.root, {
 			name = "QuickCard",
 			size = UDim2.new(0, math.min(math.max(responsive.viewport.X * 0.5, theme.size.modal), theme.size.reading * 0.6), 0, 0),
-			auto = "Y",
 			anchor = Vector2.new(0.5, 0.5),
 			position = UDim2.fromScale(0.5, 0.42),
-			bg = theme.color.surface,
+			bg = theme.color.surfaceRaised,
 			radius = theme.radius.xl,
-			gap = theme.space.md,
-			padding = theme.space.lg,
+			clip = true,
 			zIndex = theme.z.quick + 1,
 		})
-		P.stroke(card, theme.color.borderStrong)
+		card.Active = true
+		local outline = P.stroke(card, theme.color.borderStrong)
 		M.card = card
 		M.scale = Instance.new("UIScale", card)
 		M.scale.Scale = theme.scale.enter
+		local scroll = P.scroll(card, { name = "QuickBody", size = UDim2.fromScale(1, 1), padding = theme.space.md, gap = 0 })
+		local content, contentLayout = P.column(scroll.instance, {
+			name = "QuickContent", size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.sm,
+		})
 
-		local head = P.row(card, {
+		local head = P.row(content, {
 			name = "QuickHeader",
 			size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget())),
 			gap = theme.space.sm,
 			layoutOrder = 1,
 		})
 		local mark = P.frame(head, {
-			name = "QuickBrand", size = UDim2.fromOffset(theme.size.icon, theme.size.icon), layoutOrder = 0,
+			name = "QuickBrand", size = UDim2.fromOffset(theme.size.iconLarge, theme.size.iconLarge), layoutOrder = 0,
 		})
-		env.require("ui/brand").draw(mark, theme.size.icon)
+		env.require("ui/brand").draw(mark, theme.size.iconLarge)
 		P.text(head, {
-			text = "Quick message",
-			role = "label",
-			size = UDim2.new(0, 0, 0, theme.text.label.height),
+			text = "A thought? A task?",
+			role = "heading",
+			size = UDim2.new(0, 0, 0, theme.text.heading.height),
 			flex = "Fill",
+			truncate = true,
 			layoutOrder = 1,
 		})
 		P.iconButton(head, {
@@ -104,15 +110,18 @@ return function(env)
 			onClick = function() M.hide() end,
 		})
 
-		M.field = P.field(card, {
+		M.field = P.field(content, {
 			name = "QuickPrompt",
-			placeholder = "Ask a question or describe a change…",
-			height = theme.size.controlLarge,
+			placeholder = "Tell your agent what you have in mind…",
+			bare = true,
+			height = theme.size.control,
 			layoutOrder = 2,
+			onFocus = function() P.animate(outline, "hover", { Color = theme.color.accent }) end,
+			onBlur = function() P.animate(outline, "hover", { Color = theme.color.borderStrong }) end,
 			onSubmit = function(text) M.submit(text) end,
 		})
 
-		local footer = P.row(card, {
+		local footer = P.row(content, {
 			name = "QuickFooter",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
@@ -123,28 +132,71 @@ return function(env)
 			text = "",
 			role = "caption",
 			color = theme.color.textTertiary,
-			size = UDim2.new(0, 0, 0, 0),
-			auto = "Y",
-			wrap = true,
+			size = UDim2.new(0, 0, 0, theme.text.caption.height),
+			truncate = true,
 			flex = "Fill",
 			layoutOrder = 1,
 		})
+		P.iconButton(footer, {
+			name = "OpenFullChat", icon = "windowMaximize", diameter = theme.size.controlSmall, layoutOrder = 2,
+			onClick = function()
+				local text = M.field.get()
+				local app = env.require("ui/app")
+				app.show("chat")
+				if app.chatPanel and app.chatPanel.composer then
+					if text ~= "" then app.chatPanel.composer.insert(text) end
+					M.field.clear()
+					M.hide()
+					app.chatPanel.composer.focus()
+				end
+			end,
+		})
 		P.button(footer, {
 			name = "SendQuickChat", text = "Send", icon = "send",
-			variant = "primary", size = "sm", layoutOrder = 2,
+			variant = "primary", size = "sm", layoutOrder = 3,
 			onClick = function() M.submit(M.field.get()) end,
 		})
 		local function layoutCard()
-			local width = math.min(responsive.viewport.X - theme.space.xl * 2,
+			local bounds = responsive.usableRect(layer, theme.space.md)
+			local width = math.min(bounds.width,
 				math.max(responsive.viewport.X * 0.5, theme.size.modal), theme.size.reading * 0.6)
-			card.Size = UDim2.fromOffset(math.max(math.floor(width), 1), 0)
-			local available = responsive.viewport.Y - responsive.inset.Y - responsive.bottomObstruction()
-			card.Position = UDim2.new(0.5, 0, 0, math.floor(available * 0.42))
+			local measured = contentLayout.AbsoluteContentSize
+			-- Layout initially reports zero, including while hidden. Keep enough room
+			-- for the fixed controls until the first measured pass arrives.
+			local minimum = head.Size.Y.Offset + M.field.shell.Size.Y.Offset
+				+ math.max(theme.size.controlSmall, responsive.minTarget()) + theme.space.sm * 2
+			local wanted = math.max(minimum, measured and measured.Y or 0)
+			local height = math.max(1, math.min(bounds.height, wanted + theme.space.md * 2))
+			card.Size = UDim2.fromOffset(math.max(math.floor(width), 1), math.floor(height))
+			local half = height / 2
+			local y = util.clamp(bounds.height * 0.42, math.min(half, bounds.height / 2), math.max(bounds.height / 2, bounds.height - half))
+			card.Position = UDim2.fromOffset(math.floor(bounds.x + bounds.width / 2), math.floor(bounds.y + y))
 		end
 		M.layout = layoutCard
+		contentLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(layoutCard)
 		layoutCard()
-		local unsubscribe = responsive.changed:connect(layoutCard)
-		M.root.Destroying:Connect(function() pcall(unsubscribe) end)
+		local unsubscribe = dispose.add(responsive.changed:connect(layoutCard), "quick chat layout")
+		local root = M.root
+		root.Destroying:Connect(function()
+			unsubscribe()
+			if M.root == root then M.mounted = false; M.visible = false end
+		end)
+		local function rebuild()
+			if M.root ~= root or not M.mounted then return end
+			local text, visible = M.field.get(), M.visible
+			root:Destroy()
+			M.mount(layer)
+			M.field.set(text)
+			if visible then M.show() end
+		end
+		local queueRebuild, cancelRebuild = clock.debounce(rebuild, theme.duration("fast"))
+		local stopTheme = dispose.add(theme.changed:connect(queueRebuild), "quick chat theme")
+		local stopMode = dispose.add(responsive.modeChanged:connect(queueRebuild), "quick chat mode")
+		root.Destroying:Connect(function()
+			cancelRebuild()
+			stopTheme()
+			stopMode()
+		end)
 
 		M.mounted = true
 		return M.root
@@ -166,27 +218,25 @@ return function(env)
 		M.visible = true
 		refreshHint()
 		if M.layout then M.layout() end
-		M.field.set("")
 		M.root.Visible = true
 		if responsive.reduceMotion then
-			M.scale.Scale = 1
-			M.scrim.BackgroundTransparency = theme.opacity.scrim
+			P.animate(M.scale, "instant", { Scale = 1 })
+			P.animate(M.scrim, "instant", { BackgroundTransparency = theme.opacity.scrim })
 		else
 			M.scale.Scale = theme.scale.enter
 			M.scrim.BackgroundTransparency = 1
 			-- Snapped on completion: a card left mid-tween keeps its field laid out at
 			-- 98% of its metrics until the next time it opens.
-			local grow = env.tween:Create(M.scale, theme.tween("enter"), { Scale = 1 })
-			grow.Completed:Connect(function()
+			P.animate(M.scale, "enter", { Scale = 1 }, function()
 				if M.visible then M.scale.Scale = 1 end
 			end)
-			grow:Play()
-			env.tween:Create(M.scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
+			P.animate(M.scrim, "enter", { BackgroundTransparency = theme.opacity.scrim })
 		end
 		-- One frame late: capturing focus in the same frame the surface becomes
 		-- visible is unreliable.
-		clock.delay(theme.motion.fast, function()
-			if M.visible then M.field.focus() end
+		local root = M.root
+		clock.delay(theme.duration("fast"), function()
+			if M.visible and M.root == root then M.field.focus() end
 		end)
 	end
 
@@ -195,16 +245,17 @@ return function(env)
 		M.visible = false
 		pcall(function() M.field.instance:ReleaseFocus() end)
 		if responsive.reduceMotion then
+			P.animate(M.scale, "instant", { Scale = 1 })
+			P.animate(M.scrim, "instant", { BackgroundTransparency = 1 })
 			M.root.Visible = false
 			return
 		end
-		env.tween:Create(M.scale, theme.tween("exit"), { Scale = theme.scale.enter }):Play()
-		local out = env.tween:Create(M.scrim, theme.tween("exit"), { BackgroundTransparency = 1 })
-		out.Completed:Connect(function()
+		P.animate(M.scale, "exit", { Scale = theme.scale.enter })
+		local root = M.root
+		P.animate(M.scrim, "exit", { BackgroundTransparency = 1 }, function()
 			-- Only hide if nothing reopened it while the tween ran.
-			if not M.visible and M.root then M.root.Visible = false end
+			if not M.visible and M.root == root then root.Visible = false end
 		end)
-		out:Play()
 	end
 
 	function M.toggle()
@@ -218,6 +269,7 @@ return function(env)
 		-- land in the transcript rather than in a parallel conversation.
 		local ok, reason = sessions.current().send(message)
 		if ok then
+			M.field.clear()
 			M.hide()
 		else
 			-- Rejection is recoverable: keep the prompt in place for a retry instead of
@@ -263,10 +315,6 @@ return function(env)
 			if input.KeyCode == M.keyCode() then M.show() end
 		end))
 
-		-- Clicking the scrim dismisses without sending.
-		if M.scrim then
-			M.scrim.Activated:Connect(function() M.hide() end)
-		end
 	end
 
 	-- Settings asks for the next keypress rather than parsing a typed character.

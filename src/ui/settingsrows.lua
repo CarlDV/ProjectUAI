@@ -62,6 +62,8 @@ return function(env)
 	end
 
 	function R.toggle(parent, props)
+		local initial = props.value
+		if initial == nil then initial = config.get(props.path, false) == true end
 		local row = P.row(parent, {
 			name = props.name,
 			size = UDim2.new(1, 0, 0, 0),
@@ -83,7 +85,7 @@ return function(env)
 			})
 		end
 		local switch = C.switch(row, {
-			value = (props.value ~= nil) and props.value or (config.get(props.path, false) == true),
+			value = initial,
 			onChange = function(value)
 				if props.path then config.set(props.path, value) end
 				if props.onChange then pcall(props.onChange, value) end
@@ -126,7 +128,9 @@ return function(env)
 			role = "small",
 			-- Fills rather than reserving 70 for a 66px value plus a 6px gap, which
 			-- overlapped it by two pixels.
-			size = UDim2.new(0, 0, 0, theme.text.small.height),
+			size = UDim2.new(0, 0, 0, 0),
+			wrap = true,
+			auto = "Y",
 			flex = "Fill",
 			layoutOrder = 1,
 		})
@@ -135,9 +139,9 @@ return function(env)
 			role = "monoSmall",
 			color = theme.color.accent,
 			align = "Right",
+			auto = "X",
 			layoutOrder = 2,
 		})
-		value.Size = UDim2.fromOffset(theme.size.metaColumn, theme.text.small.height)
 		C.slider(column, {
 			-- Named after the setting it writes, so the tree says which slider is
 			-- which -- eight of them called "Slider" is unreadable from a dump and
@@ -182,7 +186,9 @@ return function(env)
 		P.text(head, {
 			text = label,
 			role = "small",
-			size = UDim2.new(0, 0, 0, theme.text.small.height),
+			size = UDim2.new(0, 0, 0, 0),
+			wrap = true,
+			auto = "Y",
 			flex = "Fill",
 			layoutOrder = 1,
 		})
@@ -404,7 +410,8 @@ return function(env)
 				if props.onChange then pcall(props.onChange, clean) end
 			end,
 		})
-		if props.hint then R.paragraph(parent, props.hint) end
+		if props.hint then R.paragraph(parent, props.hint,
+			{ layoutOrder = props.layoutOrder and (props.layoutOrder + 2) or nil }) end
 		return field
 	end
 
@@ -430,7 +437,8 @@ return function(env)
 				if props.onChange then pcall(props.onChange, tostring(text or "")) end
 			end,
 		})
-		if props.hint then R.paragraph(parent, props.hint) end
+		if props.hint then R.paragraph(parent, props.hint,
+			{ layoutOrder = props.layoutOrder and (props.layoutOrder + 2) or nil }) end
 		return field
 	end
 
@@ -445,6 +453,7 @@ return function(env)
 			gap = theme.space.sm,
 			layoutOrder = props.layoutOrder,
 		})
+		local limits = {}
 		for index, entry in ipairs(list) do
 			local button = P.button(row, {
 				name = entry.name,
@@ -455,7 +464,22 @@ return function(env)
 				onClick = entry.onClick,
 			})
 			button.instance.LayoutOrder = index
+			-- Wrapping moves a whole button; it cannot make one long action fit.
+			-- Bound the intrinsic label itself so its button shrinks with the pane.
+			if button.label then
+				button.label.TextTruncate = Enum.TextTruncate.AtEnd
+				limits[#limits + 1] = Instance.new("UISizeConstraint", button.label)
+			end
 		end
+		local function fit()
+			local width = row.AbsoluteSize.X
+			if width <= 0 then return end
+			for _, limit in ipairs(limits) do
+				limit.MaxSize = Vector2.new(math.max(width - theme.space.md * 2, 0), math.huge)
+			end
+		end
+		row:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
+		fit()
 		return row
 	end
 

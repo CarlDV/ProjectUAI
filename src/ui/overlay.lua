@@ -22,8 +22,7 @@ return function(env)
 	local function toastCapacity()
 		local height = math.max(theme.size.avatar, theme.size.controlSmall,
 			responsive.minTarget(), theme.text.small.height) + theme.space.md * 2
-		local room = responsive.viewport.Y - responsive.inset.Y
-			- responsive.bottomObstruction() - theme.space.lg * 2
+		local room = responsive.usableRect(M.layer, theme.space.lg).height
 		return math.max(1, math.min(TOAST_LIMIT,
 			math.floor((room + theme.space.sm) / (height + theme.space.sm))))
 	end
@@ -52,13 +51,11 @@ return function(env)
 				if oldest then oldest.close() end
 			end
 			local narrow = responsive.isNarrow()
-			local width = math.max(theme.size.control, math.min(theme.size.modal,
-				responsive.viewport.X - theme.space.md * 2))
+			local bounds = responsive.usableRect(M.layer, narrow and theme.space.md or theme.space.lg)
+			local width = math.min(theme.size.modal, bounds.width)
 			M.toastColumn.Size = UDim2.new(0, width, 0, 0)
 			M.toastColumn.AnchorPoint = narrow and Vector2.new(0.5, 0) or Vector2.new(1, 0)
-			M.toastColumn.Position = narrow
-				and UDim2.new(0.5, 0, 0, theme.space.md + responsive.inset.Y)
-				or UDim2.new(1, -theme.space.lg, 0, theme.space.lg + responsive.inset.Y)
+			M.toastColumn.Position = UDim2.fromOffset(math.floor(bounds.x + bounds.width * (narrow and 0.5 or 1)), bounds.y)
 		end
 		layoutToasts()
 		local unbindToasts = dispose.add(responsive.changed:connect(layoutToasts), "toast layout")
@@ -69,7 +66,7 @@ return function(env)
 			if processed then return end
 			if input.KeyCode ~= Enum.KeyCode.Escape and input.KeyCode ~= Enum.KeyCode.ButtonB then return end
 			local topmost = M.open[#M.open]
-			if topmost then topmost.close() end
+			if topmost and topmost.dismissable ~= false then topmost.close() end
 		end))
 		M.layer.Destroying:Connect(unbindEscape)
 
@@ -188,8 +185,7 @@ return function(env)
 
 		local function layoutMessage()
 			if entry.closed then return end
-			local available = responsive.viewport.Y - responsive.inset.Y
-				- responsive.bottomObstruction() - theme.space.lg * 2
+			local available = responsive.usableRect(M.layer, theme.space.lg).height
 			local ceiling = math.max(minimum, math.min(theme.text.small.height * 5 + pad * 2,
 				math.floor(available / toastCapacity()) - theme.space.sm))
 			local wanted = math.max(minimum, math.ceil(label.TextBounds.Y) + pad * 2)
@@ -207,11 +203,10 @@ return function(env)
 			for index, item in ipairs(M.toasts) do
 				if item == entry then table.remove(M.toasts, index) break end
 			end
-			local out = P.animate(group, "exit", {
+			P.animate(group, "exit", {
 				GroupTransparency = 1,
 				Position = UDim2.fromOffset(0, responsive.reduceMotion and 0 or -theme.space.xs),
-			})
-			out.Completed:Connect(function() pcall(function() slot:Destroy() end) end)
+			}, function() slot:Destroy() end)
 		end
 		slot.Destroying:Connect(function()
 			for index, item in ipairs(M.toasts) do
@@ -289,21 +284,9 @@ return function(env)
 	-- Returns a handle with `content` (a column to fill) and `close`. The caller
 	-- builds the body; this owns the scrim, the card, the animation and dismissal.
 	--
-	-- `scroll = true` is for a modal holding a form rather than a sentence.
-	--
-	-- An auto-height card has no ceiling: it is as tall as whatever is put in it, and
-	-- since it is centred, anything past the viewport goes off *both* edges at once. The
-	-- provider editor is seven labelled rows and a footer, so on a phone in landscape --
-	-- 720 tall, which is an ordinary Roblox client -- its title and preset row were cut
-	-- off above the screen and its key row and Save button below it, with no way to reach
-	-- either: nothing scrolled, because nothing knew it was too big. In this mode the
-	-- card takes a bounded height instead, the header and footer stay put, and the body
-	-- between them scrolls.
-	--
-	-- Bounded rather than measured. Roblox will report a UIListLayout's content size, but
-	-- only after a frame, and driving a card's height off it means the modal resizes
-	-- under the pointer as rows are built -- so the height here is a cap the caller
-	-- states, clamped to what the screen has.
+	-- `scroll = true` reserves a stable preferred height for forms. Short prompts
+	-- fit their contents up to the same usable-room ceiling. Both have a scrolling
+	-- body, so opening a keyboard never makes a field or action unreachable.
 	function M.modal(props)
 		props = props or {}
 		if not ensure() then return nil end
@@ -317,21 +300,7 @@ return function(env)
 		})
 		scrim.Active = true
 
-		local sheetMode = responsive.mode == "sheet"
-		local widest = math.max(responsive.viewport.X - theme.space.lg * 2, theme.size.modalMin)
-		local scrolls = props.scroll == true
-		-- Everything the screen has, less the margin a floating card keeps and whatever
-		-- the platform is covering: the top inset, and the on-screen keyboard, which is
-		-- the case that matters most here because a form is a thing you type into.
-		local bottomObstruction = responsive.bottomObstruction()
-		local room = responsive.viewport.Y - responsive.inset.Y
-			- bottomObstruction - theme.space.lg * 2
-		local height = 0
-		if scrolls then
-			local preferred = props.height or 620
-			height = math.floor(util.clamp(preferred,
-				theme.size.modalMin, math.max(room, theme.size.modalMin)))
-		end
+		local rect = responsive.usableRect(M.layer, theme.space.lg)
 
 		local dismiss
 		if props.dismissable ~= false then
@@ -346,30 +315,14 @@ return function(env)
 			dismiss.AutoButtonColor = false
 		end
 
-		local cardProps = {
+		local card = P.frame(scrim, {
 			name = "Modal",
-			size = sheetMode
-				and UDim2.new(1, -theme.space.md * 2, 0, scrolls and height or 0)
-				or UDim2.new(0, util.clamp(props.width or theme.size.modal, theme.size.modalMin, widest),
-					0, scrolls and height or 0),
-			auto = (not scrolls) and "Y" or nil,
-			anchor = sheetMode and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5),
-			position = sheetMode and UDim2.new(0.5, 0, 1, -(theme.space.lg + bottomObstruction))
-				or UDim2.new(0.5, 0, 0.5, math.floor((responsive.inset.Y - bottomObstruction) / 2)),
+			size = UDim2.fromOffset(math.min(props.width or theme.size.modal, rect.width), math.min(props.height or 620, rect.height)),
 			bg = theme.color.surfaceRaised,
 			radius = theme.radius.xl,
-			padding = (not scrolls) and theme.space.lg or nil,
 			zIndex = theme.z.modal + 1,
 			clip = true,
-		}
-
-		local card
-		if scrolls then
-			card = P.frame(scrim, cardProps)
-		else
-			cardProps.gap = theme.space.md
-			card = P.column(scrim, cardProps)
-		end
+		})
 		-- Active so clicks and touches inside the card never fall through to the dismiss button.
 		card.Active = true
 		P.stroke(card, theme.color.border)
@@ -377,30 +330,31 @@ return function(env)
 		scale.Scale = responsive.reduceMotion and 1 or theme.scale.enter
 
 		local closeDiameter = math.max(theme.size.control, responsive.minTarget())
-		local descLines = props.description and math.ceil(#tostring(props.description) / 38) or 0
 		local headerContentHeight = math.max(closeDiameter,
-			theme.text.title.height + (props.description and (theme.space.xs + descLines * theme.text.small.height) or 0))
+			theme.text.title.height + (props.description and (theme.space.hair + theme.text.small.height) or 0))
 		local footerContentHeight = math.max(theme.size.control, responsive.minTarget())
 		local pad = theme.space.lg
 		local headerTotal = headerContentHeight + pad * 2
-		local footerTotal = footerContentHeight + pad * 2
+		local footerTotal = footerContentHeight + theme.space.sm * 2
 
 		local header = P.row(card, {
 			name = "Header",
-			size = scrolls and UDim2.new(1, 0, 0, headerTotal) or UDim2.new(1, 0, 0, 0),
-			position = scrolls and UDim2.new(0, 0, 0, 0) or nil,
-			padding = scrolls and { x = pad, y = pad } or nil,
-			auto = (not scrolls) and "Y" or nil,
+			size = UDim2.new(1, 0, 0, headerTotal),
+			padding = { x = pad, y = pad },
 			gap = theme.space.sm,
 			alignY = "Top",
 			layoutOrder = 1,
 		})
-		local titleColumn = P.column(header, {
-			-- Fills rather than reserving control + sm for the close button, which is
-			-- sized to max(control, minTarget()) and so is 44 on touch.
-			size = UDim2.new(0, 0, 0, 0),
+		local titleScroll = P.scroll(header, {
+			name = "TitleScroll",
+			size = UDim2.new(1, -(props.dismissable ~= false and (closeDiameter + theme.space.sm) or 0), 1, 0),
+			gap = 0,
+			bar = 0,
+			layoutOrder = 1,
+		})
+		local titleColumn = P.column(titleScroll.instance, {
+			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
-			flex = "Fill",
 			gap = theme.space.hair,
 			layoutOrder = 1,
 		})
@@ -421,48 +375,41 @@ return function(env)
 			})
 		end
 
-		local handle = { card = card, scrim = scrim, closed = false }
+		local handle = { card = card, scrim = scrim, closed = false, dismissable = props.dismissable ~= false }
 		local unbindResponsive
+		local fitChrome
+		local function unregister()
+			if unbindResponsive then unbindResponsive(); unbindResponsive = nil end
+			for index = #M.open, 1, -1 do
+				if M.open[index] == handle then table.remove(M.open, index) end
+			end
+		end
+		scrim.Destroying:Connect(function()
+			local notify = not handle.closed
+			handle.closed = true
+			unregister()
+			if notify and props.onClose then pcall(props.onClose) end
+		end)
 
 		function handle.close(confirmed)
 			if handle.closed then return end
 			handle.closed = true
-			if unbindResponsive then
-				pcall(unbindResponsive)
-				unbindResponsive = nil
-			end
-			for index, item in ipairs(M.open) do
-				if item == handle then table.remove(M.open, index) end
-			end
-			env.tween:Create(scale, theme.tween("exit"), { Scale = theme.scale.enter }):Play()
-			local out = env.tween:Create(scrim, theme.tween("exit"), { BackgroundTransparency = 1 })
-			out.Completed:Connect(function() pcall(function() scrim:Destroy() end) end)
-			out:Play()
+			unregister()
+			P.animate(scale, "exit", { Scale = responsive.reduceMotion and 1 or theme.scale.enter })
+			P.animate(scrim, "exit", { BackgroundTransparency = 1 }, function() scrim:Destroy() end)
 			if confirmed ~= true and props.onClose then pcall(props.onClose) end
 		end
 
 		local function relayout()
 			if handle.closed then return end
 			local isSheet = responsive.mode == "sheet"
-			local curWidest = math.max(responsive.viewport.X - theme.space.lg * 2, theme.size.modalMin)
-			local curObstruction = responsive.bottomObstruction()
-			local curRoom = responsive.viewport.Y - responsive.inset.Y
-				- curObstruction - theme.space.lg * 2
-			local curHeight = 0
-			if scrolls then
-				local preferred = props.height or 620
-				curHeight = math.floor(util.clamp(preferred,
-					theme.size.modalMin, math.max(curRoom, theme.size.modalMin)))
-			end
-
+			local bounds = responsive.usableRect(M.layer, isSheet and theme.space.md or theme.space.lg)
 			card.AnchorPoint = isSheet and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5)
-			card.Position = isSheet
-				and UDim2.new(0.5, 0, 1, -(theme.space.lg + curObstruction))
-				or UDim2.new(0.5, 0, 0.5, math.floor((responsive.inset.Y - curObstruction) / 2))
-			card.Size = isSheet
-				and UDim2.new(1, -theme.space.md * 2, 0, scrolls and curHeight or 0)
-				or UDim2.new(0, util.clamp(props.width or theme.size.modal, theme.size.modalMin, curWidest),
-					0, scrolls and curHeight or 0)
+			card.Position = UDim2.fromOffset(math.floor(bounds.x + bounds.width / 2),
+				math.floor(bounds.y + bounds.height * (isSheet and 1 or 0.5)))
+			card.Size = UDim2.fromOffset(math.floor(isSheet and bounds.width or math.min(props.width or theme.size.modal, bounds.width)),
+				math.floor(math.min(props.height or 620, bounds.height)))
+			if fitChrome then fitChrome(bounds.height) end
 		end
 
 		unbindResponsive = dispose.add(responsive.changed:connect(relayout), "modal layout")
@@ -485,13 +432,13 @@ return function(env)
 
 		-- The body. In bounded scroll mode, it takes the region between the fixed-height
 		-- header and pinned footer without layout-fighting UIFlexItem.
-		if scrolls then
+		do
 			handle.scroll = P.scroll(card, {
 				name = "BodyScroll",
 				position = UDim2.new(0, 0, 0, headerTotal),
 				size = UDim2.new(1, 0, 1, -(headerTotal + footerTotal)),
 				gap = theme.space.sm,
-				padding = { left = pad, right = pad },
+				padding = { left = pad, right = pad, top = theme.space.xxs, bottom = theme.space.sm },
 			})
 			handle.scroll.instance.CanvasPosition = Vector2.new(0, 0)
 			handle.content = P.column(handle.scroll.instance, {
@@ -506,10 +453,11 @@ return function(env)
 				size = UDim2.new(1, 0, 0, footerTotal),
 				anchor = Vector2.new(0, 1),
 				position = UDim2.new(0, 0, 1, 0),
-				padding = { x = pad, y = pad },
+				padding = { x = pad, y = theme.space.sm },
 				bg = theme.color.surface,
 				gap = theme.space.sm,
 				alignX = "Right",
+				wrap = true,
 			})
 			P.frame(card, {
 				name = "FooterDivider",
@@ -517,52 +465,119 @@ return function(env)
 				position = UDim2.new(0, 0, 1, -footerTotal),
 				bg = theme.color.borderSubtle,
 			})
-		else
-			handle.content = P.column(card, {
-				name = "Body",
-				size = UDim2.new(1, 0, 0, 0),
-				auto = "Y",
-				gap = theme.space.sm,
-				layoutOrder = 2,
-			})
-			handle.footer = P.row(card, {
-				name = "Footer",
-				size = UDim2.new(1, 0, 0, 0),
-				auto = "Y",
-				gap = theme.space.sm,
-				alignX = "Right",
-				layoutOrder = 3,
-			})
 		end
 
-		if scrolls then
+		do
 			local divider = card:FindFirstChild("FooterDivider")
-			local function fitHeader()
-				if handle.closed or titleLabel.AbsoluteSize.X <= theme.size.icon then return end
-				local titleHeight = math.max(theme.text.title.height, math.ceil(titleLabel.TextBounds.Y))
-				local descriptionHeight = descriptionLabel
-					and (theme.space.hair + math.max(theme.text.small.height, math.ceil(descriptionLabel.TextBounds.Y))) or 0
-				local measured = math.max(closeDiameter, titleHeight + descriptionHeight) + pad * 2
+			local fitting = false
+			local footerEnabled = true
+			local footerShown = true
+			local footerLayout = handle.footer:FindFirstChildOfClass("UIListLayout")
+			local bodyLayout = handle.content:FindFirstChildOfClass("UIListLayout")
+			fitChrome = function(roomHeight)
+				if handle.closed or fitting then return end
+				fitting = true
+				local roomNow = roomHeight or responsive.usableRect(M.layer,
+					responsive.mode == "sheet" and theme.space.md or theme.space.lg).height
+				local width = math.max(1, card.Size.X.Offset - pad * 2
+					- (props.dismissable ~= false and (closeDiameter + theme.space.sm) or 0))
+				local function textHeight(label, role)
+					local measured = P.measureText(label.Text, { role = role, width = width }).Y
+					return math.max(theme.textRole(role).height, math.ceil(label.TextBounds.Y), math.ceil(measured))
+				end
+				local titleHeight = textHeight(titleLabel, "title")
+				if descriptionLabel then titleHeight = titleHeight + theme.space.hair + textHeight(descriptionLabel, "small") end
+				local hasFooter, footerHeight = false, 0
+				for _, child in ipairs(handle.footer:GetChildren()) do
+					if footerEnabled and child:IsA("GuiObject") and child.Visible then
+						hasFooter = true
+						footerHeight = math.max(footerHeight, child.AbsoluteSize.Y, child.Size.Y.Offset)
+					end
+				end
+				local footerBounds = footerLayout.AbsoluteContentSize
+				if footerBounds then footerHeight = math.max(footerHeight, footerBounds.Y) end
+				footerTotal = hasFooter and (footerHeight + theme.space.sm * 2) or 0
+				local bodyBounds = bodyLayout.AbsoluteContentSize
+				local bodyHeight = bodyBounds and bodyBounds.Y or handle.content.AbsoluteSize.Y
+				local chromePad = roomNow < (headerTotal + footerTotal + closeDiameter) and theme.space.xs or pad
+				local wantedHeader = math.max(closeDiameter, titleHeight) + chromePad * 2
+				local preferred = props.height or (props.scroll == true and 620
+					or (wantedHeader + footerTotal + bodyHeight + theme.space.sm + theme.space.xxs))
+				local cardHeight = math.max(1, math.floor(math.min(preferred, roomNow)))
+				local measured = math.min(cardHeight, wantedHeader, math.max(closeDiameter + chromePad * 2,
+					cardHeight - footerTotal - closeDiameter))
+				footerTotal = math.min(footerTotal, math.max(0, cardHeight - measured - 1))
+				card.Size = UDim2.fromOffset(card.Size.X.Offset, cardHeight)
+				local padding = header:FindFirstChildOfClass("UIPadding")
+				padding.PaddingTop = UDim.new(0, chromePad)
+				padding.PaddingBottom = UDim.new(0, chromePad)
 				header.Size = UDim2.new(1, 0, 0, measured)
 				handle.scroll.instance.Position = UDim2.fromOffset(0, measured)
-				handle.scroll.instance.Size = UDim2.new(1, 0, 1, -(measured + footerTotal))
-				if divider then divider.Position = UDim2.new(0, 0, 1, -footerTotal) end
+				handle.scroll.instance.Size = UDim2.new(1, 0, 0, math.max(0, cardHeight - measured - footerTotal))
+				handle.footer.Size = UDim2.new(1, 0, 0, footerTotal)
+				footerShown = hasFooter
+				handle.footer.Visible = footerShown
+				if divider then
+					divider.Visible = hasFooter
+					divider.Position = UDim2.new(0, 0, 1, -footerTotal)
+				end
+				fitting = false
 			end
-			titleLabel:GetPropertyChangedSignal("TextBounds"):Connect(fitHeader)
-			if descriptionLabel then descriptionLabel:GetPropertyChangedSignal("TextBounds"):Connect(fitHeader) end
-			fitHeader()
+			local scheduled = false
+			local function scheduleFit()
+				if scheduled or handle.closed then return end
+				scheduled = true
+				task.defer(function()
+					scheduled = false
+					if not handle.closed then fitChrome() end
+				end)
+			end
+			for _, layout in ipairs({ bodyLayout, footerLayout }) do
+				layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(scheduleFit)
+			end
+			-- A collapsed footer has no layout pass to report a child becoming visible.
+			-- Observe child state directly so hiding/showing actions always returns room
+			-- to the body and can revive an initially empty footer.
+			local childConnections = {}
+			local function unwatchChild(child)
+				for _, connection in ipairs(childConnections[child] or {}) do connection:Disconnect() end
+				childConnections[child] = nil
+			end
+			local function watchChild(child)
+				if child:IsA("GuiObject") and not childConnections[child] then
+					local connections = {}
+					childConnections[child] = connections
+					for _, property in ipairs({ "Visible", "AbsoluteSize", "Size", "LayoutOrder" }) do
+						connections[#connections + 1] = child:GetPropertyChangedSignal(property):Connect(scheduleFit)
+					end
+				end
+				scheduleFit()
+			end
+			for _, child in ipairs(handle.footer:GetChildren()) do watchChild(child) end
+			handle.footer.ChildAdded:Connect(watchChild)
+			handle.footer.ChildRemoved:Connect(function(child) unwatchChild(child); scheduleFit() end)
+			handle.footer:GetPropertyChangedSignal("Visible"):Connect(function()
+				if fitting or handle.closed or handle.footer.Visible == footerShown then return end
+				footerEnabled = handle.footer.Visible
+				scheduleFit()
+			end)
+			handle.footer.Destroying:Connect(function()
+				for child in pairs(childConnections) do unwatchChild(child) end
+			end)
+			titleLabel:GetPropertyChangedSignal("TextBounds"):Connect(scheduleFit)
+			if descriptionLabel then descriptionLabel:GetPropertyChangedSignal("TextBounds"):Connect(scheduleFit) end
+			handle.relayout = relayout
 		end
 
+		relayout()
 		M.open[#M.open + 1] = handle
-		env.tween:Create(scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
+		P.animate(scrim, "enter", { BackgroundTransparency = theme.opacity.scrim })
 		-- Snapped on completion. A card left mid-tween sits at 0.98 for as long as it is
 		-- open, which re-lays-out every label inside it at 98% of its metrics -- the same
 		-- family of bug as the window's own scale, one step less visible.
-		local grow = env.tween:Create(scale, theme.tween("enter"), { Scale = 1 })
-		grow.Completed:Connect(function()
+		P.animate(scale, "enter", { Scale = 1 }, function()
 			if not handle.closed then scale.Scale = 1 end
 		end)
-		grow:Play()
 		return handle
 	end
 
@@ -770,14 +785,11 @@ return function(env)
 		local unbindResponsive
 		local function relayout()
 			if handle.closed then return end
-			local usableWidth = math.max(theme.size.control, responsive.viewport.X - margin)
-			local usableHeight = math.max(theme.size.control, responsive.viewport.Y - margin
-				- responsive.inset.Y - responsive.bottomObstruction())
-			handle.width = math.min(props.width or theme.size.dialog, usableWidth)
-			handle.height = math.min(props.height or theme.size.dialogTall, usableHeight)
+			local bounds = responsive.usableRect(M.layer, theme.space.lg)
+			handle.width = math.min(props.width or theme.size.dialog, bounds.width)
+			handle.height = math.min(props.height or theme.size.dialogTall, bounds.height)
 			card.Size = UDim2.fromOffset(handle.width, handle.height)
-			card.Position = UDim2.new(0.5, 0, 0.5,
-				math.floor((responsive.inset.Y - responsive.bottomObstruction()) / 2))
+			card.Position = UDim2.fromOffset(math.floor(bounds.x + bounds.width / 2), math.floor(bounds.y + bounds.height / 2))
 		end
 		unbindResponsive = dispose.add(responsive.changed:connect(relayout), "dialog layout")
 		card.Destroying:Connect(unbindResponsive)
@@ -790,12 +802,19 @@ return function(env)
 			for index, item in ipairs(M.open) do
 				if item == handle then table.remove(M.open, index) end
 			end
-			env.tween:Create(scale, theme.tween("exit"), { Scale = theme.scale.enter }):Play()
-			local out = env.tween:Create(scrim, theme.tween("exit"), { BackgroundTransparency = 1 })
-			out.Completed:Connect(function() pcall(function() scrim:Destroy() end) end)
-			out:Play()
+			P.animate(scale, "exit", { Scale = responsive.reduceMotion and 1 or theme.scale.enter })
+			P.animate(scrim, "exit", { BackgroundTransparency = 1 }, function() scrim:Destroy() end)
 			if props.onClose then pcall(props.onClose) end
 		end
+		scrim.Destroying:Connect(function()
+			local notify = not handle.closed
+			handle.closed = true
+			if unbindResponsive then unbindResponsive() end
+			for index = #M.open, 1, -1 do
+				if M.open[index] == handle then table.remove(M.open, index) end
+			end
+			if notify and props.onClose then pcall(props.onClose) end
+		end)
 
 		dismiss.Activated:Connect(handle.close)
 
@@ -820,12 +839,10 @@ return function(env)
 		handle.closeInset = closeDiameter + theme.space.sm * 2
 
 		M.open[#M.open + 1] = handle
-		env.tween:Create(scrim, theme.tween("enter"), { BackgroundTransparency = theme.opacity.scrim }):Play()
-		local grow = env.tween:Create(scale, theme.tween("enter"), { Scale = 1 })
-		grow.Completed:Connect(function()
+		P.animate(scrim, "enter", { BackgroundTransparency = theme.opacity.scrim })
+		P.animate(scale, "enter", { Scale = 1 }, function()
 			if not handle.closed then scale.Scale = 1 end
 		end)
-		grow:Play()
 		return handle
 	end
 
@@ -837,7 +854,7 @@ return function(env)
 		props = props or {}
 		if not ensure() then return nil end
 		local target = props.target
-		if not target then return nil end
+		if not target or not target.Parent or not target.Visible then return nil end
 
 		local scrim = P.frame(M.layer, {
 			name = "MenuLayer",
@@ -851,6 +868,18 @@ return function(env)
 		dismiss.AutoButtonColor = false
 
 		local width = math.max(props.width or target.AbsoluteSize.X, theme.size.menuMin)
+		if not props.width then
+			for _, option in ipairs(props.options or {}) do
+				local labelWidth = P.measureText(option.label or option.title or option.value or "", {
+					role = option.isHeader and "bodyStrong" or "small",
+				}).X
+				local detailWidth = P.measureText(option.detail or option.subtitle or "", { role = "caption" }).X
+				local trailing = (option.chevron or option.selected) and (theme.size.icon + theme.space.xs) or 0
+				if option.shortcut then trailing = P.measureText(option.shortcut, { role = "caption" }).X + theme.space.xs * 3 end
+				width = math.max(width, math.max(labelWidth, detailWidth) + trailing + theme.space.sm * 2
+					+ theme.space.xs * 2 + theme.size.scrollbar + (option.icon and (theme.size.icon + theme.space.xs) or 0))
+			end
+		end
 
 		-- The row height is derived from what the rows actually contain, not from a
 		-- control token. An option with a detail line stacks a `small` label over a
@@ -861,8 +890,8 @@ return function(env)
 		for _, option in ipairs(props.options or {}) do
 			if option.detail then hasDetail = true end
 		end
-		local content = theme.text.small.height + theme.space.xxs
-		if hasDetail then content = content + theme.text.caption.height + theme.space.hair end
+		local content = theme.text.small.height
+		if hasDetail then content = content + theme.text.caption.height end
 		local rowHeight = math.max(theme.size.row, responsive.minTarget(), content + theme.space.xs)
 
 		-- Measured rather than counted: a divider is one pixel and a header is its own
@@ -879,64 +908,90 @@ return function(env)
 				bodyHeight = bodyHeight + rowHeight + theme.space.hair
 			end
 		end
+		if #(props.options or {}) > 0 then bodyHeight = bodyHeight - theme.space.hair end
 		bodyHeight = math.min(bodyHeight, theme.size.menuMax)
-
-		local layerOrigin = M.layer.AbsolutePosition
-		local layerSize = M.layer.AbsoluteSize
-		local targetX = target.AbsolutePosition.X - layerOrigin.X
-		local targetY = target.AbsolutePosition.Y - layerOrigin.Y
-		local below = targetY + target.AbsoluteSize.Y + theme.space.xxs
-
-		local topLimit = theme.space.xs
-		local bottomObstruction = responsive.bottomObstruction()
-		local bottomLimit = math.max(topLimit + 60, layerSize.Y - bottomObstruction - theme.space.xs)
-
-		local spaceBelow = math.max(0, bottomLimit - below)
-		local spaceAbove = math.max(0, targetY - theme.space.xxs - topLimit)
-
-		-- Only flip upward if it cannot fit below AND there is strictly more room above than below.
-		local flip = (spaceBelow < bodyHeight) and (spaceAbove > spaceBelow)
-
-		local anchorY
-		if flip then
-			local maxH = math.max(rowHeight, spaceAbove)
-			bodyHeight = math.min(bodyHeight, maxH)
-			anchorY = targetY - theme.space.xxs - bodyHeight
-		else
-			local maxH = math.max(rowHeight, spaceBelow)
-			bodyHeight = math.min(bodyHeight, maxH)
-			anchorY = below
-		end
-
-		anchorY = util.clamp(anchorY, topLimit, math.max(topLimit, bottomLimit - bodyHeight))
-		local maxWidth = math.max(theme.size.control, layerSize.X - theme.space.sm * 2)
-		width = math.min(width, maxWidth)
-		local anchorX = util.clamp(targetX, theme.space.sm, math.max(theme.space.sm, layerSize.X - width - theme.space.sm))
+		local preferredWidth, preferredHeight = math.ceil(width), bodyHeight
 
 		local card = P.frame(scrim, {
 			name = "Menu",
 			size = UDim2.fromOffset(width, bodyHeight),
-			position = UDim2.fromOffset(anchorX, anchorY),
 			bg = theme.color.surfaceOverlay,
 			radius = theme.radius.lg,
 			zIndex = theme.z.dropdown + 1,
 			clip = true,
 		})
+		card.Active = true
 		P.stroke(card, theme.color.border)
 		local scale = Instance.new("UIScale", card)
 		scale.Scale = responsive.reduceMotion and 1 or theme.scale.enter
 
-		local handle = { closed = false }
+		local handle = { closed = false, card = card, scrim = scrim }
+		local releases = {}
+		local function cleanup()
+			for _, release in ipairs(releases) do release() end
+			releases = {}
+			for index = #M.open, 1, -1 do
+				if M.open[index] == handle then table.remove(M.open, index) end
+			end
+		end
 
 		function handle.close()
 			if handle.closed then return end
 			handle.closed = true
-			for index, item in ipairs(M.open) do
-				if item == handle then table.remove(M.open, index) end
-			end
+			cleanup()
 			pcall(function() scrim:Destroy() end)
 			if props.onClose then pcall(props.onClose) end
 		end
+		scrim.Destroying:Connect(function()
+			local notify = not handle.closed
+			handle.closed = true
+			cleanup()
+			if notify and props.onClose then pcall(props.onClose) end
+		end)
+		local function relayout()
+			if handle.closed then return end
+			if not target.Parent or not target.Visible then handle.close(); return end
+			local ancestor = target.Parent
+			while ancestor do
+				if ancestor:IsA("GuiObject") and not ancestor.Visible then handle.close(); return end
+				ancestor = ancestor.Parent
+			end
+			local bounds = responsive.usableRect(M.layer, theme.space.xs)
+			local origin = M.layer.AbsolutePosition
+			local x, y = target.AbsolutePosition.X - origin.X, target.AbsolutePosition.Y - origin.Y
+			local bottom = bounds.y + bounds.height
+			local belowY = y + target.AbsoluteSize.Y + theme.space.xxs
+			local belowRoom = math.max(0, bottom - math.max(bounds.y, belowY))
+			local aboveRoom = math.max(0, math.min(bottom, y - theme.space.xxs) - bounds.y)
+			local upward = belowRoom < preferredHeight and aboveRoom > belowRoom
+			local h = math.min(preferredHeight, bounds.height, upward and aboveRoom or belowRoom)
+			local w = math.min(preferredWidth, bounds.width)
+			local yPosition = upward and (y - theme.space.xxs - h) or belowY
+			-- If neither side can show even one option, overlap the anchor within the
+			-- safe rectangle. A one-pixel anchored list cannot be read or scrolled.
+			if h < math.min(preferredHeight, rowHeight + theme.space.xs * 2) then
+				h = math.min(preferredHeight, bounds.height)
+				yPosition = y + (target.AbsoluteSize.Y - h) / 2
+			end
+			h = math.max(1, h)
+			card.Size = UDim2.fromOffset(math.floor(w), math.floor(h))
+			card.Position = UDim2.fromOffset(math.floor(util.clamp(x, bounds.x, bounds.x + bounds.width - w)),
+				math.floor(util.clamp(yPosition, bounds.y, math.max(bounds.y, bottom - h))))
+		end
+		releases[#releases + 1] = dispose.add(responsive.changed:connect(relayout), "menu layout")
+		for _, property in ipairs({ "AbsolutePosition", "AbsoluteSize", "Visible" }) do
+			releases[#releases + 1] = dispose.connection(target:GetPropertyChangedSignal(property):Connect(relayout), "menu anchor")
+		end
+		releases[#releases + 1] = dispose.connection(target.Destroying:Connect(handle.close), "menu target")
+		local ancestor = target.Parent
+		while ancestor do
+			if ancestor:IsA("GuiObject") then
+				releases[#releases + 1] = dispose.connection(ancestor:GetPropertyChangedSignal("Visible"):Connect(relayout), "menu visibility")
+			end
+			ancestor = ancestor.Parent
+		end
+		relayout()
+		if handle.closed then return handle end
 
 		dismiss.Activated:Connect(handle.close)
 
@@ -1029,6 +1084,7 @@ return function(env)
 					text = tostring(option.label or option.value or ""),
 					role = "small",
 					color = option.tone and theme.toneColor(option.tone) or theme.color.text,
+					size = UDim2.new(1, 0, 0, theme.text.small.height),
 					truncate = true,
 				})
 				if option.detail then
@@ -1036,6 +1092,7 @@ return function(env)
 						text = option.detail,
 						role = "caption",
 						color = theme.color.textTertiary,
+						size = UDim2.new(1, 0, 0, theme.text.caption.height),
 						truncate = true,
 					})
 				end
@@ -1058,6 +1115,18 @@ return function(env)
 						auto = "X",
 					})
 					scLabel.Size = UDim2.fromOffset(0, theme.text.caption.height)
+					local shortcutWidth = P.measureText(option.shortcut, { role = "caption" }).X + theme.space.xs * 2
+					local function fitShortcut()
+						-- Optional key hints must not take the action label's entire width
+						-- when the menu is clamped to a phone or a split-screen viewport.
+						local room = card.Size.X.Offset - theme.space.xs * 2 - theme.space.sm * 2 - theme.size.scrollbar
+							- (option.icon and (theme.size.icon + theme.space.xs) or 0)
+						local labelRoom = math.min(theme.size.menuMin,
+							P.measureText(option.label or option.value or "", { role = "small" }).X)
+						keycap.Visible = room >= shortcutWidth + theme.space.xs + labelRoom
+					end
+					card:GetPropertyChangedSignal("Size"):Connect(fitShortcut)
+					fitShortcut()
 				elseif option.chevron then
 					local chSlot = P.frame(row, {
 						size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
@@ -1108,8 +1177,7 @@ return function(env)
 		end
 
 		M.open[#M.open + 1] = handle
-		local enter = P.animate(scale, "enter", { Scale = 1 })
-		enter.Completed:Connect(function()
+		P.animate(scale, "enter", { Scale = 1 }, function()
 			if not handle.closed then scale.Scale = 1 end
 		end)
 		return handle

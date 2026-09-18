@@ -114,10 +114,12 @@ return function(env)
 			cost = (prompt / 1000000) * price[1] + (completion / 1000000) * price[2]
 		end
 
-		M.turn.prompt = M.turn.prompt + prompt
-		M.turn.completion = M.turn.completion + completion
-		M.turn.total = M.turn.prompt + M.turn.completion
-		M.turn.cost = M.turn.cost + cost
+		if not (fallback and fallback.background) then
+			M.turn.prompt = M.turn.prompt + prompt
+			M.turn.completion = M.turn.completion + completion
+			M.turn.total = M.turn.prompt + M.turn.completion
+			M.turn.cost = M.turn.cost + cost
+		end
 
 		M.session.prompt = M.session.prompt + prompt
 		M.session.completion = M.session.completion + completion
