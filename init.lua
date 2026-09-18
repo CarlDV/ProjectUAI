@@ -1,4 +1,4 @@
---!globals __UAI_MODULES
+--!globals __UAI_MODULES __UAI_BUILD
 -- Bootstrap.
 --
 -- Everything above this file is a factory of the form `return function(env)`. This
@@ -21,16 +21,96 @@ local hostContext = ...
 
 local VERSION = "1.1.0"
 local FOLDER = "UAI"
+local BUILD = type(__UAI_BUILD) == "string" and __UAI_BUILD or VERSION
 
--- An existing instance is toggled rather than duplicated: running the loader twice
--- is the normal way people re-open a script, and two copies would fight over the
--- same config file and stack two interfaces.
+-- Re-running the same build reopens it; a changed build replaces an idle client.
+-- Never tear down active work or mount over a cleanup that did not finish.
 local globalTable = (type(getgenv) == "function") and getgenv() or nil
-if globalTable and type(globalTable.UAI) == "table" and globalTable.UAI.alive then
+if globalTable and type(globalTable.UAI) == "table" then
 	local existing = globalTable.UAI
-	if existing.toggle then
-		local ok = pcall(existing.toggle)
-		if ok then return existing end
+	if existing.alive or existing.reloadBlocked then
+		local function notice(message)
+			local shown = pcall(function()
+				existing.env.require("ui/overlay").toast(message, "warn", 7)
+			end)
+			if not shown or not existing.alive then warn("[uai] " .. message) end
+		end
+		if existing.reloadBlocked then
+			notice("The previous client did not finish unloading. Rejoin before loading the update.")
+			return existing
+		end
+		if existing.build == BUILD then
+			if type(existing.toggle) == "function" then pcall(existing.toggle) end
+			return existing
+		end
+		existing.pendingBuild = BUILD
+		local inspected, busy = pcall(function()
+			for _, session in ipairs(existing.sessions.list()) do
+				if session.busy then return true end
+			end
+			local child = existing.env.loadedModules and existing.env.loadedModules["agent/subagent"]
+			return child ~= nil and #child.running() > 0
+		end)
+		if not inspected then
+			notice("Update ready. Could not check active work; reopen the client after your work finishes.")
+			return existing
+		end
+		if busy then
+			notice("Update ready. Let the current work finish or stop it, then run the loader again.")
+			return existing
+		end
+		local checkedDrafts, pending = pcall(function()
+			for _, session in ipairs(existing.sessions.list()) do
+				local ctx = session.ctx or {}
+				if session.ephemeral and (#(session.log or {}) > 0 or #(ctx.messages or {}) > 0
+					or (type(ctx.summary) == "string" and ctx.summary ~= "") or session.named or (session.turns or 0) > 0) then
+					return "Update ready. Save or remove your isolated conversations before running the loader again."
+				end
+			end
+			local composer = existing.app.chatPanel and existing.app.chatPanel.composer
+			local quick = existing.env.loadedModules and existing.env.loadedModules["ui/quickchat"]
+			local function hasText(field)
+				return field and type(field.get) == "function" and tostring(field.get()):find("%S") ~= nil
+			end
+			if composer and (hasText(composer.field) or #(composer.attachments or {}) > 0) then
+				return "Update ready. Send or clear your draft and attachments before running the loader again."
+			end
+			if quick and hasText(quick.field) then
+				return "Update ready. Send or clear your Quick Chat draft before running the loader again."
+			end
+		end)
+		if not checkedDrafts or pending then
+			notice(pending or "Update ready. Could not check unsaved drafts, so this client is staying open.")
+			return existing
+		end
+		local saved, complete = pcall(function()
+			local fsx = existing.env.require("runtime/fsx")
+			if not fsx.enabled then return false end
+			if not existing.config.saveNow() then return false end
+			for _, session in ipairs(existing.sessions.list()) do
+				if not session.headless and not session.ephemeral and (session.depth or 0) == 0 then
+					if not existing.sessions.persist(session) then return false end
+				end
+			end
+			return true
+		end)
+		if not saved or not complete then
+			notice("Update ready. Settings and conversations could not be saved, so this client is staying open.")
+			return existing
+		end
+		if hostContext == nil and existing.env and type(existing.env.context) == "table" then
+			hostContext = existing.env.context
+		end
+		local unloaded, result = pcall(function() return existing.destroy() end)
+		local checked, detached = pcall(function()
+			return not existing.app.screen or existing.app.screen.Parent == nil
+		end)
+		if not unloaded or result == false or existing.alive or existing.cleanupFailed or not checked or not detached then
+			existing.reloadBlocked = true
+			globalTable.UAI = existing
+			notice("The previous client did not finish unloading. Rejoin before loading the update.")
+			return existing
+		end
 	end
 end
 
@@ -47,7 +127,7 @@ local services = setmetatable({}, {
 })
 
 local env = {
-	info = { name = "UAI", version = VERSION, folder = FOLDER },
+	info = { name = "UAI", version = VERSION, build = BUILD, folder = FOLDER },
 	services = services,
 	context = (type(hostContext) == "table" and hostContext)
 		or (globalTable and type(globalTable.UAI_CONTEXT) == "table" and globalTable.UAI_CONTEXT)
@@ -213,6 +293,7 @@ local function start()
 	handle = {
 		alive = true,
 		version = VERSION,
+		build = BUILD,
 		env = env,
 		app = app,
 		sessions = sessions,
@@ -250,7 +331,8 @@ local function start()
 			-- dispatched it by design, and its budget is measured in minutes.
 			pcall(function() env.require("agent/subagent").stopAll() end)
 			local ran, failed = env.require("runtime/dispose").drain()
-			pcall(function() app.screen:Destroy() end)
+			local screenOk = pcall(function() app.screen:Destroy() end)
+			handle.cleanupFailed = not screenOk or #(failed or {}) > 0
 			pcall(function() config.saveNow() end)
 			if globalTable then globalTable.UAI = nil end
 			log.info("boot", string.format("unloaded -- %d cleanups run", ran or 0))

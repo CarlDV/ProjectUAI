@@ -5,6 +5,7 @@
 -- the log explains everything else.
 return function(env)
 	local util = env.require("runtime/util")
+	local clock = env.require("runtime/clock")
 	local caps = env.require("runtime/caps")
 	local theme = env.require("ui/theme")
 	local P = env.require("ui/primitives")
@@ -16,6 +17,31 @@ return function(env)
 	local M = {}
 
 	local LEVEL_TONE = { debug = "info", info = "info", warn = "warn", error = "bad" }
+
+	-- Copy the same request evidence this panel shows, without including bodies or
+	-- credentials from transport records. The application log has a separate export.
+	local function requestExport()
+		local lines = {}
+		for index = #http.history, 1, -1 do
+			local entry = http.history[index]
+			lines[#lines + 1] = string.format("%s %s %s -> %s (%s)",
+				tostring(entry.stamp or ""), tostring(entry.method or "GET"), tostring(entry.url or ""),
+				tostring(entry.status or 0), util.formatDuration(entry.ms or 0))
+			local details = { tostring(entry.tag or "http"), tostring(entry.via or "unknown"),
+				util.formatNumber(entry.bytes or 0) .. " bytes",
+				"identity: " .. tostring(entry.identity or "none") }
+			if entry.identity ~= "none" then
+				details[#details + 1] = entry.uaSent and "user-agent sent" or "user-agent dropped"
+			end
+			if entry.attempt then details[#details + 1] = "attempt " .. tostring(entry.attempt) end
+			if entry.server then details[#details + 1] = "server " .. tostring(entry.server) end
+			if entry.trace then details[#details + 1] = "trace " .. tostring(entry.trace) end
+			if entry.mitigated then details[#details + 1] = "mitigated " .. tostring(entry.mitigated) end
+			lines[#lines + 1] = "  " .. table.concat(details, " | ")
+			if entry.error then lines[#lines + 1] = "  " .. tostring(entry.error) end
+		end
+		return log.redact(table.concat(lines, "\n"))
+	end
 
 	function M.new(parent)
 		local panel = { view = "requests" }
@@ -30,14 +56,16 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
 			gap = theme.space.sm,
-			padding = { x = theme.space.md, top = theme.space.md, bottom = theme.space.sm },
+			padding = { x = theme.space.lg, top = theme.space.lg, bottom = theme.space.md },
 			layoutOrder = 1,
 		})
 
 		local scroll
 		local function render() end
 
+		P.sectionHeader(head, { title = "Logs & traces", description = "Request activity and application diagnostics.", layoutOrder = 1 })
 		C.segmented(head, {
+			layoutOrder = 2,
 			options = {
 				{ value = "requests", label = "Requests" },
 				{ value = "log", label = "Log" },
@@ -49,7 +77,7 @@ return function(env)
 			end,
 		})
 
-		local actions = P.row(head, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs })
+		local actions = P.row(head, { size = UDim2.new(1, 0, 0, 0), auto = "Y", wrap = true, gap = theme.space.xs, layoutOrder = 3 })
 		local countLabel = P.text(actions, {
 			text = "",
 			role = "caption",
@@ -65,18 +93,25 @@ return function(env)
 
 		if caps.clipboard then
 			local copy = P.button(actions, {
+				name = "CopyDiagnostics",
 				text = "Copy",
 				variant = "ghost",
 				size = "sm",
 				layoutOrder = 3,
-				onClick = function()
-					pcall(caps.fn.clipboard, log.export())
-					overlay.toast("Log copied", "good", 2)
+				onClick = function(button)
+					local exported = panel.view == "requests" and requestExport() or log.export()
+					local ok = pcall(caps.fn.clipboard, exported)
+					button.setText(ok and "Copied" or "Retry")
+					if not ok then overlay.toast("Could not copy diagnostics", "bad", 3) end
+					clock.delay(2, function()
+						if button.instance.Parent then button.setText("Copy") end
+					end)
 				end,
 			})
 			copy.instance.LayoutOrder = 3
 		end
 		local clear = P.button(actions, {
+			name = "ClearDiagnostics",
 			text = "Clear",
 			variant = "ghost",
 			size = "sm",
@@ -93,8 +128,8 @@ return function(env)
 			size = UDim2.new(1, 0, 1, 0),
 			-- Tight, because the rows now carry their own banding and padding; a six
 			-- pixel gap between banded rows reads as a gap in the data.
-			gap = theme.space.hair,
-			padding = { x = theme.space.md, top = theme.space.xs, bottom = theme.space.lg },
+			gap = theme.space.sm,
+			padding = { x = theme.space.lg, top = theme.space.sm, bottom = theme.space.xl },
 			layoutOrder = 2,
 		})
 		local flex = Instance.new("UIFlexItem", scroll.instance)
@@ -191,95 +226,57 @@ return function(env)
 			return card
 		end
 
-		-- Column reserves, named once so the body's remainder cannot drift out of step
-		-- with them. They were 58 and 74 for an eight-character timestamp and a
-		-- four-letter source, which left about sixty pixels of nothing on every row.
-		--
-		-- Both are derived from the type rather than measured in pixels: a timestamp is
-		-- eight monospaced-ish characters and a source is five, so at text scale 1.4 the
-		-- columns grow with the text instead of clipping it. The dot is the token that
-		-- already exists for a status dot; it was a third literal that happened to agree
-		-- with it.
-		local STAMP_WIDTH = math.ceil(theme.text.caption.size * 8 * 0.62)
-		local SOURCE_WIDTH = math.ceil(theme.text.caption.size * 5 * 0.62)
-		local DOT_WIDTH = theme.size.dot
-		-- One height for all three meta columns. They were caption.size + 4 (16) beside a
-		-- dot slot of caption.height (17) beside a monoSmall body (18), which is three box
-		-- heights in one top-aligned row.
-		local META_HEIGHT = theme.text.caption.height
-
 		local function logRow(entry, order)
-			local row = P.row(scroll.instance, {
-				size = UDim2.new(1, 0, 0, 0),
-				auto = "Y",
+			local tone = LEVEL_TONE[entry.level] or "info"
+			local row = P.card(scroll.instance, {
+				name = "LogEntry",
 				gap = theme.space.xs,
-				-- Alternating bands, because twenty-four transparent rows four pixels
-				-- apart read as one block of text rather than as a table.
-				bg = (order % 2 == 0) and theme.color.surfaceRaised or nil,
-				radius = theme.radius.sm,
-				padding = { x = theme.space.xs, y = theme.space.hair },
-				-- Top-aligned put the 6px dot's centre four pixels above the text's,
-				-- so every dot in the list rode high. The message can wrap to a second
-				-- line, so the meta columns are given the row's height and centre their
-				-- own text instead.
-				alignY = "Top",
+				padding = theme.space.sm,
 				layoutOrder = order,
 			})
-			-- The dot gets a slot the height of one text line and centres itself in
-			-- that, rather than anchoring inside the row: the row is laid out by a
-			-- UIListLayout, which owns its children's positions, and a bare 6px dot
-			-- against 14px labels rode four pixels high on every line in the list.
-			local dotSlot = P.frame(row, {
-				name = "Level",
-				size = UDim2.fromOffset(DOT_WIDTH, META_HEIGHT),
+			local metadata = P.row(row, {
+				name = "Metadata",
+				size = UDim2.new(1, 0, 0, 0),
+				auto = "Y",
+				gap = theme.space.sm,
 				layoutOrder = 1,
 			})
-			P.statusDot(dotSlot, {
-				color = theme.toneColor(LEVEL_TONE[entry.level] or "info"),
-				diameter = DOT_WIDTH,
-				anchor = Vector2.new(0.5, 0.5),
-				position = UDim2.fromScale(0.5, 0.5),
+			P.badge(metadata, { text = entry.level or "info", tone = tone, layoutOrder = 1 })
+			P.text(metadata, {
+				name = "Source", text = entry.source, role = "caption",
+				color = theme.color.textSecondary, truncate = true,
+				size = UDim2.new(0, 0, 0, theme.text.caption.height),
+				flex = "Fill", layoutOrder = 2,
 			})
-			local stamp = P.text(row, {
-				text = entry.stamp or "",
-				role = "caption",
-				color = theme.color.textTertiary,
-				layoutOrder = 2,
+			P.text(metadata, {
+				name = "Timestamp", text = entry.stamp or "", role = "monoSmall",
+				color = theme.color.textTertiary, auto = "X", layoutOrder = 3,
 			})
-			stamp.Size = UDim2.fromOffset(STAMP_WIDTH, META_HEIGHT)
-			local source = P.text(row, {
-				text = entry.source,
-				role = "caption",
-				color = theme.color.textTertiary,
-				layoutOrder = 3,
-				truncate = true,
-			})
-			source.Size = UDim2.fromOffset(SOURCE_WIDTH, META_HEIGHT)
-			local body = P.text(row, {
-				text = entry.message .. (entry.detail and ("  " .. entry.detail) or ""),
-				role = "monoSmall",
+			P.text(row, {
+				name = "Message", text = entry.message, role = "monoSmall",
 				color = entry.level == "error" and theme.color.danger or theme.color.textSecondary,
-				wrap = true,
-				auto = "Y",
-				-- Fills, rather than subtracting three reserves and three gaps by hand.
-				-- That remainder was correct only as long as nobody touched any of the six
-				-- numbers in it.
-				size = UDim2.new(0, 0, 0, 0),
-				flex = "Fill",
-				layoutOrder = 4,
+				wrap = true, auto = "Y", layoutOrder = 2,
 			})
+			if entry.detail then
+				P.text(row, {
+					name = "Detail", text = tostring(entry.detail), role = "monoSmall",
+					color = theme.color.textTertiary, wrap = true, auto = "Y", layoutOrder = 3,
+				})
+			end
 			return row
 		end
 
 		render = function()
+			if not column.Parent then return end
 			scroll.clear()
 			if panel.view == "requests" then
 				local entries = util.reverse(http.history)
 				countLabel.Text = util.pluralise(#entries, "request") .. " kept"
 				if #entries == 0 then
 					C.emptyState(scroll.instance, {
+						icon = "document",
 						title = "No requests yet",
-						description = "Every outbound call lands here with its status, timing and whether the client identity made it onto the wire.",
+						description = "Requests appear here with status, duration and transport details after you send a message.",
 						layoutOrder = 1,
 					})
 					return
@@ -289,7 +286,7 @@ return function(env)
 				local entries = util.reverse(log.entries)
 				countLabel.Text = util.pluralise(#entries, "line") .. " kept"
 				if #entries == 0 then
-					C.emptyState(scroll.instance, { title = "Log is empty", layoutOrder = 1 })
+					C.emptyState(scroll.instance, { icon = "document", title = "All clear", description = "Application events will appear here as they occur.", layoutOrder = 1 })
 					return
 				end
 				for index, entry in ipairs(entries) do logRow(entry, index) end
@@ -298,16 +295,16 @@ return function(env)
 
 		render()
 		panel.refresh = render
-		-- Live, but throttled: a burst of log lines must not rebuild the list per
-		-- line while the user is reading it.
-		local clock = env.require("runtime/clock")
-		local throttled = clock.throttle(render, 0.4)
+		-- Coalesce a burst while retaining its final entry. A leading-only throttle
+		-- silently left the last requests absent until another event happened.
+		local refreshLater, cancelRefresh = clock.debounce(render, 0.2)
 		panel.unsubscribeLog = log.changed:connect(function()
-			if panel.view == "log" then throttled() end
+			if panel.view == "log" then refreshLater() end
 		end)
 		panel.unsubscribeHttp = http.changed:connect(function()
-			if panel.view == "requests" then throttled() end
+			if panel.view == "requests" then refreshLater() end
 		end)
+		column.Destroying:Connect(cancelRefresh)
 		return panel
 	end
 

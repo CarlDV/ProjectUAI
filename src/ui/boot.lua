@@ -86,6 +86,10 @@ return function(env)
 			gap = theme.space.xs,
 			layoutOrder = 1,
 		})
+		local mark = P.frame(top, {
+			name = "BootBrand", size = UDim2.fromOffset(theme.size.icon, theme.size.icon), layoutOrder = 0,
+		})
+		env.require("ui/brand").draw(mark, theme.size.icon)
 		P.text(top, {
 			name = "BootTitle",
 			text = "UAI",

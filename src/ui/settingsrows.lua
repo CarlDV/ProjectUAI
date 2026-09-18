@@ -31,7 +31,7 @@ return function(env)
 			name = props.name and (props.name .. "Group") or "Group",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
-			gap = theme.space.xs,
+			gap = theme.space.sm,
 			layoutOrder = props.layoutOrder,
 		})
 		P.sectionHeader(group, {
@@ -70,9 +70,9 @@ return function(env)
 			layoutOrder = props.layoutOrder,
 		})
 		local text = P.column(row, {
-			size = UDim2.new(0, 0, 0, 0), auto = "Y", flex = "Fill", gap = 0, layoutOrder = 1,
+			size = UDim2.new(0, 0, 0, 0), auto = "Y", flex = "Fill", gap = theme.space.xxs, layoutOrder = 1,
 		})
-		P.text(text, { text = props.label, role = "small" })
+		P.text(text, { text = props.label, role = "label", wrap = true, auto = "Y" })
 		if props.hint then
 			P.text(text, {
 				text = props.hint,
@@ -239,7 +239,7 @@ return function(env)
 	-- one -- resolved to zero: three controls in that pane were invisible and
 	-- unclickable, and nothing about the props said so.
 	function R.setting(parent, props)
-		local row = P.row(parent, {
+		local row, layout = P.row(parent, {
 			name = props.name,
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
@@ -248,9 +248,8 @@ return function(env)
 			layoutOrder = props.layoutOrder,
 		})
 		local left = P.column(row, {
-			size = UDim2.new(0, 0, 0, 0),
+			size = UDim2.new(1, -(props.width or theme.size.menu) - theme.space.md, 0, 0),
 			auto = "Y",
-			flex = "Fill",
 			gap = theme.space.hair,
 			layoutOrder = 1,
 		})
@@ -278,6 +277,20 @@ return function(env)
 			auto = "Y",
 			layoutOrder = 2,
 		})
+		-- Reflow from the actual pane width, including a resized desktop window.
+		-- Controls keep their preferred width until the label needs its own line.
+		local controlWidth = props.width or theme.size.menu
+		local function reflow()
+			local width = row.AbsoluteSize.X
+			if width <= 0 then return end
+			local stacked = width < controlWidth + theme.size.modalMin
+			layout.FillDirection = stacked and Enum.FillDirection.Vertical or Enum.FillDirection.Horizontal
+			layout.VerticalAlignment = stacked and Enum.VerticalAlignment.Top or Enum.VerticalAlignment.Center
+			left.Size = UDim2.new(1, stacked and 0 or -(controlWidth + theme.space.md), 0, 0)
+			right.Size = UDim2.fromOffset(math.min(controlWidth, width), 0)
+		end
+		row:GetPropertyChangedSignal("AbsoluteSize"):Connect(reflow)
+		reflow()
 		return right, row
 	end
 
@@ -294,7 +307,6 @@ return function(env)
 		local control = C.segmented(slot, {
 			name = props.name and ("Segmented_" .. props.name) or nil,
 			options = props.options,
-			width = width,
 			value = (props.value ~= nil) and props.value or config.get(props.path, props.options[1].value),
 			onChange = function(value)
 				if props.path then config.set(props.path, value) end
@@ -407,7 +419,7 @@ return function(env)
 		local field = P.field(parent, {
 			name = props.name,
 			multiline = true,
-			height = props.height or 96,
+			height = props.height or theme.size.controlLarge * 2,
 			text = tostring(props.value ~= nil and props.value or config.get(props.path, "")),
 			placeholder = props.placeholder,
 			layoutOrder = props.layoutOrder and (props.layoutOrder + 1) or nil,
@@ -429,6 +441,7 @@ return function(env)
 			name = props.name or "Actions",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
+			wrap = true,
 			gap = theme.space.sm,
 			layoutOrder = props.layoutOrder,
 		})

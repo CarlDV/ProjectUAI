@@ -75,7 +75,10 @@ it; `ui/*` must not require `agent/*` except through `agent/session`.
   jitter, `Retry-After` honoured, capped attempts, then the next provider in the
   fallback chain.
 * Secrets are redacted in the request log; only the last four characters of a
-  key are ever displayed, and the Providers panel never renders the key itself.
+  key are displayed in diagnostic views, and the Providers panel never renders the
+  key itself. Full configuration export is an explicit private transfer: it includes
+  complete credentials in clipboard JSON and is clearly labelled. Its import preview
+  reports counts and provider names without displaying keys.
 * `util.encode` is the only path to `JSONEncode`, and it scrubs on the way through:
   every string is repaired to valid UTF-8, NaN and the infinities become `0`, and a
   function, userdata or thread becomes a marker rather than a raise. This is not

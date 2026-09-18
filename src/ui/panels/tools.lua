@@ -38,7 +38,7 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
 			gap = theme.space.sm,
-			padding = { x = theme.space.md, top = theme.space.md, bottom = theme.space.sm },
+			padding = { x = theme.space.lg, top = theme.space.lg, bottom = theme.space.md },
 			layoutOrder = 1,
 		})
 
@@ -78,8 +78,9 @@ return function(env)
 			local order = util.keys(grouped, true)
 			if #order == 0 then
 				C.emptyState(scroll.instance, {
-					title = "No tool matches",
-					description = "Try a shorter search.",
+					icon = "search",
+					title = "No matching tools",
+					description = "Search by a tool name or what you want it to do.",
 					layoutOrder = 1,
 				})
 				return
@@ -99,7 +100,7 @@ return function(env)
 					-- The same inset a card gives its own contents, so a group's name lines up
 					-- with the tool names under it instead of sitting sixteen pixels to their
 					-- left, and its switch lines up with theirs.
-					padding = { x = theme.space.lg },
+					padding = { x = theme.space.lg, top = theme.space.sm, bottom = theme.space.xxs },
 					layoutOrder = position,
 				})
 				local headText = P.column(header, {
@@ -150,6 +151,7 @@ return function(env)
 					local top = P.row(card, {
 						size = UDim2.new(1, 0, 0, 0),
 						auto = "Y",
+						wrap = true,
 						gap = theme.space.xs,
 						layoutOrder = 1,
 					})
@@ -159,8 +161,9 @@ return function(env)
 						color = missing and theme.color.textDisabled or theme.color.text,
 						layoutOrder = 1,
 					})
-					name.Size = UDim2.fromOffset(0, theme.text.monoSmall.height)
-					name.AutomaticSize = Enum.AutomaticSize.X
+					name.Size = UDim2.new(1, 0, 0, 0)
+					name.AutomaticSize = Enum.AutomaticSize.Y
+					name.TextWrapped = true
 
 					P.badge(top, {
 						text = tool.risk,
@@ -233,7 +236,7 @@ return function(env)
 			gap = theme.space.sm,
 			-- Top padding as well. Without it the first group header butted against the
 			-- head block above it while the bottom of the list had twelve pixels of air.
-			padding = { x = theme.space.md, top = theme.space.sm, bottom = theme.space.lg },
+			padding = { x = theme.space.lg, top = theme.space.md, bottom = theme.space.xl },
 			layoutOrder = 2,
 		})
 		local flex = Instance.new("UIFlexItem", scroll.instance)

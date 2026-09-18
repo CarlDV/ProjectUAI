@@ -17,7 +17,7 @@ return function(env)
 			name = "Settings",
 			size = UDim2.new(1, 0, 1, 0),
 			gap = theme.space.lg,
-			padding = theme.space.md,
+			padding = theme.space.lg,
 		})
 
 		for index, entry in ipairs(panes.PANES) do

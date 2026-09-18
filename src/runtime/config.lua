@@ -285,6 +285,25 @@ return function(env)
 		return value
 	end
 
+	-- Applies one validated snapshot. Persistence is attempted before replacing the
+	-- live table, and subscribers see the complete new configuration in one event.
+	function M.replace(snapshot)
+		if type(snapshot) ~= "table" then return false, "configuration must be a table" end
+		local nextData = util.merge(DEFAULTS, snapshot)
+		if fsx.enabled then
+			local ok = fsx.writeJson(FILE, nextData)
+			if not ok then return false, "Could not save imported settings. Your current configuration is unchanged." end
+		end
+		M.data = nextData
+		M.loaded = true
+		M.dirty = false
+		M.changed:fire(nil, M.data)
+		-- These live accessibility/layout consumers listen for their exact paths.
+		M.changed:fire("ui.layout", M.data.ui.layout)
+		M.changed:fire("ui.reduceMotion", M.data.ui.reduceMotion)
+		return true, fsx.enabled == true
+	end
+
 	function M.toggle(path)
 		local value = M.get(path) ~= true
 		M.set(path, value)

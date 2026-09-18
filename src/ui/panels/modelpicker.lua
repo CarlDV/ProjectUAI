@@ -209,7 +209,7 @@ return function(env)
 
 				local freeIds = {}
 				for _, id in ipairs(models.list(record)) do
-					if tostring(id):lower():find("free", 1, true) then freeIds[#freeIds + 1] = id end
+					if models.isFree(record, id) then freeIds[#freeIds + 1] = id end
 				end
 				if #freeIds > 0 then
 					P.button(modal.footer, {
@@ -726,7 +726,7 @@ return function(env)
 
 					local freeCount = 0
 					for _, id in ipairs(known) do
-						if tostring(id):lower():find("free", 1, true) then freeCount = freeCount + 1 end
+						if models.isFree(record, id) then freeCount = freeCount + 1 end
 					end
 
 					-- Instant 0ms Filter field
@@ -804,7 +804,7 @@ return function(env)
 				for index, id in ipairs(known) do
 					local badge = traits.badge(id)
 					local where = own[id] and "added on this client" or "reported by /models"
-					local isFree = tostring(id):lower():find("free", 1, true) ~= nil
+					local isFree = models.isFree(record, id)
 					local row = pickRow(modelList, {
 						name = "Model_" .. tostring(id),
 						title = id,
@@ -976,7 +976,7 @@ return function(env)
 				if #known >= FILTER_AT then
 					local freeCount = 0
 					for _, id in ipairs(known) do
-						if tostring(id):lower():find("free", 1, true) then freeCount = freeCount + 1 end
+						if models.isFree(record, id) then freeCount = freeCount + 1 end
 					end
 
 					P.field(modelRowsHolder, {
@@ -1032,7 +1032,7 @@ return function(env)
 				for index, id in ipairs(known) do
 					local badge = traits.badge(id)
 					local where = own[id] and "added on this client" or "reported by /models"
-					local isFree = tostring(id):lower():find("free", 1, true) ~= nil
+					local isFree = models.isFree(record, id)
 					local row = pickRow(modelRowsHolder, {
 						name = "Model_" .. tostring(id),
 						title = id,

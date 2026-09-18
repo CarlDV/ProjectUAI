@@ -72,28 +72,79 @@ return function(env)
 			position = UDim2.fromScale(0.5, 0.42),
 			bg = theme.color.surface,
 			radius = theme.radius.xl,
-			gap = theme.space.xs,
-			padding = theme.space.md,
+			gap = theme.space.md,
+			padding = theme.space.lg,
 			zIndex = theme.z.quick + 1,
 		})
-		P.stroke(card, theme.color.accentBorder)
+		P.stroke(card, theme.color.borderStrong)
 		M.card = card
 		M.scale = Instance.new("UIScale", card)
 		M.scale.Scale = theme.scale.enter
 
+		local head = P.row(card, {
+			name = "QuickHeader",
+			size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget())),
+			gap = theme.space.sm,
+			layoutOrder = 1,
+		})
+		local mark = P.frame(head, {
+			name = "QuickBrand", size = UDim2.fromOffset(theme.size.icon, theme.size.icon), layoutOrder = 0,
+		})
+		env.require("ui/brand").draw(mark, theme.size.icon)
+		P.text(head, {
+			text = "Quick message",
+			role = "label",
+			size = UDim2.new(0, 0, 0, theme.text.label.height),
+			flex = "Fill",
+			layoutOrder = 1,
+		})
+		P.iconButton(head, {
+			name = "DismissQuickChat", icon = "close",
+			diameter = theme.size.controlSmall, layoutOrder = 2,
+			onClick = function() M.hide() end,
+		})
+
 		M.field = P.field(card, {
 			name = "QuickPrompt",
-			placeholder = "Ask, or tell it what to change",
-			layoutOrder = 1,
+			placeholder = "Ask a question or describe a change…",
+			height = theme.size.controlLarge,
+			layoutOrder = 2,
 			onSubmit = function(text) M.submit(text) end,
 		})
 
-		M.hint = P.text(card, {
+		local footer = P.row(card, {
+			name = "QuickFooter",
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			gap = theme.space.md,
+			layoutOrder = 3,
+		})
+		M.hint = P.text(footer, {
 			text = "",
 			role = "caption",
 			color = theme.color.textTertiary,
-			layoutOrder = 2,
+			size = UDim2.new(0, 0, 0, 0),
+			auto = "Y",
+			wrap = true,
+			flex = "Fill",
+			layoutOrder = 1,
 		})
+		P.button(footer, {
+			name = "SendQuickChat", text = "Send", icon = "send",
+			variant = "primary", size = "sm", layoutOrder = 2,
+			onClick = function() M.submit(M.field.get()) end,
+		})
+		local function layoutCard()
+			local width = math.min(responsive.viewport.X - theme.space.xl * 2,
+				math.max(responsive.viewport.X * 0.5, theme.size.modal), theme.size.reading * 0.6)
+			card.Size = UDim2.fromOffset(math.max(math.floor(width), 1), 0)
+			local available = responsive.viewport.Y - responsive.inset.Y - responsive.bottomObstruction()
+			card.Position = UDim2.new(0.5, 0, 0, math.floor(available * 0.42))
+		end
+		M.layout = layoutCard
+		layoutCard()
+		local unsubscribe = responsive.changed:connect(layoutCard)
+		M.root.Destroying:Connect(function() pcall(unsubscribe) end)
 
 		M.mounted = true
 		return M.root
@@ -103,9 +154,10 @@ return function(env)
 		if not M.hint then return end
 		local providers = env.require("provider/registry")
 		local record = providers.active()
+		M.hint.TextColor3 = theme.color.textTertiary
 		M.hint.Text = record
-			and string.format("Enter to send to %s  ·  Esc to close  ·  %s reopens",
-				tostring(record.label), M.keyName())
+			and string.format("%s  ·  Enter to send  ·  Esc to close",
+				tostring(record.label))
 			or "No provider configured yet -- open the window and add one."
 	end
 
@@ -113,6 +165,7 @@ return function(env)
 		if not M.mounted or M.visible then return end
 		M.visible = true
 		refreshHint()
+		if M.layout then M.layout() end
 		M.field.set("")
 		M.root.Visible = true
 		if responsive.reduceMotion then
@@ -160,13 +213,20 @@ return function(env)
 
 	function M.submit(text)
 		local message = util.trim(tostring(text or ""))
-		M.hide()
 		if message == "" then return end
 		-- The same session the Chat panel is bound to, so the message and its reply
 		-- land in the transcript rather than in a parallel conversation.
 		local ok, reason = sessions.current().send(message)
-		if not ok then
-			env.require("ui/overlay").toast(tostring(reason), "warn", 3)
+		if ok then
+			M.hide()
+		else
+			-- Rejection is recoverable: keep the prompt in place for a retry instead of
+			-- closing and clearing it on the next open.
+			if M.hint then
+				M.hint.Text = tostring(reason)
+				M.hint.TextColor3 = theme.color.warn
+			end
+			if M.visible and M.field then M.field.focus() end
 		end
 	end
 

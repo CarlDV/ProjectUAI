@@ -13,6 +13,18 @@ executor it uses the executor's HTTP function; in a plain client it falls back t
 `HttpService` and says which capabilities it lost. Embedded in a host script it
 takes a context table and adds that script's own instructions and hooks.
 
+Running the same bundle again toggles the existing interface. A changed bundle
+reloads an idle client after saving its settings and conversations. If work, an
+unsent draft, or an isolated conversation would be lost, the current instance stays
+open with a notice; finish that work before running the updated loader again.
+
+In **Settings → Import & export → Full configuration**, use **Copy config · includes
+API keys** to transfer all saved configuration, including providers, key pools,
+custom headers, permissions, preferences, and saved memory. On the other device,
+choose **Paste configuration to import**, paste the JSON, select **Review**, then
+**Apply**. This private export contains credentials. Conversations, activity history,
+workspace files, and skill files are separate from configuration.
+
 ## What it is
 
 **A real agent loop.** Streaming, parallel tool calls, retry with backoff that
@@ -37,10 +49,12 @@ speaks `/v1/chat/completions` -- a relay, a self-hosted vLLM, Ollama on
 localhost. Model lists are never guessed: they come from `GET /v1/models` or from
 you typing one in.
 
-**The Claude Code identity.** Every inference request carries
+**The Claude Code identity.** Providers that enable this compatibility identity carry
 `User-Agent: claude-cli/<version> (external, cli)`, `x-app: cli` and the
 `X-Stainless-*` client-metadata set, applied inside the transport so no call site
-can skip it. `HttpService:RequestAsync` refuses to send a custom `User-Agent`, so
+can omit it accidentally. OpenCode Zen retains its OpenCode compatibility headers. Its free-tier access is
+provider-controlled, so compatibility headers do not guarantee availability.
+`HttpService:RequestAsync` refuses to send a custom `User-Agent`, so
 on a host with no executor HTTP function the client says the identity did not
 reach the wire rather than pretending it did.
 
@@ -61,8 +75,10 @@ happened to pair it with; the families on offer are probed against the engine ra
 than declared, so the list is shorter on an older client instead of containing dead
 entries. A reply is the page rather than a bubble on it: the agent's prose sits flat
 on the canvas, tool rows and reasoning are lines of text rather than cards, reasoning
-sits behind a rule as an aside, and only the user's own turn takes a fill -- marked
-with an accent rule so it cannot be mistaken for the composer below it. The contrast
+sits behind a rule as an aside, and sent prompts group their speaker and text inside a quiet bordered surface.
+The compact composer stays pinned to the bottom edge, with context details behind
+its overflow menu. The model stays inline when space permits; model, permission,
+and usage controls are always available from the same menu. The contrast
 of every pair the interface puts together is computed in the test suite, so a retune
 cannot quietly make something unreadable.
 
@@ -163,7 +179,14 @@ fails the build on a violation.
 ```bash
 luajit test/check.lua      # lint, parse and link all 74 modules
 luajit tools/bundle.lua    # src/ + init.lua -> dist/uai.lua
-luajit test/run.lua        # 80 scenarios against the built bundle
+luajit test/run.lua        # full scenarios against the built bundle
+luajit test/chat_regressions.lua
+luajit test/config_transfer.lua
+luajit test/build_reload.lua
+luajit test/audit_regressions.lua
+luajit test/controls_loading.lua
+luajit test/controls_interactions.lua
+luajit test/markdown_regressions.lua
 ```
 
 `test/run.lua` loads `dist/uai.lua` -- the actual artifact -- into a mocked

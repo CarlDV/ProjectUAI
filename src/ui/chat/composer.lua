@@ -35,49 +35,54 @@ return function(env)
 
 	function M.new(parent, props)
 		props = props or {}
+		local chipHeight = math.max(theme.size.chip, responsive.minTarget())
 
-		-- One bordered box holding the field and the send control, sitting on the
-		-- canvas rather than in a bar of its own. There is no rule above it: the box's
-		-- own outline is what separates it from the transcript, and a rule as well
-		-- draws two lines where the eye needs one. That is also why the field goes in
-		-- `bare` -- a bordered input inside a bordered bar was two nested rectangles
-		-- for one input.
-		local shell = P.column(parent, {
-			name = "Composer",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			-- One step of air between the three rows rather than six pixels. The meta row
-			-- sat close enough to the input box to read as part of it, so "Allow
-			-- everything" and the token count looked like status inside the field.
-			gap = theme.space.sm,
-			-- Matches the transcript's own horizontal inset, so the composer's box and the
-			-- reading column above it share a left edge instead of missing it by four.
-			padding = { x = theme.space.xl, top = theme.space.sm, bottom = theme.space.md },
+		local controlHeight = math.max(theme.size.control, responsive.minTarget())
+		local inset = theme.space.sm
+		local resizeComposer
+		local shell = P.frame(parent, {
+			name = "Composer", size = UDim2.new(1, 0, 0, controlHeight + inset * 3 + theme.space.xxs),
 			zIndex = theme.z.raised,
 		})
-
 		local composer = { expanded = false, busy = false, attachments = {} }
+		local surface = P.frame(shell, {
+			name = "ComposerSurface", size = UDim2.new(1, -theme.space.lg * 2, 0, controlHeight + inset * 2),
+			position = UDim2.fromOffset(theme.space.lg, theme.space.xxs),
+			bg = theme.color.surfaceRaised, radius = theme.radius.md,
+		})
+		local boxStroke = P.stroke(surface, theme.color.border)
+		local sendButton
+		local function syncSend()
+			if sendButton then
+				sendButton.setEnabled(composer.busy or (composer.field and util.trim(composer.field.get()) ~= ""))
+			end
+		end
 
 		-- Scope chips ---------------------------------------------------------
 
-		local scopeRow = P.row(shell, {
-			name = "ScopeRow",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			gap = theme.space.xs,
-			wrap = true,
+		local scopeScroll = P.scroll(surface, {
+			name = "ContextStrip",
+			visible = false,
+			horizontal = true,
+			size = UDim2.new(1, 0, 0, math.max(theme.size.chip, responsive.minTarget()) + theme.size.scrollbar),
+			gap = 0,
 			layoutOrder = 1,
+		})
+		local scopeRow = P.row(scopeScroll.instance, {
+			name = "ScopeRow",
+			size = UDim2.new(0, 0, 0, math.max(theme.size.chip, responsive.minTarget())),
+			auto = "X",
+			gap = theme.space.xxs,
+			layoutOrder = 2,
 		})
 
 		local function chip(name, iconName, labelText, order, onClick)
 			local handle = P.rowButton(scopeRow, {
 				name = "Chip_" .. name,
 				auto = "X",
-				height = theme.size.chip,
-				size = UDim2.fromOffset(0, theme.size.chip),
-				bg = theme.color.surface,
-				stroke = true,
-				strokeColor = theme.color.borderSubtle,
+				height = chipHeight,
+				size = UDim2.fromOffset(0, chipHeight),
+				bg = nil,
 				radius = theme.radius.sm,
 				gap = theme.space.xxs,
 				padding = { x = theme.space.xs },
@@ -88,7 +93,7 @@ return function(env)
 			if labelText ~= nil then
 				handle.text = P.text(handle.row, {
 					name = "ChipLabel",
-					text = labelText,
+					text = util.ellipsis(labelText, 24),
 					role = "caption",
 					color = theme.color.textSecondary,
 					auto = "X",
@@ -225,8 +230,8 @@ return function(env)
 				local handle = P.rowButton(attachRow, {
 					name = "Attachment_" .. tostring(index),
 					auto = "X",
-					height = theme.size.chip,
-					size = UDim2.fromOffset(0, theme.size.chip),
+					height = chipHeight,
+					size = UDim2.fromOffset(0, chipHeight),
 					bg = theme.color.surfaceRaised,
 					radius = theme.radius.sm,
 					gap = theme.space.xxs,
@@ -239,7 +244,7 @@ return function(env)
 				})
 				handle.icon("document", 1, theme.color.accent, theme.size.icon - theme.space.hair)
 				P.text(handle.row, {
-					text = entry.label,
+					text = util.ellipsis(entry.label, 32),
 					role = "caption",
 					color = theme.color.textSecondary,
 					auto = "X",
@@ -247,6 +252,7 @@ return function(env)
 				})
 				handle.icon("close", 3, theme.color.textTertiary, theme.size.icon - theme.space.xxs)
 			end
+			if resizeComposer then resizeComposer() end
 		end
 
 		local function attachMenu(target)
@@ -327,7 +333,7 @@ return function(env)
 			attachMenu(handle.instance)
 		end)
 
-		attachRow = P.row(shell, {
+		attachRow = P.row(surface, {
 			name = "Attachments",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
@@ -339,53 +345,27 @@ return function(env)
 
 		-- The field ------------------------------------------------------------
 
-		-- A wrapper with no layout of its own, so the mascot can perch on the input
-		-- box's top edge without becoming a layout item -- a positioned child inside a
-		-- list layout takes a slot of its own and pushes everything after it out.
-		local inputHolder = P.frame(shell, {
-			name = "InputHolder",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			layoutOrder = 3,
+		-- Explicit geometry avoids circular AutomaticSize/flex measurements.
+		local inputHolder = P.frame(surface, {
+			name = "InputHolder", size = UDim2.new(1, -inset * 2, 0, controlHeight),
+			position = UDim2.fromOffset(inset, inset),
+		})
+		local inputRow = P.frame(inputHolder, {
+			name = "InputRow", size = UDim2.fromScale(1, 1),
 		})
 
-		local inputRow = P.row(inputHolder, {
-			name = "InputRow",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			bg = theme.color.surfaceRaised,
-			radius = theme.radius.lg,
-			gap = theme.space.xs,
-			padding = { x = theme.space.sm, y = theme.space.xxs },
-			alignY = "Center",
-		})
-		local boxStroke = P.stroke(inputRow, theme.color.borderSubtle)
-
-		-- Decoration, and the only thing in this interface that is. It has no handler,
-		-- because a mascot that announced "Ready to code!" in a toast was pretending to
-		-- be a control. It does march, though, and what it does is tied to the turn: see
-		-- ui/icons for why that is the one honest thing a mascot can do here.
-		--
-		-- A step larger than iconLarge, which is what the animation needs to read: at
-		-- twenty pixels the hop is three of them and the arms move by five, and nobody
-		-- notices either from a foot away.
-		local mascotSize = 34
-		local mascotSlot = P.frame(inputHolder, {
+		-- The existing mascot stays in the quiet context row, away from the caret.
+		local mascotSize = theme.size.iconLarge
+		local mascotSlot = P.frame(scopeRow, {
 			name = "Mascot",
-			size = UDim2.fromOffset(mascotSize + theme.space.xs, mascotSize),
-			anchor = Vector2.new(0.5, 1),
-			position = UDim2.new(1, -(theme.size.control + theme.space.xl), 0, theme.space.hair),
-			zIndex = theme.z.raised + 1,
+			size = UDim2.fromOffset(mascotSize, theme.size.chip),
+			layoutOrder = 99,
 		})
 		local _, mascot = icons.mascot(mascotSlot, mascotSize, theme.color.accent)
 		composer.mascot = mascot
 
 		local fieldHolder = P.frame(inputRow, {
-			name = "FieldHolder",
-			size = UDim2.new(0, 0, 0, 0),
-			auto = "Y",
-			flex = "Fill",
-			layoutOrder = 1,
+			name = "FieldHolder", size = UDim2.new(1, 0, 1, 0),
 		})
 
 		-- An attachment is context, so it travels ahead of the question in a block the
@@ -403,13 +383,17 @@ return function(env)
 		end
 
 		local function submit()
+			if composer.busy then return false end
 			local text = util.trim(composer.field.get())
 			if text == "" then return end
 			local payload = compose(text)
+			if not props.onSend then return false end
+			local accepted = props.onSend(payload)
+			if accepted == false then return false end
 			composer.field.clear()
 			composer.attachments = {}
 			renderAttachments()
-			if props.onSend then props.onSend(payload) end
+			return true
 		end
 
 		-- Focus is the box lifting a step and taking the accent on its outline, not just
@@ -418,12 +402,13 @@ return function(env)
 		-- keyboard shortcut that opens quick chat is a printable character, so "is this
 		-- focused" decides where the next keystroke goes.
 		local function paintFocus(focused)
-			env.tween:Create(boxStroke, theme.tween("hover"), {
-				Color = focused and theme.color.accentBorder or theme.color.borderSubtle,
-			}):Play()
-			env.tween:Create(inputRow, theme.tween("hover"), {
+			P.animate(boxStroke, "hover", {
+				Color = focused and theme.color.accent or theme.color.border,
+				Thickness = focused and theme.stroke.focus or theme.stroke.hair,
+			})
+			P.animate(surface, "hover", {
 				BackgroundColor3 = focused and theme.color.surfaceOverlay or theme.color.surfaceRaised,
-			}):Play()
+			})
 		end
 
 		-- One line at rest, which is what a single-line field is.
@@ -435,55 +420,49 @@ return function(env)
 		-- for room, and that is the mode where the extra lines can actually be typed
 		-- into.
 		local function buildField(carried)
--- The length before the current change, so a paste can be told from typing.
--- A paste arrives as one jump past the cap; typing crosses it one character
--- at a time. Only the jump is filed away -- clearing the field under someone
--- mid-sentence is worse than the wall of text it was avoiding, and the
--- submit-time path in session.send catches the typed case gracefully.
-local previousLength = #(carried or "")
-return P.field(fieldHolder, {
-name = "Prompt",
-bare = true,
-placeholder = props.placeholder or "Describe a task or ask a question",
-multiline = composer.expanded,
-height = composer.expanded and (theme.text.body.height * 5 + theme.space.md) or nil,
-text = carried,
-onFocus = function() paintFocus(true) end,
-onBlur = function() paintFocus(false) end,
-onChange = function(text)
-if type(text) ~= "string" then return end
-local cap = sessions.PASTE_CAP
--- The jump, not the crossing: the change itself has to be bigger
--- than the cap, which a keystroke never is and a paste always is.
-local jumped = #text > cap and (#text - previousLength) > cap
-previousLength = #text
-if not (jumped and fsx.enabled) then return end
-local stamp = os.date("!%Y%m%d-%H%M%S")
-local path = "composer-" .. stamp .. "-" .. util.uid("p") .. ".txt"
-if fsx.write(path, text, { scope = "pastes" }) then
-composer.attachments[#composer.attachments + 1] = {
-label = "pastes/" .. path .. " (" .. tostring(#text) .. " chars)",
-path = path,
-text = util.truncate(text, ATTACH_CAP,
-"the full text is in this file; read it with file_read"),
-}
-renderAttachments()
-composer.field.clear()
-previousLength = 0
-overlay.toast("Long paste saved to pastes/" .. path .. " and attached", "good", 3)
-end
-end,
-onSubmit = function()
-if not composer.expanded then submit() end
-end,
-})
-end
-composer.field = buildField(nil)
+			local previousLength = #(carried or "")
+			return P.field(fieldHolder, {
+				name = "Prompt",
+				bare = true,
+				placeholder = props.placeholder or "Describe a task or ask a question…",
+				multiline = composer.expanded,
+				height = composer.expanded and math.max(theme.text.body.height * 2 + theme.space.md,
+					math.min(theme.text.body.height * 5 + theme.space.md, responsive.viewport.Y * 0.25)) or theme.size.control,
+				text = carried,
+				onFocus = function() paintFocus(true) end,
+				onBlur = function() paintFocus(false) end,
+				onChange = function(text)
+					if type(text) ~= "string" then return end
+					syncSend()
+					local cap = sessions.PASTE_CAP
+					local jumped = #text > cap and (#text - previousLength) > cap
+					previousLength = #text
+					if not (jumped and fsx.enabled) then return end
+					local stamp = os.date("!%Y%m%d-%H%M%S")
+					local path = "composer-" .. stamp .. "-" .. util.uid("p") .. ".txt"
+					if fsx.write(path, text, { scope = "pastes" }) then
+						composer.attachments[#composer.attachments + 1] = {
+							label = "pastes/" .. path .. " (" .. tostring(#text) .. " chars)",
+							path = path,
+							text = util.truncate(text, ATTACH_CAP, "the full text is in this file; read it with file_read"),
+						}
+						renderAttachments()
+						composer.field.clear()
+						previousLength = 0
+						overlay.toast("Long paste saved to pastes/" .. path .. " and attached", "good", 3)
+					end
+				end,
+				onSubmit = function()
+					if not composer.expanded then submit() end
+				end,
+			})
+		end
+		composer.field = buildField(nil)
 
-		local sendButton = P.iconButton(inputRow, {
+		sendButton = P.iconButton(inputRow, {
 			name = "Send",
 			icon = "send",
-			variant = "ghost",
+			variant = "primary",
 			diameter = theme.size.control,
 			layoutOrder = 2,
 			onClick = function()
@@ -496,160 +475,110 @@ composer.field = buildField(nil)
 		})
 		sendButton.instance.LayoutOrder = 2
 
-		-- The meta row ---------------------------------------------------------
-
-		-- Wraps rather than overflows. Six controls -- a permission label that can read
-		-- "Auto (ask for dangerous)", a model id, a context dot and two text buttons --
-		-- do not fit on one line in a 340px window, and a row that cannot wrap puts the
-		-- last of them past the edge where the CanvasGroup clips them away.
-		local metaRow = P.row(shell, {
-			name = "Meta",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			wrap = true,
-			gap = theme.space.xs,
-			padding = { x = theme.space.xxs },
-			layoutOrder = 4,
+		-- All primary input controls share one line. More holds secondary controls.
+		local metaRow = P.frame(inputRow, { name = "Meta", size = UDim2.fromScale(1, 1) })
+		local details = P.frame(shell, { name = "ComposerState", size = UDim2.fromOffset(0, 0), visible = false })
+		local permissionLabel = P.text(details, { name = "PermissionLabel", text = "", role = "caption" })
+		local statusLabel = P.text(details, { name = "Status", text = "", role = "caption" })
+		local plusButton = P.iconButton(inputRow, {
+			name = "AddContext", icon = "plus", variant = "ghost", diameter = theme.size.chip,
+			onClick = function(handle) attachMenu(handle.instance) end,
 		})
-
-		-- Permission mode, which is what the reference client's "Bypass permissions"
-		-- control is. It reads the real mode and writes the real mode: the label used to
-		-- say "Bypass permissions" on a client that was set to ask for every write,
-		-- which is the one place in this interface where a lie was also a safety
-		-- problem.
-		local permissionChip = P.rowButton(metaRow, {
-			name = "PermissionMode",
-			auto = "X",
-			height = theme.size.chip,
-			size = UDim2.fromOffset(0, theme.size.chip),
-			radius = theme.radius.sm,
-			gap = theme.space.xxs,
-			padding = { x = theme.space.xs },
-			layoutOrder = 1,
-			onClick = function(handle)
-				local options = {}
-				for _, mode in ipairs(permissions.MODES) do
-					options[#options + 1] = {
-						label = permissions.MODE_LABELS[mode] or mode,
-						value = mode,
-						detail = permissions.MODE_HINTS[mode],
-						selected = permissions.mode() == mode,
-						tone = mode == "full" and "warn" or nil,
-					}
-				end
-				overlay.menu({
-					target = handle.instance,
-					width = theme.size.menuWide,
-					options = options,
-					onSelect = function(mode)
-						permissions.setMode(mode)
-						composer.syncContext()
-					end,
-				})
-			end,
-		})
-		local permissionLabel = P.text(permissionChip.row, {
-			name = "PermissionLabel",
-			text = "",
-			role = "caption",
-			color = theme.color.textSecondary,
-			auto = "X",
-			layoutOrder = 1,
-		})
-
-		local plusButton = P.iconButton(metaRow, {
-			name = "AddContext",
-			icon = "plus",
-			variant = "ghost",
-			diameter = theme.size.chip,
-			layoutOrder = 2,
-			onClick = function(handle)
-				attachMenu(handle.instance)
-			end,
-		})
-		plusButton.instance.LayoutOrder = 2
-
-		local statusLabel = P.text(metaRow, {
-			name = "Status",
-			text = "",
-			role = "caption",
-			color = theme.color.textTertiary,
-			truncate = true,
-			-- An explicit height, not a scale one: the row wraps, so it sizes itself to
-			-- its contents and a (0, 0, 1, 0) child inside it resolves to nothing.
-			size = UDim2.new(0, 0, 0, math.max(theme.size.chip, responsive.minTarget())),
-			flex = "Fill",
-			layoutOrder = 3,
-		})
-
-		-- The model, the effort it is being asked for, and how full the context is. All
-		-- three come from the provider record and the session; the menu behind them is
-		-- the real provider and model picker.
 		local modelChip = P.rowButton(metaRow, {
-			name = "ModelChip",
-			auto = "X",
-			height = theme.size.chip,
-			size = UDim2.fromOffset(0, theme.size.chip),
-			radius = theme.radius.sm,
-			gap = theme.space.xxs,
-			padding = { x = theme.space.xs },
-			layoutOrder = 4,
-			onClick = function(handle)
-				M.providerMenu(handle.instance, composer)
-			end,
+			name = "ModelChip", size = UDim2.fromOffset(140, chipHeight), height = chipHeight,
+			radius = theme.radius.sm, gap = theme.space.xxs, padding = { x = theme.space.xs },
+			onClick = function(handle) M.providerMenu(handle.instance, composer) end,
 		})
 		local modelLabel = P.text(modelChip.row, {
-			name = "ModelLabel",
-			text = "",
-			role = "caption",
-			color = theme.color.textSecondary,
-			auto = "X",
-			layoutOrder = 1,
+			name = "ModelLabel", text = "", role = "caption", color = theme.color.textSecondary,
+			size = UDim2.new(1, -(theme.size.dot + theme.space.xxs + theme.space.xs * 2), 0, theme.text.caption.height),
+			truncate = true, layoutOrder = 1,
 		})
-		local effortLabel = P.text(modelChip.row, {
-			name = "EffortLabel",
-			text = "",
-			role = "caption",
-			color = theme.color.textTertiary,
-			auto = "X",
-			layoutOrder = 2,
-		})
+		local effortLabel = P.text(details, { name = "EffortLabel", text = "", role = "caption" })
 		local contextDot = P.statusDot(modelChip.row, {
-			diameter = theme.size.dot,
-			color = theme.color.textTertiary,
-			layoutOrder = 3,
+			diameter = theme.size.dot, color = theme.color.textTertiary, layoutOrder = 2,
 		})
-
-		local expandButton = P.button(metaRow, {
-			name = "Expand",
-			text = "multiline",
-			variant = "ghost",
-			size = "sm",
-			tight = true,
-			layoutOrder = 5,
-			onClick = function()
-				composer.setExpanded(not composer.expanded)
+		local moreButton = P.iconButton(metaRow, {
+			name = "ComposerOptions", icon = "ellipsis", variant = "ghost", diameter = theme.size.chip,
+			onClick = function(handle)
+				local options = {
+					{ label = "Model and effort", detail = modelLabel.Text, value = "model", icon = "spark" },
+					{ label = "Permissions", detail = permissionLabel.Text, value = "permissions", icon = "sliders" },
+					{ label = scopeScroll.instance.Visible and "Hide context details" or "Show context details", value = "context", icon = "folder" },
+					{ label = composer.expanded and "Single-line input" or "Multiline input", value = "expand", icon = "code" },
+				}
+				if statusLabel.Text ~= "" then
+					options[#options + 1] = { label = "Usage and status", detail = statusLabel.Text, value = "status" }
+				end
+				options[#options + 1] = { divider = true }
+				options[#options + 1] = { label = "Clear conversation", value = "clear", icon = "trash", tone = "bad" }
+				overlay.menu({ target = handle.instance, options = options, onSelect = function(value)
+					if value == "model" then M.providerMenu(handle.instance, composer)
+					elseif value == "permissions" then
+						local modes = {}
+						for _, mode in ipairs(permissions.MODES) do
+							modes[#modes + 1] = { label = permissions.MODE_LABELS[mode] or mode, value = mode,
+								detail = permissions.MODE_HINTS[mode], selected = permissions.mode() == mode,
+								tone = mode == "full" and "warn" or nil }
+						end
+						overlay.menu({ target = handle.instance, options = modes, onSelect = function(mode)
+							permissions.setMode(mode); composer.syncContext()
+						end })
+					elseif value == "context" then
+						scopeScroll.instance.Visible = not scopeScroll.instance.Visible; resizeComposer()
+					elseif value == "expand" then composer.setExpanded(not composer.expanded)
+					elseif value == "status" then overlay.toast(statusLabel.Text, "info", 5)
+					elseif value == "clear" and props.onClear then props.onClear() end
+				end })
 			end,
 		})
-		expandButton.instance.LayoutOrder = 5
-
-		local clearButton = P.button(metaRow, {
-			name = "Clear",
-			text = "clear",
-			variant = "ghost",
-			size = "sm",
-			tight = true,
-			layoutOrder = 6,
-			onClick = function()
-				if props.onClear then props.onClear() end
-			end,
-		})
-		clearButton.instance.LayoutOrder = 6
+		local function fitLabels()
+			local width = math.max(surface.AbsoluteSize.X - inset * 2, 0)
+			local modelWidth = width >= 560 and math.min(160, width * 0.22) or 0
+			modelChip.instance.Visible = modelWidth > 0
+			modelChip.instance.Size = UDim2.fromOffset(modelWidth, chipHeight)
+			modelChip.instance.AnchorPoint = Vector2.new(1, 0.5)
+			modelChip.instance.Position = UDim2.new(1, -(controlHeight + chipHeight + inset * 2), 0.5, 0)
+			plusButton.instance.AnchorPoint = Vector2.new(0, 0.5)
+			plusButton.instance.Position = UDim2.fromScale(0, 0.5)
+			moreButton.instance.AnchorPoint = Vector2.new(1, 0.5)
+			moreButton.instance.Position = UDim2.new(1, -(controlHeight + inset), 0.5, 0)
+			sendButton.instance.AnchorPoint = Vector2.new(1, 0.5)
+			sendButton.instance.Position = UDim2.fromScale(1, 0.5)
+			local left = chipHeight + inset
+			local right = controlHeight + chipHeight + inset * 2 + (modelWidth > 0 and modelWidth + inset or 0)
+			fieldHolder.Position = UDim2.fromOffset(left, 0)
+			fieldHolder.Size = UDim2.new(1, -(left + right), 1, 0)
+		end
+		resizeComposer = function()
+			local top = inset
+			if scopeScroll.instance.Visible then
+				scopeScroll.instance.Position = UDim2.fromOffset(inset, top)
+				scopeScroll.instance.Size = UDim2.new(1, -inset * 2, 0, chipHeight + theme.size.scrollbar)
+				top = top + chipHeight + theme.size.scrollbar + inset
+			end
+			if attachRow.Visible then
+				attachRow.Position = UDim2.fromOffset(inset, top)
+				attachRow.Size = UDim2.new(1, -inset * 2, 0, 0)
+				top = top + math.max(attachRow.AbsoluteSize.Y, chipHeight) + inset
+			end
+			local fieldHeight = composer.expanded and math.max(theme.text.body.height * 2 + theme.space.md,
+				math.min(theme.text.body.height * 5 + theme.space.md, responsive.viewport.Y * 0.25)) or controlHeight
+			inputHolder.Position = UDim2.fromOffset(inset, top)
+			inputHolder.Size = UDim2.new(1, -inset * 2, 0, fieldHeight)
+			local surfaceHeight = top + fieldHeight + inset
+			surface.Size = UDim2.new(1, -theme.space.lg * 2, 0, surfaceHeight)
+			shell.Size = UDim2.new(1, 0, 0, surfaceHeight + theme.space.xxs + inset)
+			fitLabels()
+		end
+		surface:GetPropertyChangedSignal("AbsoluteSize"):Connect(fitLabels)
+		attachRow:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() resizeComposer() end)
 
 		-- Everything on the meta row, from the real records ---------------------
 
 		function composer.syncContext()
-			permissionLabel.Text = permissions.MODE_LABELS[permissions.mode()] or permissions.mode()
+			local shortModes = { ask = "Ask first", auto = "Auto", full = "Full access" }
+			permissionLabel.Text = shortModes[permissions.mode()] or permissions.MODE_LABELS[permissions.mode()] or permissions.mode()
 			permissionLabel.TextColor3 = permissions.mode() == "full"
 				and theme.color.warn or theme.color.textSecondary
 
@@ -697,68 +626,28 @@ composer.field = buildField(nil)
 				tone = theme.color.warn
 			end
 			contextDot.BackgroundColor3 = tone
+			fitLabels()
 		end
 
 		-- Rebuilding the field is the honest way to switch MultiLine: changing the
 		-- property on a live TextBox leaves its alignment and height wrong.
 		function composer.setExpanded(value)
 			composer.expanded = value == true
+			paintFocus(false)
 			local carried = composer.field.get()
 			pcall(function() composer.field.shell:Destroy() end)
 			composer.field = buildField(carried)
-			expandButton.setText(composer.expanded and "single line" or "multiline")
+			composer.field.focus()
+			resizeComposer()
+			syncSend()
 		end
 
 		function composer.setBusy(value)
 			composer.busy = value == true
-			-- The mascot works while the agent does. It is peripheral motion next to the
-			-- field, which is where the eyes are just after sending.
 			if composer.mascot then pcall(composer.mascot.setBusy, composer.busy) end
-			-- ClearAllChildren would take the UICorner that P.button attached along
-			-- with the icon, and since this runs once at build time that is why the
-			-- send button has been square from the moment it existed. Only the drawn
-			-- content is replaced.
-			for _, child in ipairs(sendButton.instance:GetChildren()) do
-				if child:IsA("GuiObject") then child:Destroy() end
-			end
-			-- The primary action becomes Stop while a turn is running, in place
-			-- rather than as a second control, so there is only ever one thing to
-			-- press.
-			local content = P.row(sendButton.instance, {
-				size = UDim2.fromScale(1, 1),
-				alignX = "Center",
-			})
-			local holder = P.frame(content, {
-				size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
-			})
-			if composer.pulse then
-				pcall(function() composer.pulse:Cancel() end)
-				composer.pulse = nil
-			end
-			if composer.busy then
-				-- Danger is outline-and-text rather than a fill, so the glyph is the
-				-- danger colour: drawing it in the on-accent tone left a near-black
-				-- square on a transparent button.
-				icons.stop(holder, theme.size.icon, theme.color.danger)
-				-- setVariant tweens the background over 0.12s, so assigning
-				-- BackgroundColor3 here as well only started a race the tween won.
-				sendButton.setVariant("danger")
-				-- A breathing outline. It is the one piece of motion visible with the
-				-- transcript scrolled away, which is where a long turn is usually spent.
-				if not responsive.reduceMotion then
-					composer.busyStroke = composer.busyStroke
-						or P.stroke(sendButton.instance, theme.color.danger, theme.stroke.focus)
-					composer.busyStroke.Color = theme.color.danger
-					composer.busyStroke.Transparency = theme.opacity.dim
-					composer.pulse = env.tween:Create(composer.busyStroke, theme.motion.pulse,
-						{ Transparency = 0 })
-					composer.pulse:Play()
-				end
-			else
-				icons.send(holder, theme.size.icon, theme.color.textSecondary)
-				sendButton.setVariant("ghost")
-				if composer.busyStroke then composer.busyStroke.Transparency = 1 end
-			end
+			sendButton.setIcon(composer.busy and "stop" or "send")
+			sendButton.setVariant(composer.busy and "danger" or "primary")
+			syncSend()
 		end
 
 		function composer.setStatus(text)
@@ -781,14 +670,12 @@ composer.field = buildField(nil)
 			composer.field.focus()
 		end
 
-		-- The keyboard covering the field is the classic mobile bug. The window moves
-		-- itself; this only has to stop showing the meta row when there is no height
-		-- left for it.
+		-- Keep model and permission controls usable when the keyboard reduces height.
 		local unsubscribeResponsive = responsive.changed:connect(function()
 			if not metaRow.Parent then return end
-			metaRow.Visible = not responsive.isCompactHeight()
+			resizeComposer()
 		end)
-		metaRow.Visible = not responsive.isCompactHeight()
+		resizeComposer()
 
 		-- The chips are a view of state that other surfaces change: the permission mode
 		-- from a menu, the model from the Providers panel, the place name when it
@@ -803,7 +690,7 @@ composer.field = buildField(nil)
 		end)
 		local unsubscribePlace = place.changed:connect(function()
 			if not scopeRow.Parent then return end
-			if placeChip.text then placeChip.text.Text = place.label() end
+			if placeChip.text then placeChip.text.Text = util.ellipsis(place.label(), 24) end
 		end)
 		local unsubscribeSessions = sessions.listChanged:connect(function()
 			if not scopeRow.Parent then return end

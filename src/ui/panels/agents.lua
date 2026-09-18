@@ -53,8 +53,8 @@ return function(env)
 		local scroll = P.scroll(parent, {
 			name = "Agents",
 			size = UDim2.new(1, 0, 1, 0),
-			gap = theme.space.md,
-			padding = theme.space.md,
+			gap = theme.space.lg,
+			padding = theme.space.lg,
 		})
 
 		P.sectionHeader(scroll.instance, {
@@ -134,6 +134,8 @@ return function(env)
 					(record.runs or 1) > 1
 						and ("  \194\183  " .. util.pluralise(record.runs, "turn")) or ""),
 				width = theme.size.modalWide,
+				scroll = true,
+				height = theme.size.dialogTall,
 			})
 			if not modal then return end
 			-- The id, because it is the handle the agent addresses a follow-up to. Reading

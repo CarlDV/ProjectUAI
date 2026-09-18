@@ -248,7 +248,7 @@ return function(env)
 			name = "Header",
 			size = UDim2.new(1, 0, 0, headerHeight),
 			gap = theme.space.sm,
-			padding = { x = theme.space.sm },
+			padding = { x = theme.space.md },
 			zIndex = theme.z.header,
 		})
 		handle.header.BackgroundTransparency = 1

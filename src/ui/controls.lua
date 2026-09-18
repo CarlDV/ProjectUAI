@@ -4,7 +4,6 @@
 -- an instance to change what a control shows.
 return function(env)
 	local util = env.require("runtime/util")
-	local clock = env.require("runtime/clock")
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
 	local icons = env.require("ui/icons")
@@ -13,9 +12,8 @@ return function(env)
 
 	local C = {}
 
-	-- A rotating arc, approximated with three dots at descending opacity. Rotation
-	-- is the one property Roblox will tween indefinitely, so this costs one tween
-	-- rather than a per-frame connection.
+	-- An open arc with a solid leading cap stays visibly asymmetric at icon size.
+	-- The inner rotor moves independently of the layout-owned slot.
 	function C.spinner(parent, props)
 		props = props or {}
 		local size = props.diameter or theme.size.icon
@@ -26,51 +24,60 @@ return function(env)
 			anchor = props.anchor,
 			position = props.position,
 		})
+		local rotor = P.frame(holder, {
+			name = "Rotor",
+			size = UDim2.fromScale(1, 1),
+			anchor = Vector2.new(0.5, 0.5),
+			position = UDim2.fromScale(0.5, 0.5),
+		})
 		local tint = props.color or theme.color.accent
-		-- Three dots spread evenly around the circle rather than bunched into an arc.
-		-- At icon size the arc version came out as three two-pixel dots inside eighty
-		-- degrees, two of them part-transparent -- a smudge that was hard to tell from
-		-- a static one, which rather defeated the point of animating it.
-		local dotSize = math.max(math.floor(size / 3.2), 3)
-		-- One opacity ramp, used both for the resting state and for the chase. It was
-		-- two -- 0.3 at rest and 0.34 animated -- so the dots jumped a step the moment
-		-- the first tick landed.
-		local FADE_STEP = 0.34
-		local dots = {}
-		for index = 1, 3 do
-			local dot = P.frame(holder, {
-				name = "Dot" .. index,
-				size = UDim2.fromOffset(dotSize, dotSize),
+		local thickness = math.max(math.floor(size / 7 + 0.5), theme.stroke.focus)
+		local radius = math.max((size - thickness) / 2 - theme.stroke.hair, thickness)
+		local segments = 14
+		local sweep = 245
+		local step = sweep / (segments - 1)
+		local length = radius * math.rad(step) + thickness / 2
+		for index = 1, segments do
+			local angle = -90 - sweep + (index - 1) * step
+			P.frame(rotor, {
+				name = "Arc" .. index,
+				size = UDim2.fromOffset(length, thickness),
 				bg = tint,
+				bgTransparency = (1 - (index - 1) / (segments - 1)) * theme.opacity.dim,
 				radius = theme.radius.pill,
 				anchor = Vector2.new(0.5, 0.5),
+				position = UDim2.new(0.5, math.cos(math.rad(angle)) * radius,
+					0.5, math.sin(math.rad(angle)) * radius),
+				rotation = angle + 90,
 			})
-			dots[index] = dot
-			dot.BackgroundTransparency = (index - 1) * FADE_STEP
-			local angle = (index - 1) * 120
-			dot.Position = UDim2.fromScale(
-				0.5 + math.cos(math.rad(angle)) * 0.34,
-				0.5 + math.sin(math.rad(angle)) * 0.34)
 		end
-		if not responsive.reduceMotion then
-			local spin = env.tween:Create(holder, theme.motion.spin, { Rotation = 360 })
-			spin:Play()
-			-- The dots chase each other in opacity as well as going round. A single
-			-- Rotation tween on a sixteen-pixel box is easy to miss, and if a client
-			-- ever declines to tween Rotation there is nothing left at all -- this does
-			-- not depend on the tween having taken.
-			local phase = 0
-			local stop = clock.interval(theme.motion.fast, function()
-				phase = (phase + 1) % 3
-				for index = 1, 3 do
-					dots[index].BackgroundTransparency = ((index + phase) % 3) * FADE_STEP
-				end
-			end)
-			holder.Destroying:Connect(function()
-				pcall(function() spin:Cancel() end)
-				pcall(stop)
-			end)
+		P.frame(rotor, {
+			name = "LeadingCap",
+			size = UDim2.fromOffset(thickness, thickness),
+			bg = tint,
+			radius = theme.radius.pill,
+			anchor = Vector2.new(0.5, 0.5),
+			position = UDim2.new(0.5, 0, 0.5, -radius),
+		})
+
+		local stopSpin
+		local function syncMotion()
+			if responsive.reduceMotion then
+				if stopSpin then stopSpin(); stopSpin = nil end
+				rotor.Rotation = 0
+			elseif not stopSpin then
+				rotor.Rotation = 0
+				local spin = env.tween:Create(rotor, theme.motion.spin, { Rotation = 360 })
+				stopSpin = dispose.tween(spin, "spinner rotation")
+				spin:Play()
+			end
 		end
+		local stopPreference = dispose.add(responsive.changed:connect(syncMotion), "spinner motion preference")
+		holder.Destroying:Connect(function()
+			stopPreference()
+			if stopSpin then stopSpin(); stopSpin = nil end
+		end)
+		syncMotion()
 		return holder
 	end
 
@@ -83,42 +90,55 @@ return function(env)
 		local button = Instance.new("TextButton", parent)
 		button.Text = ""
 		button.AutoButtonColor = false
-		button.Size = UDim2.fromOffset(width, height)
-		button.BackgroundColor3 = theme.color.surfaceActive
+		button.Size = UDim2.fromOffset(math.max(width, responsive.minTarget()), math.max(height, responsive.minTarget()))
+		button.BackgroundTransparency = 1
 		button.BorderSizePixel = 0
 		button.Selectable = true
 		button.LayoutOrder = props.layoutOrder or 0
-		P.corner(button, theme.radius.pill)
-		local stroke = P.stroke(button, theme.color.border)
+		local rail = P.frame(button, {
+			name = "Rail",
+			size = UDim2.fromOffset(width, height),
+			position = UDim2.fromScale(0.5, 0.5),
+			anchor = Vector2.new(0.5, 0.5),
+			bg = theme.color.surfaceActive,
+			radius = theme.radius.pill,
+		})
+		local stroke = P.stroke(rail, theme.color.border)
 
-		local knob = P.frame(button, {
+		local knob = P.frame(rail, {
 			name = "Knob",
 			size = UDim2.fromOffset(knobSize, knobSize),
-			position = UDim2.new(0, inset, 0.5, 0),
-			anchor = Vector2.new(0, 0.5),
+			position = UDim2.new(0, inset + knobSize / 2, 0.5, 0),
+			anchor = Vector2.new(0.5, 0.5),
 			bg = theme.color.textTertiary,
 			radius = theme.radius.pill,
 		})
 
 		local handle = { value = props.value == true }
 
-		-- On is the full accent with a cream knob, not a muted wash: a switch is the
-		-- one control whose entire job is to be readable at a glance from across a
-		-- settings list, and the muted version could not be told from off.
+		local hovered, focused, pressed = false, false, false
 		local function paint(animate)
-			local info = animate and theme.tween("hover") or theme.tween("instant")
-			env.tween:Create(button, info, {
-				BackgroundColor3 = handle.value and theme.color.accent or theme.color.surfaceActive,
-			}):Play()
-			env.tween:Create(stroke, info, {
-				Color = handle.value and theme.color.accent or theme.color.border,
-			}):Play()
-			env.tween:Create(knob, info, {
-				Position = handle.value and UDim2.new(1, -inset, 0.5, 0) or UDim2.new(0, inset, 0.5, 0),
-				BackgroundColor3 = handle.value and theme.color.solid or theme.color.textTertiary,
-			}):Play()
-			knob.AnchorPoint = handle.value and Vector2.new(1, 0.5) or Vector2.new(0, 0.5)
+			local motion = animate and (pressed and "press" or "hover") or "instant"
+			P.animate(rail, motion, {
+				BackgroundColor3 = handle.value and ((hovered or pressed) and theme.color.accentHot or theme.color.accent)
+					or ((hovered or pressed) and theme.color.surfaceHover or theme.color.surfaceActive),
+			})
+			P.animate(stroke, motion, {
+				Color = focused and theme.color.solid or (handle.value and theme.color.accent or theme.color.borderStrong),
+			})
+			-- A fixed anchor prevents the thumb jumping before its position tween starts.
+			P.animate(knob, motion, {
+				Position = handle.value and UDim2.new(1, -(inset + knobSize / 2), 0.5, 0)
+					or UDim2.new(0, inset + knobSize / 2, 0.5, 0),
+				BackgroundColor3 = handle.value and theme.color.onSolid or theme.color.textSecondary,
+			})
 		end
+		button.MouseEnter:Connect(function() hovered = true; paint(true) end)
+		button.MouseLeave:Connect(function() hovered = false; pressed = false; paint(true) end)
+		button.MouseButton1Down:Connect(function() pressed = true; paint(true) end)
+		button.MouseButton1Up:Connect(function() pressed = false; paint(true) end)
+		button.SelectionGained:Connect(function() focused = true; paint(true) end)
+		button.SelectionLost:Connect(function() focused = false; paint(true) end)
 
 		function handle.set(value, silent)
 			handle.value = value == true
@@ -156,8 +176,8 @@ return function(env)
 		})
 		local track = P.frame(shell, {
 			name = "Track",
-			size = UDim2.new(1, 0, 0, theme.size.track),
-			position = UDim2.fromScale(0, 0.5),
+			size = UDim2.new(1, -theme.size.knob, 0, theme.size.track),
+			position = UDim2.new(0, theme.size.knob / 2, 0.5, 0),
 			anchor = Vector2.new(0, 0.5),
 			bg = theme.color.surfaceActive,
 			radius = theme.radius.pill,
@@ -204,7 +224,7 @@ return function(env)
 		local function paint()
 			local alpha = alphaFor(handle.value)
 			fill.Size = UDim2.fromScale(alpha, 1)
-			knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+			knob.Position = UDim2.new(alpha, theme.size.knob * (0.5 - alpha), 0.5, 0)
 		end
 
 		function handle.set(value, silent)
@@ -214,6 +234,8 @@ return function(env)
 		end
 
 		local dragging = false
+		local dragInput
+		local alive = true
 
 		local function fromInput(input)
 			local origin = track.AbsolutePosition.X
@@ -235,33 +257,60 @@ return function(env)
 		hit.AutoButtonColor = false
 		hit.Selectable = true
 
+		local hovered, focused = false, false
+		local knobOutline = P.stroke(knob, theme.color.accent, theme.stroke.hair)
+		knobOutline.Transparency = 1
+		local function paintInteraction()
+			if not alive then return end
+			local diameter = theme.size.knob + ((dragging or hovered or focused) and theme.space.hair or 0)
+			P.animate(knob, "press", { Size = UDim2.fromOffset(diameter, diameter) })
+			P.animate(knobOutline, "hover", { Transparency = (focused or dragging) and 0 or 1 })
+			P.animate(fill, "hover", { BackgroundColor3 = (hovered or dragging) and theme.color.accentHot or theme.color.accent })
+		end
+		hit.MouseEnter:Connect(function() hovered = true; paintInteraction() end)
+		hit.MouseLeave:Connect(function() hovered = false; paintInteraction() end)
+		hit.SelectionGained:Connect(function() focused = true; paintInteraction() end)
+		hit.SelectionLost:Connect(function() focused = false; paintInteraction() end)
 		hit.InputBegan:Connect(function(input)
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseButton1 and kind ~= Enum.UserInputType.Touch then return end
+			if dragging or not alive then return end
 			dragging = true
+			dragInput = input
 			fromInput(input)
-			env.tween:Create(knob, theme.tween("press"), {
-				Size = UDim2.fromOffset(theme.size.knob + theme.space.xxs, theme.size.knob + theme.space.xxs),
-			}):Play()
+			paintInteraction()
 		end)
 
-		hit.InputEnded:Connect(function(input)
+		local function finishDrag(input)
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseButton1 and kind ~= Enum.UserInputType.Touch then return end
-			if not dragging then return end
+			if not dragging or not dragInput then return end
+			if kind ~= dragInput.UserInputType then return end
+			if kind == Enum.UserInputType.Touch and input ~= dragInput then return end
 			dragging = false
-			env.tween:Create(knob, theme.tween("press"), {
-				Size = UDim2.fromOffset(theme.size.knob, theme.size.knob),
-			}):Play()
+			dragInput = nil
+			paintInteraction()
 			if props.onCommit then pcall(props.onCommit, handle.value) end
-		end)
-
-		dispose.connection(env.uis.InputChanged:Connect(function(input)
-			if not dragging then return end
+		end
+		hit.InputEnded:Connect(finishDrag)
+		local stopMove = dispose.connection(env.uis.InputChanged:Connect(function(input)
+			if not dragging or not dragInput then return end
 			local kind = input.UserInputType
-			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
+			if dragInput.UserInputType == Enum.UserInputType.Touch then
+				if input ~= dragInput then return end
+			elseif kind ~= Enum.UserInputType.MouseMovement then
+				return
+			end
 			fromInput(input)
-		end))
+		end), "slider drag")
+		local stopRelease = dispose.connection(env.uis.InputEnded:Connect(finishDrag), "slider release")
+		shell.Destroying:Connect(function()
+			alive = false
+			dragging = false
+			dragInput = nil
+			stopMove()
+			stopRelease()
+		end)
 
 		paint()
 		return handle
@@ -329,13 +378,18 @@ return function(env)
 		local function paint()
 			for value, entry in pairs(handle.buttons) do
 				local selected = value == handle.value
-				env.tween:Create(entry.button, theme.tween("hover"), {
-					BackgroundColor3 = selected and theme.color.surfaceActive or theme.color.surface,
-					BackgroundTransparency = selected and 0 or 1,
-				}):Play()
-				env.tween:Create(entry.label, theme.tween("hover"), {
-					TextColor3 = selected and theme.color.text or theme.color.textTertiary,
-				}):Play()
+				local active = entry.hovered or entry.focused
+				P.animate(entry.button, entry.pressed and "press" or "hover", {
+					BackgroundColor3 = (selected or entry.pressed) and theme.color.surfaceActive or theme.color.surfaceHover,
+					BackgroundTransparency = (selected or active or entry.pressed) and 0 or 1,
+				})
+				P.animate(entry.label, "hover", {
+					TextColor3 = (selected or active) and theme.color.text or theme.color.textSecondary,
+				})
+				P.animate(entry.outline, "hover", {
+					Color = entry.focused and theme.color.accent or theme.color.borderSubtle,
+					Transparency = (entry.focused or selected) and 0 or 1,
+				})
 			end
 		end
 
@@ -357,13 +411,24 @@ return function(env)
 
 			local label = P.text(button, {
 				text = option.label or tostring(value),
+				truncate = true,
+				padding = { x = theme.space.xs },
 				role = "label",
 				color = theme.color.textTertiary,
 				align = "Center",
 				size = UDim2.new(1, 0, 1, 0),
 			})
 
-			handle.buttons[value] = { button = button, label = label }
+			local outline = P.stroke(button, theme.color.borderSubtle)
+			outline.Transparency = 1
+			local entry = { button = button, label = label, outline = outline }
+			handle.buttons[value] = entry
+			button.MouseEnter:Connect(function() entry.hovered = true; paint() end)
+			button.MouseLeave:Connect(function() entry.hovered = false; entry.pressed = false; paint() end)
+			button.MouseButton1Down:Connect(function() entry.pressed = true; paint() end)
+			button.MouseButton1Up:Connect(function() entry.pressed = false; paint() end)
+			button.SelectionGained:Connect(function() entry.focused = true; paint() end)
+			button.SelectionLost:Connect(function() entry.focused = false; entry.pressed = false; paint() end)
 			button.Activated:Connect(function()
 				handle.value = value
 				paint()
@@ -399,9 +464,9 @@ return function(env)
 		})
 		local handle = { instance = track }
 		function handle.set(value)
-			env.tween:Create(fill, theme.tween("hover"), {
+			P.animate(fill, "hover", {
 				Size = UDim2.fromScale(util.clamp(value or 0, 0, 1), 1),
-			}):Play()
+			})
 		end
 		return handle
 	end
@@ -444,13 +509,22 @@ return function(env)
 			name = "Empty",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
-			gap = theme.space.xs,
+			gap = theme.space.sm,
 			alignX = "Center",
 			padding = { y = theme.space.xxl, x = theme.space.lg },
 			layoutOrder = props.layoutOrder,
 		})
+		local emblem = P.frame(column, {
+			name = "Emblem",
+			size = UDim2.fromOffset(theme.size.controlLarge, theme.size.controlLarge),
+			bg = theme.color.surfaceRaised,
+			radius = theme.radius.lg,
+			layoutOrder = 1,
+		})
+		icons.draw(props.icon or "document", emblem, theme.size.iconLarge or theme.size.icon, theme.color.textSecondary)
 		P.text(column, {
 			text = tostring(props.title or ""),
+			layoutOrder = 2,
 			role = "bodyStrong",
 			color = theme.color.textSecondary,
 			align = "Center",
@@ -460,6 +534,8 @@ return function(env)
 		if props.description then
 			P.text(column, {
 				text = props.description,
+				layoutOrder = 3,
+				maxSize = Vector2.new(theme.size.readingNarrow, math.huge),
 				role = "small",
 				color = theme.color.textTertiary,
 				align = "Center",
@@ -468,7 +544,7 @@ return function(env)
 			})
 		end
 		if props.action then
-			local wrapper = P.row(column, { size = UDim2.new(1, 0, 0, 0), auto = "Y", alignX = "Center" })
+			local wrapper = P.row(column, { size = UDim2.new(1, 0, 0, 0), auto = "Y", alignX = "Center", layoutOrder = 4, padding = { top = theme.space.sm } })
 			P.button(wrapper, {
 				text = props.action,
 				variant = "secondary",

@@ -35,6 +35,15 @@ return function(env)
 		return M.cached(record.id) or {}
 	end
 
+	-- A catalog label is not permission to use the model. Zen documents Big
+	-- Pickle as free despite its unsuffixed id; only apply that alias on Zen.
+	-- Other ids use a distinct "free" token rather than matching "freedom".
+	function M.isFree(record, id)
+		local name = tostring(id or ""):lower()
+		if registry.isOpencode(record) and name == "big-pickle" then return true end
+		return name:find("%f[%a]free%f[%A]") ~= nil
+	end
+
 	-- Manual entry. The id is stored on the record, so it survives a restart and is
 	-- offered first from then on.
 	function M.add(record, id, opts)
@@ -111,7 +120,7 @@ return function(env)
 			url = url,
 			method = "GET",
 			headers = headers,
-			identity = (record.claudeUa ~= false) and "claude" or "none",
+			identity = registry.identityFor(record),
 			attempts = 2,
 			tag = "models:" .. record.id,
 		})

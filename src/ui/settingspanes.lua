@@ -12,6 +12,7 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local config = env.require("runtime/config")
+	local configTransfer = env.require("runtime/config_transfer")
 	local caps = env.require("runtime/caps")
 	local clock = env.require("runtime/clock")
 	local log = env.require("runtime/log")
@@ -267,8 +268,8 @@ return function(env)
 
 		local secrets = build.section("Keys and logs",
 			"An API key is stored in the settings file so a request can be signed with it. "
-			.. "Everywhere else -- the request log, the diagnostics, an exported copy of the "
-			.. "settings -- only the last four characters are kept.")
+			.. "Request logs and diagnostic exports reduce API keys to their last four characters. "
+			.. "Full configuration export keeps all credentials so you can transfer settings; keep that copy private.")
 		R.toggle(secrets, {
 			label = "Mirror the log to the console",
 			hint = "Also print every entry with print/warn, which a developer console can read.",
@@ -676,13 +677,133 @@ return function(env)
 		}
 	end
 
+	local function fullConfigImport()
+		local modal = overlay.modal({
+			title = "Import full configuration",
+			description = "Paste the private JSON copied by Full configuration export. Review it before replacing your settings.",
+			width = theme.size.modalWide,
+			height = theme.size.dialogTall,
+			scroll = true,
+		})
+		if not modal then return end
+		local candidate, applyButton
+		local status = P.text(modal.content, {
+			name = "ConfigImportStatus",
+			text = "Paste your JSON below, then select Review.",
+			role = "small",
+			color = theme.color.textSecondary,
+			wrap = true,
+			auto = "Y",
+			layoutOrder = 1,
+		})
+		local field = P.field(modal.content, {
+			name = "ConfigImportJSON",
+			placeholder = '{"format":"project-uai-config","version":1,...}',
+			role = "monoSmall",
+			multiline = true,
+			height = theme.text.monoSmall.height * 8 + theme.space.md * 2,
+			layoutOrder = 2,
+			onChange = function()
+				candidate = nil
+				if applyButton then applyButton.setEnabled(false) end
+				status.Text = "Select Review to validate this configuration."
+				status.TextColor3 = theme.color.textSecondary
+			end,
+		})
+		P.text(modal.content, {
+			text = "Applying replaces providers, credentials, permissions, and all saved preferences. Conversations, activity history, workspace files, and skill files stay on this device.",
+			role = "caption",
+			color = theme.color.textTertiary,
+			wrap = true,
+			auto = "Y",
+			layoutOrder = 3,
+		})
+		P.button(modal.footer, {
+			text = "Cancel", variant = "ghost", size = "sm", layoutOrder = 1,
+			onClick = function() modal.close() end,
+		})
+		P.button(modal.footer, {
+			name = "ReviewConfigImport", text = "Review", size = "sm", layoutOrder = 2,
+			onClick = function()
+				local preview, err = configTransfer.preview(field.get())
+				candidate = preview
+				applyButton.setEnabled(preview ~= nil)
+				if not preview then
+					status.Text = tostring(err)
+					status.TextColor3 = theme.color.warn
+					return
+				end
+				local summary = preview.summary
+				status.Text = string.format("Ready to import\n%s · %s\nActive provider: %s\nPermission mode: %s · %s\n%s · Bridge %s",
+					util.pluralise(summary.providers, "provider"), util.pluralise(summary.keys, "API key"),
+					util.ellipsis(summary.active, 64), permissions.MODE_LABELS[summary.permissionMode] or summary.permissionMode,
+					util.pluralise(summary.rules, "rule"), util.pluralise(summary.memory, "memory entry"),
+					summary.bridgeEnabled and "enabled" or "disabled")
+				status.TextColor3 = theme.color.text
+			end,
+		})
+		applyButton = P.button(modal.footer, {
+			name = "ApplyConfigImport", text = "Apply", variant = "primary", size = "sm", layoutOrder = 3,
+			enabled = false,
+			onClick = function()
+				if not candidate then return end
+				local ok, persisted = configTransfer.apply(candidate)
+				if not ok then
+					status.Text = tostring(persisted)
+					status.TextColor3 = theme.color.warn
+					return
+				end
+				log.setLevel(config.get("logs.level", "info"))
+				log.mirror = config.get("logs.mirror", false) == true
+				providers.changed:fire("import")
+				permissions.changed:fire("import")
+				state.memoryChanged:fire(config.get("memory.entries", {}))
+				env.require("runtime/skills").changed:fire(nil, nil)
+				modal.close(true)
+				-- The Settings dialog survives app rebuilds, so close its stale controls.
+				for index = #overlay.open, 1, -1 do
+					local entry = overlay.open[index]
+					if entry.card and entry.card.Name == "SettingsDialog" then entry.close() end
+				end
+				overlay.toast(persisted and "Full configuration imported and saved" or "Configuration imported for this session", "good", 4)
+			end,
+		})
+		clock.delay(theme.duration("fast"), function()
+			if not modal.closed then field.focus() end
+		end)
+	end
+
 	local function paneImportExport(container)
 		local build = builder(container)
 
-		local out = build.section("Export",
+		local transfer = build.section("Full configuration",
+			"Copy every saved setting to another device, including provider records, API keys and key pools, custom headers and parameters, permissions, and preferences. This JSON includes credentials; keep it private.")
+		R.paragraph(transfer,
+			"Conversations, activity history, workspace files, and skill files are not included. Saved memory and skill preferences are included.")
+		local copyButton = P.button(transfer, {
+			name = "CopyFullConfig",
+			text = "Copy config · includes API keys",
+			variant = "secondary",
+			fill = true,
+			enabled = caps.clipboard,
+			onClick = function()
+				local copied, err = configTransfer.copyToClipboard(caps.fn.clipboard)
+				overlay.toast(copied and "Full configuration copied, including API keys" or tostring(err), copied and "good" or "warn", 4)
+			end,
+		})
+		copyButton.setEnabled(caps.clipboard)
+		if not caps.clipboard then
+			R.paragraph(transfer, "This host cannot write to the clipboard. You can still paste an export to import it.")
+		end
+		P.button(transfer, {
+			name = "PasteFullConfig", text = "Paste configuration to import", fill = true,
+			onClick = fullConfigImport,
+		})
+
+		local out = build.section("Diagnostic export",
 			"Writes a copy of your settings and the activity history into the client's own "
 			.. "folder. API keys are reduced to their last four characters and the bridge token "
-			.. "is dropped, so the file can be shared.")
+			.. "is dropped. Custom fields may still contain credentials, so review before sharing.")
 		local outPath = EXPORT_DIR .. "/uai-export.json"
 		local result = P.text(out, {
 			name = "ExportResult",

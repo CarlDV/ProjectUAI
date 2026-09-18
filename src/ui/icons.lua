@@ -16,6 +16,13 @@ return function(env)
 	local assets = env.require("ui/assets")
 
 	local M = {}
+	local brand = env.require("ui/brand")
+	M.brandColor = brand.color
+
+	-- Brand identity keeps its own coral tint; functional icons follow UI state.
+	function M.brand(parent, size)
+		return brand.draw(parent, size)
+	end
 
 	local LUCIDE_MAP = {
 		close = "x",
@@ -253,10 +260,7 @@ return function(env)
 		return frame
 	end
 
-	-- An eight-pointed asterisk: four bars through the centre at forty-five degree
-	-- steps. It is the mark this interface is modelled on, and it is the one glyph
-	-- here that carries brand rather than function -- so it gets the accent by
-	-- default rather than the secondary text tone every other icon uses.
+	-- A functional spark for agent actions and activity, separate from app branding.
 	function M.spark(parent, size, colour)
 		local tint = colour or theme.color.accent
 		local frame, custom = customOrHolder(parent, size, "IconSpark", "spark", tint)
@@ -857,7 +861,7 @@ return function(env)
 		folder = M.folder, branch = M.branch, worktree = M.worktree,
 		terminal = M.terminal, document = M.document, gear = M.gear,
 		sliders = M.sliders, globe = M.globe, book = M.book, signOut = M.signOut,
-		ellipsis = M.ellipsis,
+		ellipsis = M.ellipsis, brand = M.brand,
 	}
 
 	function M.draw(name, parent, size, colour, extra)

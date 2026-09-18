@@ -58,16 +58,12 @@ return function(env)
 			label = "OpenCode Zen",
 			baseUrl = "https://opencode.ai/zen/v1",
 			authStyle = "bearer",
-			keyHint = "public or a key from opencode.ai/zen",
+			keyHint = "API key from opencode.ai/zen",
 			docs = "https://opencode.ai/zen",
-			-- The relay routes and meters by the session headers OpenCode's own TUI
-			-- sends, and answers MissingSessionID without them. They are applied by URL
-			-- detection in provider/registry, so any record pointing at opencode.ai
-			-- carries them -- this preset, a pasted URL, a record from before it existed.
-			-- The relay expects the OpenCode TUI, so the Claude Code identity is not sent
-			-- to it either.
+			-- Keep the existing OpenCode request compatibility headers, scoped to the
+			-- official host, without mixing in the Claude Code identity.
 			claudeUa = false,
-			note = "OpenCode's relay. 'public' as the key uses the free anonymous tier; a key from opencode.ai/zen lifts the limits.",
+			note = "OpenCode's relay with OpenCode-compatible request headers. Use your Zen key, fetch current models, and select a model supported by the configured API protocol.",
 		},
 		{
 			id = "azure-foundry",

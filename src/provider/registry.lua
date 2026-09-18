@@ -171,32 +171,30 @@ return function(env)
 		return { ["Authorization"] = "Bearer " .. key }
 	end
 
-	-- The identity OpenCode's own TUI presents to the Zen relay, and whether this
-	-- record is talking to it.
-	--
-	-- Detection is by base URL rather than by a field the record carries, because a
-	-- record can reach the relay without the preset: a base URL pasted by hand, a
-	-- record saved before the preset existed. `opencode.ai` is the relay's host and
-	-- nothing else this client knows about answers there, which is the same basis
-	-- the OpenRouter detection in net/http uses.
+	-- OpenCode compatibility metadata belongs only to the official host.
 	function M.isOpencode(record)
-		local base = tostring(record and record.baseUrl or ""):lower()
-		return base:find("opencode.ai", 1, true) ~= nil
+		local base = util.trim(tostring(record and record.baseUrl or "")):lower()
+		local authority = base:match("^https?://([^/%?#]+)")
+		if not authority then return false end
+		return authority == "opencode.ai" or authority:match("^opencode%.ai:%d+$") ~= nil
 	end
 
-	-- The headers themselves. Scoped by isOpencode, so no other endpoint sees them.
-	--
-	-- The session id is stable per record on purpose: the relay's sticky-provider
-	-- routing hashes it, so a fresh id per request would scatter one conversation
-	-- across every upstream it has. It is stored in the record so a restart keeps the
-	-- same affinity rather than starting a new one mid-conversation. This client has
-	-- no uuid4; a hex string from the clock is an id the relay never inspects beyond
-	-- its last four characters.
+	function M.identityFor(record)
+		-- A manually entered Zen endpoint gets the same compatibility identity as
+		-- the preset without competing Claude/Stainless headers.
+		if M.isOpencode(record) then return "none" end
+		return (record.claudeUa ~= false) and "claude" or "none"
+	end
+
 	function M.opencodeHeaders(record)
 		if not M.isOpencode(record) then return {} end
-		local version = "1.0.118"
-		if type(record.opencode) == "table" and record.opencode.version then
-			version = tostring(record.opencode.version)
+		-- Match the current upstream CLI defaults; saved overrides remain supported.
+		local version, client = "1.18.31", "cli"
+		if type(record.opencode) == "table" then
+			local configuredVersion = util.trim(tostring(record.opencode.version or ""))
+			local configuredClient = util.trim(tostring(record.opencode.client or ""))
+			if configuredVersion ~= "" then version = configuredVersion end
+			if configuredClient ~= "" then client = configuredClient end
 		end
 		if util.trim(record.opencodeSession or "") == "" then
 			record.opencodeSession = string.format("ses_%08x%04x",
@@ -207,7 +205,7 @@ return function(env)
 		return {
 			["x-opencode-session"] = record.opencodeSession,
 			["x-opencode-request"] = string.format("req_%08x", math.floor(clock.ms() % 4294967296)),
-			["x-opencode-client"] = "opencode",
+			["x-opencode-client"] = client,
 			["User-Agent"] = "opencode/" .. version,
 		}
 	end

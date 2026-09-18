@@ -41,9 +41,8 @@ return function(env)
 	-- than assembling auth itself and getting the Anthropic case wrong.
 	function M.headers(record)
 		local adapter = M.adapterFor(record)
-		if adapter.headers then return adapter.headers(record) end
 		local registry = env.require("provider/registry")
-		local headers = registry.authHeaders(record)
+		local headers = adapter.headers and adapter.headers(record) or registry.authHeaders(record)
 		for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
 		for key, value in pairs(record.headers or {}) do headers[key] = value end
 		return headers

@@ -6,6 +6,7 @@
 -- here on a named category.
 return function(env)
 	local theme = env.require("ui/theme")
+	local responsive = env.require("ui/responsive")
 	local overlay = env.require("ui/overlay")
 	local P = env.require("ui/primitives")
 	local panes = env.require("ui/settingspanes")
@@ -22,7 +23,7 @@ return function(env)
 		local navWidth = narrow and dialog.width or theme.size.dialogNav
 		-- The height of the collapsed category strip, and therefore the offset of
 		-- everything under it. It was this same sum written out four times.
-		local stripHeight = theme.size.controlLarge + theme.space.md
+		local stripHeight = math.max(theme.size.controlLarge, responsive.minTarget()) + theme.space.md + theme.size.scrollbar
 		-- The corner the dialog's own close button occupies. Reserved rather than drawn
 		-- under: with the strip spanning the full width, the button sat on top of the last
 		-- category and nothing could reach it.
@@ -103,6 +104,15 @@ return function(env)
 			return order
 		end
 
+		if not narrow then
+			P.text(nav.instance, {
+				name = "SettingsTitle", text = "Settings", role = "title",
+				size = UDim2.new(1, 0, 0, theme.text.title.height + theme.space.lg),
+				padding = { x = theme.space.sm, y = theme.space.sm },
+				layoutOrder = nextOrder(),
+			})
+		end
+
 		for _, section in ipairs(panes.sections()) do
 			-- The section headings are the list's own structure and are not clickable, so
 			-- on a narrow layout -- where the list is one horizontal strip -- they are
@@ -123,7 +133,7 @@ return function(env)
 			for _, entry in ipairs(section.panes) do
 				local row = P.rowButton(nav.instance, {
 					name = "Category_" .. entry.id,
-					size = narrow and UDim2.fromOffset(theme.size.menu, theme.size.rowSmall) or nil,
+					size = narrow and UDim2.fromOffset(theme.size.menu, math.max(theme.size.controlLarge, responsive.minTarget())) or nil,
 					layoutOrder = nextOrder(),
 					onClick = function()
 						select(entry.id)

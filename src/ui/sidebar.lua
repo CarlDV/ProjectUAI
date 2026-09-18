@@ -45,7 +45,7 @@ return function(env)
 		-- two pixels apart on adjacent rows. Both are also dimensionally wrong to
 		-- subtract from each other: `space` scales by 0.78 under compact density and
 		-- `size` by 0.86, so the gaps drifted rather than holding.
-		local ROW_INSET = theme.space.xs
+		local ROW_INSET = theme.space.sm
 		local ROW_ICON = theme.size.icon
 
 		local sidebar = P.column(parent, {
@@ -55,8 +55,8 @@ return function(env)
 			-- them: the nav strip, the mode switch, the new-conversation button, the action
 			-- rows and the history are five separate things, and at a uniform xs they read
 			-- as one undifferentiated stack.
-			gap = theme.space.md,
-			padding = { x = theme.space.sm, y = theme.space.sm },
+			gap = theme.space.sm,
+			padding = { x = theme.space.sm, y = theme.space.md },
 		})
 
 		-- Top row: the app menu, the collapse toggle, search, and the two history
@@ -116,7 +116,7 @@ return function(env)
 			name = "ModeSwitcher",
 			size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget())),
 			bg = theme.color.surface,
-			radius = theme.radius.pill,
+			radius = theme.radius.lg,
 			padding = theme.space.hair,
 			gap = theme.space.hair,
 			layoutOrder = 2,
@@ -130,8 +130,8 @@ return function(env)
 				name = "Segment_" .. id,
 				size = UDim2.new(0.5, -theme.space.hair, 1, 0),
 				height = theme.size.controlSmall,
-				radius = theme.radius.pill,
-				bg = selected and theme.color.surfaceActive or nil,
+				radius = theme.radius.md,
+				bgSelected = theme.color.surfaceActive,
 				selected = selected,
 				alignX = "Center",
 				gap = theme.space.xxs,
@@ -162,9 +162,10 @@ return function(env)
 		-- the composer's own clear control is for.
 		local newButton = P.button(sidebar, {
 			name = "NewChat",
-			text = "+ New",
+			text = "New conversation",
+			icon = "plus",
 			variant = "secondary",
-			size = "sm",
+			size = "md",
 			fill = true,
 			layoutOrder = 3,
 			onClick = function()
@@ -284,7 +285,7 @@ return function(env)
 			name = "HistoryScroll",
 			size = UDim2.fromScale(1, 1),
 			gap = theme.space.xs,
-			padding = { y = theme.space.xxs },
+			padding = { top = theme.space.xs, bottom = theme.space.sm },
 		})
 
 		-- Which place groups are folded, by placeId.
@@ -517,7 +518,7 @@ return function(env)
 			if order == 0 then
 				local empty = P.text(history.instance, {
 					name = "NoHistory",
-					text = "No conversations yet. Anything you send here is kept, grouped by the place it happened in.",
+					text = "Your conversations will appear here, organized by place.",
 					role = "caption",
 					color = theme.color.textTertiary,
 					wrap = true,
@@ -547,7 +548,7 @@ return function(env)
 		local profile
 		profile = P.rowButton(sidebar, {
 			name = "ProfileBar",
-			height = theme.size.bar,
+			height = math.max(theme.size.bar, theme.text.label.height + theme.text.caption.height + theme.space.sm),
 			bg = theme.color.sidebar,
 			padding = { x = ROW_INSET },
 			layoutOrder = 7,
@@ -555,42 +556,42 @@ return function(env)
 				host.showProfileMenu(profile.instance)
 			end,
 		})
-		profile.icon("spark", 1, theme.color.accent, ROW_ICON)
-		P.text(profile.row, {
-			name = "ProfileName",
-			text = profileName,
-			role = "bodyStrong",
-			line = theme.line.tight,
-			color = theme.color.text,
-			auto = "X",
-			truncate = true,
+		profile.icon("brand", 1, nil, ROW_ICON)
+		local profileText = P.column(profile.row, {
+			name = "ProfileIdentity",
+			size = UDim2.new(0, 0, 0, 0),
+			auto = "Y",
+			flex = "Fill",
+			gap = theme.space.hair,
 			layoutOrder = 2,
 		})
-		-- Fills and truncates rather than auto-sizing. The provider name is the
-		-- one piece of text in the sidebar a user does not control the length of,
-		-- and an auto-width label pushed the chevron off the end of the row -- the
-		-- arrow misaligning whenever the provider name was long was exactly this.
-		local profileDetail = P.text(profile.row, {
+		P.text(profileText, {
+			name = "ProfileName",
+			text = profileName,
+			role = "label",
+			line = theme.line.tight,
+			color = theme.color.text,
+			truncate = true,
+			layoutOrder = 1,
+		})
+		local profileDetail = P.text(profileText, {
 			name = "ProfileProvider",
 			text = "",
 			role = "caption",
 			line = theme.line.tight,
 			color = theme.color.textTertiary,
-			size = UDim2.new(0, 0, 0, theme.text.caption.height),
-			flex = "Fill",
 			truncate = true,
-			layoutOrder = 3,
+			layoutOrder = 2,
 		})
-		P.spacer(profile.row, { grow = true, layoutOrder = 4 })
 		local chevronSlot = P.frame(profile.row, {
 			size = UDim2.fromOffset(ROW_ICON, ROW_ICON),
-			layoutOrder = 5,
+			layoutOrder = 3,
 		})
 		icons.chevron(chevronSlot, ROW_ICON, theme.color.textTertiary, "up")
 
 		local function describeProvider()
 			local record = providers.active()
-			if not record then return "no provider" end
+			if not record then return "No provider connected" end
 			local model = util.trim(tostring(record.model or ""))
 			if model == "" then return record.label end
 			return record.label
@@ -635,7 +636,7 @@ return function(env)
 		end
 
 		function handle.refresh()
-			profileDetail.Text = "\194\183 " .. describeProvider()
+			profileDetail.Text = describeProvider()
 			for id, entry in pairs(modes) do
 				local selected = host.panel == id
 				entry.button.setSelected(selected)
@@ -657,7 +658,7 @@ return function(env)
 		end)
 		local unsubscribeProviders = providers.changed:connect(function()
 			if not sidebar.Parent then return end
-			profileDetail.Text = "\194\183 " .. describeProvider()
+			profileDetail.Text = describeProvider()
 		end)
 		local unsubscribePlace = place.changed:connect(function()
 			if not sidebar.Parent then return end

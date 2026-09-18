@@ -25,7 +25,7 @@ return function(env)
 	-- of those per call: a turn that ran four scripts pushed the answer it was working
 	-- towards several screens down. Twelve lines is enough to recognise what the call
 	-- is doing, and "Show all N lines" is on the block.
-	local CODE_LINES = 60
+	local CODE_LINES = 24
 	local TOOL_CODE_LINES = 12
 	local ARG_PREVIEW = 90
 
@@ -52,6 +52,35 @@ return function(env)
 			auto = "Y",
 			layoutOrder = props.layoutOrder or 0,
 		})
+	end
+
+	-- Shared disclosure states keep keyboard, pointer and touch feedback consistent.
+	local function disclosure(header, stroke)
+		local hovered, focused, pressed = false, false, false
+		header.BorderSizePixel = 0
+		header.Active = true
+		header.BackgroundTransparency = 1
+		stroke.Transparency = 1
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		local tone
+		local function paint()
+			local active = hovered or focused or pressed
+			P.animate(header, pressed and "press" or "hover", {
+				BackgroundColor3 = pressed and theme.color.surfaceActive or theme.color.surfaceHover,
+				BackgroundTransparency = active and 0 or 1,
+			})
+			P.animate(stroke, "hover", {
+				Color = focused and theme.color.accent or tone or theme.color.borderSubtle,
+				Transparency = (focused or tone) and 0 or 1,
+			})
+		end
+		header.MouseEnter:Connect(function() hovered = true; paint() end)
+		header.MouseLeave:Connect(function() hovered = false; pressed = false; paint() end)
+		header.MouseButton1Down:Connect(function() pressed = true; paint() end)
+		header.MouseButton1Up:Connect(function() pressed = false; paint() end)
+		header.SelectionGained:Connect(function() focused = true; paint() end)
+		header.SelectionLost:Connect(function() focused = false; pressed = false; paint() end)
+		return function(value) tone = value; paint() end
 	end
 
 	-- A left rule beside a column of wrapped text.
@@ -191,16 +220,23 @@ return function(env)
 		})
 
 		if caps.clipboard then
-			local copy = P.iconButton(bar, {
+			local copy = P.button(bar, {
 				name = "Copy",
 				icon = "copy",
-				diameter = theme.size.controlSmall,
-				variant = "ghost",
+				text = "Copy",
+				size = "sm",
+				tight = true,
+				variant = "code",
 				iconColor = theme.color.codeGutter,
 				layoutOrder = 3,
-				onClick = function()
-					pcall(caps.fn.clipboard, props.text)
-					env.require("ui/overlay").toast("Copied to clipboard", "good", 2)
+				onClick = function(handle)
+					local ok, copied = pcall(caps.fn.clipboard, props.text)
+					ok = ok and copied ~= false
+					handle.setText(ok and "Copied" or "Retry")
+					if not ok then env.require("ui/overlay").toast("Could not copy this code", "bad", 3) end
+					clock.delay(2, function()
+						if handle.instance.Parent then handle.setText("Copy") end
+					end)
 				end,
 			})
 			copy.instance.LayoutOrder = 3
@@ -208,7 +244,14 @@ return function(env)
 
 		-- Body. The gutter is outside the scroll so it stays put while the code moves,
 		-- which is the whole reason a sticky gutter is worth the extra frame.
-		local bodyRow = P.row(card, {
+		local bodyScroll = { instance = P.frame(card, {
+			name = "CodeScroll",
+			size = UDim2.new(1, 0, 0, 0),
+			gap = 0,
+			bg = theme.color.codeSurface,
+			layoutOrder = 2,
+		}) }
+		local bodyRow = P.row(bodyScroll.instance, {
 			name = "Body",
 			size = UDim2.new(1, 0, 0, 0),
 			gap = 0,
@@ -227,6 +270,7 @@ return function(env)
 			gutterWidth = math.ceil(#tostring(#lines) * role.size * MONO_RATIO) + theme.space.md
 			gutter = P.frame(bodyRow, {
 				name = "Gutter",
+				clip = true,
 				size = UDim2.fromOffset(gutterWidth, 0),
 				layoutOrder = 1,
 			})
@@ -250,12 +294,21 @@ return function(env)
 			gap = 0,
 			bar = theme.size.scrollbar,
 		})
+		viewport.instance.ScrollingDirection = Enum.ScrollingDirection.XY
+		viewport.instance.AutomaticCanvasSize = Enum.AutomaticSize.XY
+		viewport.instance.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar
+		viewport.instance:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+			if gutterLabel then
+				gutterLabel.Position = UDim2.fromOffset(0, -viewport.instance.CanvasPosition.Y)
+			end
+		end)
 		-- Not wrapped, and sized from the text: that is what makes the gutter line up
 		-- with the code beside it. A wrapped body puts two visual lines against one
 		-- number, and every number below it is then wrong.
 		local body = P.text(viewport.instance, {
 			name = "Source",
 			text = "",
+			rich = true,
 			role = "mono",
 			line = codeLine,
 			color = theme.color.codeText,
@@ -275,15 +328,24 @@ return function(env)
 			if not expanded and #lines > foldAt then
 				shown = util.slice(lines, 1, foldAt)
 			end
-			body.Text = table.concat(shown, "\n")
+			body.Text = markdown.highlight(table.concat(shown, "\n"), props.lang)
 			if gutterLabel then
 				local numbers = {}
 				for index = 1, #shown do numbers[index] = tostring(index) end
 				gutterLabel.Text = table.concat(numbers, "\n")
 			end
 			local height = #shown * lineHeight
-			bodyRow.Size = UDim2.new(1, 0, 0, height + padY * 2 + theme.size.scrollbar)
-			if gutter then gutter.Size = UDim2.fromOffset(gutterWidth, height) end
+			local fullHeight = height + padY * 2 + theme.size.scrollbar
+			local capHeight = math.max(lineHeight * 4, math.min(theme.size.codeViewport, responsive.viewport.Y * 0.45))
+			local visibleHeight = math.min(fullHeight, capHeight)
+			bodyRow.Size = UDim2.new(1, 0, 0, visibleHeight)
+			bodyScroll.instance.Size = UDim2.new(1, 0, 0, visibleHeight)
+			viewport.instance.Size = UDim2.new(0, 0, 0, visibleHeight - padY * 2)
+			body.Size = UDim2.fromOffset(0, height + theme.size.scrollbar)
+			if gutter then
+				gutter.Size = UDim2.fromOffset(gutterWidth, visibleHeight - padY * 2 - theme.size.scrollbar)
+				gutterLabel.Size = UDim2.new(1, -theme.space.md, 0, height)
+			end
 			if foldRow then
 				foldRow.setText(expanded
 					and "Show less"
@@ -298,7 +360,7 @@ return function(env)
 				-- has one to put in it -- an empty string leaves setText with nothing to
 				-- write to.
 				text = string.format("Show all %s", util.pluralise(#lines, "line")),
-				variant = "ghost",
+				variant = "code",
 				size = "sm",
 				fill = true,
 				align = "Left",
@@ -310,6 +372,7 @@ return function(env)
 				layoutOrder = 3,
 				onClick = function()
 					expanded = not expanded
+					viewport.instance.CanvasPosition = Vector2.new(0, 0)
 					paint()
 				end,
 			})
@@ -317,6 +380,8 @@ return function(env)
 		end
 
 		paint()
+		local disconnect = responsive.changed:connect(paint)
+		card.Destroying:Connect(disconnect)
 		return card
 	end
 
@@ -488,29 +553,21 @@ return function(env)
 	-- reply's attribution existed nowhere at all -- a client that can switch model
 	-- mid-conversation was rendering four different models' answers identically.
 	--
-	-- On the reply the model id is the whole byline. There is no "Claude" beside it: the
-	-- surface is a client for one agent, so naming it on every turn is a constant, and a
-	-- constant next to the one thing that actually varies is what makes the varying thing
-	-- hard to find. The mark plus the id says the same thing in one field.
-	--
-	-- Not a bubble and not an avatar. The transcript is a document with the questions
-	-- marked in it, so the mark is a byline.
+	-- The role stays readable while the model attribution truncates independently.
 	local function byline(parent, props)
 		local row = P.row(parent, {
 			name = "Byline",
-			size = UDim2.new(1, 0, 0, theme.text.label.height),
+			size = UDim2.new(1, 0, 0, math.max(theme.size.iconLarge, theme.text.label.height)),
 			gap = theme.space.xs,
 			layoutOrder = props.layoutOrder or 1,
 		})
 		if props.icon then
 			local slot = P.frame(row, {
 				name = "BylineIcon",
-				size = UDim2.fromOffset(18, 18),
-				bg = theme.color.surfaceRaised,
-				radius = theme.radius.xs,
+				size = UDim2.fromOffset(theme.size.iconLarge, theme.size.iconLarge),
 				layoutOrder = 1,
 			})
-			icons.draw(props.icon, slot, 12, props.iconColor or theme.color.textTertiary)
+			icons.draw(props.icon, slot, theme.size.icon, props.iconColor or theme.color.textTertiary)
 		end
 		-- Fills rather than sizing to its text, so the byline is one full-width row and a
 		-- long model id truncates instead of pushing the line past the reading column.
@@ -519,11 +576,19 @@ return function(env)
 			text = tostring(props.name or ""),
 			role = props.mono and "monoSmall" or "label",
 			color = props.color or theme.color.textSecondary,
-			size = UDim2.new(0, 0, 1, 0),
-			flex = "Fill",
+			size = props.detail and UDim2.fromOffset(0, theme.text.label.height) or UDim2.new(0, 0, 1, 0),
+			auto = props.detail and "X" or nil,
+			flex = not props.detail and "Fill" or nil,
 			truncate = true,
 			layoutOrder = 2,
 		})
+		if props.detail then
+			P.text(row, {
+				name = "ModelAttribution", text = props.detail, role = "caption",
+				color = theme.color.textTertiary, size = UDim2.new(0, 0, 1, 0),
+				flex = "Fill", truncate = true, layoutOrder = 3,
+			})
+		end
 		return row
 	end
 
@@ -540,12 +605,7 @@ return function(env)
 		return "You"
 	end
 
-	-- The user's own turn. A fill, a hairline, and an accent rule down the left edge.
-	--
-	-- The rule is what makes it unmistakably a sent message. Without it the turn was a
-	-- rounded surfaceRaised box with a border and a line of text in it, which is the
-	-- exact description of the composer's input field twenty pixels below -- so a
-	-- transcript read as a column of empty prompts rather than as a conversation.
+	-- Sent prompts keep their byline inside one quiet, bordered surface.
 	function M.user(parent, text, order)
 		local holder = P.column(parent, {
 			name = "User",
@@ -554,39 +614,44 @@ return function(env)
 			gap = theme.space.xs,
 			layoutOrder = order or 0,
 		})
-		byline(holder, { name = localName(), layoutOrder = 1 })
-		-- The accent rule down the left edge is what marks the turn as sent. At the
-		-- bubble's own corner radius it was a straight orange spike sticking out past
-		-- the rounded top and bottom -- so a message that was otherwise a soft card
-		-- opened with a hard nail driven through it. The rule is rounded to match, and
-		-- it is inset a hairline on both axes so it sits inside the stroke rather
-		-- than on top of it.
-		local body = ruled(holder, {
-			name = "Bubble",
-			bg = theme.color.bubbleUser,
-			strokeColor = theme.color.bubbleUserBorder,
-			radius = theme.radius.md,
-			color = theme.color.accent,
-			width = theme.stroke.focus,
-			ruleAt = theme.space.hair,
-			ruleRadius = math.max(theme.radius.md - theme.space.hair, 0),
-			inset = theme.space.md,
-			padRight = theme.space.md,
-			padY = theme.space.sm,
-			clip = true,
-			layoutOrder = 2,
+		local body = P.column(holder, {
+			name = "Bubble", size = UDim2.new(1, 0, 0, 0), auto = "Y",
+			bg = theme.color.bubbleUser, radius = theme.radius.lg,
+			padding = theme.space.md, gap = theme.space.xs, layoutOrder = 1,
 		})
+		P.stroke(body, theme.color.bubbleUserBorder)
+		byline(body, { name = localName(), color = theme.color.textSecondary, layoutOrder = 1 })
+
 		local label = P.text(body, {
-			text = tostring(text),
+			text = util.truncate(tostring(text), 1200),
 			role = "body",
+			layoutOrder = 2,
 			wrap = true,
 			auto = "Y",
 		})
 		label.Size = UDim2.new(1, 0, 0, 0)
+		if #tostring(text) > 1200 then
+			local expanded = false
+			P.button(body, {
+				name = "ExpandMessage",
+				text = "Show full message",
+				variant = "ghost",
+				size = "sm",
+				align = "Left",
+				fill = true,
+				padX = 0,
+				layoutOrder = 3,
+				onClick = function(button)
+					expanded = not expanded
+					label.Text = expanded and tostring(text) or util.truncate(tostring(text), 1200)
+					button.setText(expanded and "Show less" or "Show full message")
+				end,
+			})
+		end
 		return { root = holder, label = label }
 	end
 
-	function M.agent(parent, text, order)
+	function M.agent(parent, text, order, attribution)
 		local holder = P.column(parent, {
 			name = "Agent",
 			size = UDim2.new(1, 0, 0, 0),
@@ -594,20 +659,16 @@ return function(env)
 			gap = theme.space.xs,
 			layoutOrder = order or 0,
 		})
-		-- The model that is answering, from the record the request will actually be built
-		-- from, and it is the whole byline rather than a detail beside a name. Read here
-		-- rather than passed in because the transcript renders from an event log that does
-		-- not carry it. A record with no model named falls back to the provider's label,
-		-- which is the most this client honestly knows in that state.
+		-- Replay keeps the attribution from the request that produced this response.
 		local record = env.require("provider/registry").active()
-		local model = record and util.trim(tostring(record.model or "")) or ""
+		local model = attribution or (record and util.trim(tostring(record.model or "")) or "")
 		if model == "" then model = record and record.label or "no model" end
 		byline(holder, {
-			name = model,
-			mono = true,
+			name = "Assistant",
+			detail = model,
 			icon = "spark",
 			iconColor = theme.color.accent,
-			color = theme.color.textTertiary,
+			color = theme.color.textSecondary,
 			layoutOrder = 1,
 		})
 		local column = P.column(holder, {
@@ -650,8 +711,8 @@ return function(env)
 		header.AutoButtonColor = false
 		header.BackgroundColor3 = theme.color.surface
 		header.BackgroundTransparency = 0.45
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.rowTight + 4,
-			responsive.minTarget() - theme.space.sm))
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.rowSmall,
+			responsive.minTarget()))
 		header.LayoutOrder = 1
 		header.Selectable = true
 		Instance.new("UICorner", header).CornerRadius = UDim.new(0, theme.radius.sm)
@@ -676,11 +737,9 @@ return function(env)
 		local sparkBadge = P.frame(row, {
 			name = "SparkBadge",
 			size = UDim2.fromOffset(18, 18),
-			bg = theme.color.surfaceRaised,
-			radius = theme.radius.xs,
 			layoutOrder = 2,
 		})
-		icons.spark(sparkBadge, 11, theme.color.accent)
+		icons.spark(sparkBadge, theme.size.icon, theme.color.accent)
 
 		local title = P.text(row, {
 			text = "Thinking",
@@ -693,14 +752,11 @@ return function(env)
 
 		local tokenPill = P.frame(row, {
 			name = "TokenPill",
-			bg = theme.color.surfaceRaised,
-			bgTransparency = 0.6,
-			radius = theme.radius.xs,
-			padding = { x = theme.space.xs, y = 2 },
+			size = UDim2.fromOffset(0, theme.text.caption.height),
+			padding = { x = theme.space.xxs },
 			auto = "X",
 			layoutOrder = 4,
 		})
-		P.stroke(tokenPill, theme.color.borderSubtle, theme.stroke.hair)
 		local tokenText = P.text(tokenPill, {
 			text = "~" .. util.formatNumber(usage.estimateText(text)) .. " tokens",
 			role = "caption",
@@ -726,30 +782,15 @@ return function(env)
 		body.Size = UDim2.new(1, 0, 0, 0)
 
 		local open = config.get("ui.expandThinking", true) == true
-		caret.Rotation = open and 90 or 0
+		P.animate(caret, "hover", { Rotation = open and 90 or 0 })
 		bodyRow.Visible = open
 		local function toggle()
 			open = not open
 			bodyRow.Visible = open
-			caret.Rotation = open and 90 or 0
+			P.animate(caret, "hover", { Rotation = open and 90 or 0 })
 		end
 		header.Activated:Connect(toggle)
-		header.MouseEnter:Connect(function()
-			title.TextColor3 = theme.color.accentHot
-			env.tween:Create(header, theme.tween("quick"), {
-				BackgroundColor3 = theme.color.surfaceHover,
-				BackgroundTransparency = 0.15,
-			}):Play()
-			env.tween:Create(thinkStroke, theme.tween("quick"), { Color = theme.color.border, Transparency = 0 }):Play()
-		end)
-		header.MouseLeave:Connect(function()
-			title.TextColor3 = theme.color.textSecondary
-			env.tween:Create(header, theme.tween("quick"), {
-				BackgroundColor3 = theme.color.surface,
-				BackgroundTransparency = 0.45,
-			}):Play()
-			env.tween:Create(thinkStroke, theme.tween("quick"), { Color = theme.color.borderSubtle, Transparency = 0.4 }):Play()
-		end)
+		disclosure(header, thinkStroke)
 		-- The wrapper, not the card: hiding the card alone left its frame in the list
 		-- layout, so a hidden reasoning row still pushed the reply down by its padding.
 		if config.get("ui.showReasoning", true) == false then holder.Visible = false end
@@ -911,7 +952,7 @@ return function(env)
 		header.AutoButtonColor = false
 		header.BackgroundColor3 = theme.color.surface
 		header.BackgroundTransparency = 0.4
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row, responsive.minTarget() - theme.space.sm))
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row, responsive.minTarget()))
 		header.LayoutOrder = 1
 		header.Selectable = true
 		header.Visible = false
@@ -936,18 +977,16 @@ return function(env)
 
 		local runIconBadge = P.frame(headerRow, {
 			name = "RunIconBadge",
-			size = UDim2.fromOffset(20, 20),
-			bg = theme.color.surfaceRaised,
-			radius = theme.radius.xs,
+			size = UDim2.fromOffset(theme.size.iconLarge, theme.size.iconLarge),
 			layoutOrder = 2,
 		})
-		icons.terminal(runIconBadge, 12, theme.color.accentHot)
+		icons.terminal(runIconBadge, theme.size.icon, theme.color.accentHot)
 
 		local summary = P.text(headerRow, {
 			name = "RunSummary",
 			text = "",
 			role = "small",
-			color = theme.color.textPrimary,
+			color = theme.color.text,
 			truncate = true,
 			size = UDim2.new(0, 0, 1, 0),
 			flex = "Fill",
@@ -956,14 +995,11 @@ return function(env)
 
 		local timingPill = P.frame(headerRow, {
 			name = "TimingPill",
-			bg = theme.color.surfaceRaised,
-			bgTransparency = 0.6,
-			radius = theme.radius.xs,
-			padding = { x = theme.space.xs, y = 2 },
+			size = UDim2.fromOffset(0, theme.text.caption.height),
+			padding = { x = theme.space.xxs },
 			auto = "X",
 			layoutOrder = 4,
 		})
-		P.stroke(timingPill, theme.color.borderSubtle, theme.stroke.hair)
 		local timing = P.text(timingPill, {
 			name = "RunTiming",
 			text = "",
@@ -977,7 +1013,7 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
 			gap = theme.space.xs,
-			padding = { left = theme.space.sm },
+			padding = { left = theme.space.xs },
 			layoutOrder = 2,
 		})
 
@@ -1029,7 +1065,7 @@ return function(env)
 		local function setOpen(value)
 			open = value == true
 			rows.Visible = open
-			caret.Rotation = open and 90 or 0
+			P.animate(caret, "hover", { Rotation = open and 90 or 0 })
 		end
 		setOpen(true)
 		header.Activated:Connect(function()
@@ -1041,13 +1077,22 @@ return function(env)
 
 		-- Ticks only while something in the run is outstanding, and stops for good when
 		-- the last result lands.
-		local stop = clock.interval(0.5, function()
-			if handle.settled < handle.calls then paint() end
-		end)
+		local stop
+		local function startClock()
+			if stop then return end
+			stop = clock.interval(0.5, function()
+				if handle.settled < handle.calls then paint() end
+			end)
+		end
+		startClock()
 		holder.Destroying:Connect(function() pcall(stop) end)
 
 		-- Called by the view for each call it puts in here.
 		function handle.opened()
+			-- New work remains visible even after an earlier batch settled.
+			if not open and not folded then setOpen(true) end
+			handle.ms = nil
+			startClock()
 			handle.calls = handle.calls + 1
 			if handle.pendingName then
 				handle.names[#handle.names + 1] = handle.pendingName
@@ -1056,37 +1101,26 @@ return function(env)
 			paint()
 		end
 
-		function handle.closed()
+		function handle.closed(ok)
+			if ok == false then
+				handle.failed = true
+				setOpen(true)
+			end
 			handle.settled = handle.settled + 1
 			paint()
 			if handle.settled < handle.calls then return end
 			handle.ms = clock.since(started)
 			pcall(stop)
+			stop = nil
 			paint()
 			-- A finished run of calls folds itself away into a clean receipt.
 			-- The header keeps the count and the duration; the rows are one click away.
-			if not folded and handle.calls >= FOLD_RUN_AT then
-				folded = true
+			if not folded and not handle.failed and handle.calls >= FOLD_RUN_AT then
 				setOpen(false)
 			end
 		end
 
-		header.MouseEnter:Connect(function()
-			summary.TextColor3 = theme.color.accentHot
-			env.tween:Create(header, theme.tween("quick"), {
-				BackgroundColor3 = theme.color.surfaceHover,
-				BackgroundTransparency = 0.1,
-			}):Play()
-			env.tween:Create(runStroke, theme.tween("quick"), { Color = theme.color.border }):Play()
-		end)
-		header.MouseLeave:Connect(function()
-			summary.TextColor3 = theme.color.textPrimary
-			env.tween:Create(header, theme.tween("quick"), {
-				BackgroundColor3 = theme.color.surface,
-				BackgroundTransparency = 0.4,
-			}):Play()
-			env.tween:Create(runStroke, theme.tween("quick"), { Color = theme.color.borderSubtle }):Play()
-		end)
+		disclosure(header, runStroke)
 
 		return handle
 	end
@@ -1112,7 +1146,7 @@ return function(env)
 		header.AutoButtonColor = false
 		header.BackgroundColor3 = theme.color.surface
 		header.BackgroundTransparency = 0.45
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row, responsive.minTarget() - theme.space.sm))
+		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row, responsive.minTarget()))
 		header.LayoutOrder = 1
 		header.Selectable = true
 		Instance.new("UICorner", header).CornerRadius = UDim.new(0, theme.radius.sm)
@@ -1140,12 +1174,10 @@ return function(env)
 		local iconName = toolIconFor(info.name)
 		local iconBadge = P.frame(row, {
 			name = "ToolIconBadge",
-			size = UDim2.fromOffset(20, 20),
-			bg = theme.color.surfaceRaised,
-			radius = theme.radius.xs,
+			size = UDim2.fromOffset(theme.size.iconLarge, theme.size.iconLarge),
 			layoutOrder = 2,
 		})
-		icons.draw(iconName, iconBadge, 12, theme.color.accentHot)
+		icons.draw(iconName, iconBadge, theme.size.icon, theme.color.accentHot)
 
 		local spinner = C.spinner(row, { diameter = theme.size.icon - theme.space.hair, layoutOrder = 3 })
 		local dotSlot = P.frame(row, {
@@ -1164,11 +1196,11 @@ return function(env)
 		local name = P.text(row, {
 			text = tostring(info.name or "tool"),
 			role = "monoSmall",
-			color = theme.color.textPrimary,
+			color = theme.color.text,
 			layoutOrder = 4,
 		})
-		name.Size = UDim2.fromOffset(0, theme.text.monoSmall.height)
-		name.AutomaticSize = Enum.AutomaticSize.X
+		name.Size = UDim2.new(0.36, 0, 1, 0)
+		name.TextTruncate = Enum.TextTruncate.AtEnd
 
 		local preview = P.text(row, {
 			text = summarise(decoded, raw),
@@ -1182,14 +1214,11 @@ return function(env)
 
 		local timingPill = P.frame(row, {
 			name = "TimingPill",
-			bg = theme.color.surfaceRaised,
-			bgTransparency = 0.6,
-			radius = theme.radius.xs,
-			padding = { x = theme.space.xs, y = 2 },
+			size = UDim2.fromOffset(0, theme.text.caption.height),
+			padding = { x = theme.space.xxs },
 			auto = "X",
 			layoutOrder = 6,
 		})
-		P.stroke(timingPill, theme.color.borderSubtle, theme.stroke.hair)
 		local timing = P.text(timingPill, {
 			text = "",
 			role = "caption",
@@ -1225,8 +1254,8 @@ return function(env)
 			auto = "Y",
 			bg = theme.color.surface,
 			radius = theme.radius.md,
-			gap = theme.space.sm,
-			padding = theme.space.sm,
+			gap = theme.space.md,
+			padding = theme.space.md,
 			layoutOrder = 3,
 			visible = config.get("ui.showToolDetail", false) == true,
 		})
@@ -1273,26 +1302,11 @@ return function(env)
 		local function setOpen(value)
 			open = value == true
 			detail.Visible = open
-			caret.Rotation = open and 90 or 0
+			P.animate(caret, "hover", { Rotation = open and 90 or 0 })
 		end
 		setOpen(open)
 		header.Activated:Connect(function() setOpen(not open) end)
-		header.MouseEnter:Connect(function()
-			name.TextColor3 = theme.color.accentHot
-			env.tween:Create(header, theme.tween("quick"), {
-				BackgroundColor3 = theme.color.surfaceHover,
-				BackgroundTransparency = 0.15,
-			}):Play()
-			env.tween:Create(stroke, theme.tween("quick"), { Color = theme.color.border }):Play()
-		end)
-		header.MouseLeave:Connect(function()
-			name.TextColor3 = theme.color.textPrimary
-			env.tween:Create(header, theme.tween("quick"), {
-				BackgroundColor3 = theme.color.surface,
-				BackgroundTransparency = 0.45,
-			}):Play()
-			env.tween:Create(stroke, theme.tween("quick"), { Color = theme.color.borderSubtle }):Play()
-		end)
+		local setTone = disclosure(header, stroke)
 
 		local handle = { root = holder, card = card }
 		local nested
@@ -1345,14 +1359,11 @@ return function(env)
 
 		function handle.finish(result)
 			pcall(function() spinner:Destroy() end)
-			if not result.ok or result.denied or info.risk == "write" then
-				dotSlot.Visible = true
-				if not result.ok then
-					dot.BackgroundColor3 = result.denied and theme.color.warn or theme.color.danger
-				else
-					dot.BackgroundColor3 = theme.riskColor(info.risk)
-				end
-			end
+			dotSlot.Visible = true
+			dot.Visible = false
+			icons.draw(result.ok and "check" or "close", dotSlot, theme.size.icon - theme.space.hair,
+				result.ok and theme.color.success or (result.denied and theme.color.warn or theme.color.danger))
+
 			if result.ms then
 				timing.Text = result.ms >= 1000 and util.formatDuration(result.ms) or string.format("%dms", result.ms)
 				timingPill.Visible = true
@@ -1362,12 +1373,17 @@ return function(env)
 			end
 			if not result.ok then
 				timing.TextColor3 = theme.color.danger
-				stroke.Color = theme.color.danger
+				setTone(result.denied and theme.color.warn or theme.color.dangerBorder)
 			else
 				timing.TextColor3 = theme.color.textTertiary
-				stroke.Color = theme.color.borderSubtle
+				setTone(nil)
 			end
 			local text = tostring(result.text or "")
+			if not result.ok then
+				timing.Text = result.denied and "Declined" or "Failed"
+				timing.TextColor3 = result.denied and theme.color.warn or theme.color.danger
+				timingPill.Visible = true
+			end
 			preview.Text = util.ellipsis(text:gsub("[\n\r]+", " "), ARG_PREVIEW)
 			preview.TextColor3 = result.ok and theme.color.textTertiary or theme.color.danger
 
@@ -1381,7 +1397,7 @@ return function(env)
 			local label = P.text(resultHolder, {
 				name = "ResultLabel",
 				text = isAnswer and "You answered"
-				or (result.ok and "result" or "failed"),
+				or (result.ok and "Result" or (result.denied and "Permission declined" or "Execution failed")),
 				role = "label",
 				color = isAnswer and theme.color.accent
 					or (result.ok and theme.color.textTertiary or theme.color.danger),
@@ -1392,10 +1408,11 @@ return function(env)
 			-- Multi-line output is a listing -- a file's contents, a print capture, a
 			-- stack trace -- and gets the same numbered surface the arguments do. One
 			-- line is a sentence and gets read as one.
-			if text:find("\n") then
+			if text:find("\n") or (not isAnswer and #text > 300) then
 				M.codeBlock(resultHolder, {
 					text = text,
 					lang = "output",
+					maxLines = TOOL_CODE_LINES,
 					layoutOrder = 2,
 				})
 			else
@@ -1460,7 +1477,7 @@ return function(env)
 		header.BackgroundColor3 = theme.color.surface
 		header.BackgroundTransparency = 0.4
 		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.row,
-			responsive.minTarget() - theme.space.sm))
+			responsive.minTarget()))
 		header.LayoutOrder = 1
 		header.Selectable = true
 		Instance.new("UICorner", header).CornerRadius = UDim.new(0, theme.radius.sm)
@@ -1478,12 +1495,10 @@ return function(env)
 
 		local iconBadge = P.frame(row, {
 			name = "SubagentIconBadge",
-			size = UDim2.fromOffset(20, 20),
-			bg = theme.color.surfaceRaised,
-			radius = theme.radius.xs,
+			size = UDim2.fromOffset(theme.size.iconLarge, theme.size.iconLarge),
 			layoutOrder = 1,
 		})
-		icons.branch(iconBadge, 12, theme.color.accent)
+		icons.branch(iconBadge, theme.size.icon, theme.color.accent)
 
 		local spinner = C.spinner(row, { diameter = theme.size.icon - theme.space.hair, layoutOrder = 2 })
 		local dotSlot = P.frame(row, {
@@ -1511,7 +1526,7 @@ return function(env)
 		local title = P.text(row, {
 			text = tostring(info.label or "task"),
 			role = "small",
-			color = theme.color.textPrimary,
+			color = theme.color.text,
 			truncate = true,
 			size = UDim2.new(0, 0, 1, 0),
 			flex = "Fill",
@@ -1520,10 +1535,8 @@ return function(env)
 
 		local metaPill = P.frame(row, {
 			name = "MetaPill",
-			bg = theme.color.surfaceRaised,
-			bgTransparency = 0.6,
-			radius = theme.radius.xs,
-			padding = { x = theme.space.xs, y = 2 },
+			size = UDim2.fromOffset(0, theme.text.caption.height),
+			padding = { x = theme.space.xxs },
 			auto = "X",
 			layoutOrder = 5,
 		})
@@ -1536,18 +1549,18 @@ return function(env)
 		})
 
 		header.MouseEnter:Connect(function()
-			env.tween:Create(header, theme.tween("quick"), {
+			env.tween:Create(header, theme.tween("hover"), {
 				BackgroundColor3 = theme.color.surfaceHover,
 				BackgroundTransparency = 0.1,
 			}):Play()
-			env.tween:Create(subStroke, theme.tween("quick"), { Color = theme.color.border }):Play()
+			env.tween:Create(subStroke, theme.tween("hover"), { Color = theme.color.border }):Play()
 		end)
 		header.MouseLeave:Connect(function()
-			env.tween:Create(header, theme.tween("quick"), {
+			env.tween:Create(header, theme.tween("hover"), {
 				BackgroundColor3 = theme.color.surface,
 				BackgroundTransparency = 0.4,
 			}):Play()
-			env.tween:Create(subStroke, theme.tween("quick"), { Color = theme.color.borderSubtle }):Play()
+			env.tween:Create(subStroke, theme.tween("hover"), { Color = theme.color.borderSubtle }):Play()
 		end)
 
 		local feed = P.column(card, {
@@ -1810,14 +1823,16 @@ return function(env)
 	-- does.
 	function M.working(parent, order)
 		local holder = wrapper(parent, { name = "Working", layoutOrder = order })
-		local rowHeight = math.max(theme.size.row - theme.space.xs, theme.text.small.height)
+		local rowHeight = math.max(theme.size.row, theme.text.small.height + theme.space.md)
 		local row = P.row(holder, {
+			name = "WorkingStatus",
 			size = UDim2.new(1, 0, 0, rowHeight),
-			gap = theme.space.xs,
+			gap = theme.space.sm, padding = { x = theme.space.md },
 		})
-		C.spinner(row, { diameter = theme.size.icon, layoutOrder = 1 })
+		C.spinner(row, { diameter = theme.size.iconLarge, layoutOrder = 1 })
 		local label = P.text(row, {
 			text = "Thinking",
+			truncate = true,
 			role = "small",
 			color = theme.color.textSecondary,
 			-- Fills, rather than subtracting the spinner and the clock by hand. That
@@ -1837,25 +1852,17 @@ return function(env)
 		elapsed.Size = UDim2.fromOffset(theme.size.metaColumn, rowHeight)
 
 		local handle = { root = holder, label = label }
-		local base = "Thinking"
 		local started = clock.ms()
-		local frame = 0
-		-- One timer drives both, so the trailing dots and the clock stay in step.
-		local stop = clock.interval(0.4, function()
-			frame = frame + 1
-			if not responsive.reduceMotion then
-				label.Text = base .. string.rep(".", frame % 4)
-			end
+		-- Elapsed time remains readable even with reduced motion enabled.
+		local stop = clock.interval(1, function()
 			local waited = clock.since(started)
 			if waited >= 1000 then elapsed.Text = util.formatDuration(waited) end
 		end)
 		holder.Destroying:Connect(function() pcall(stop) end)
 
-		-- The status text is the base the dots are appended to, not the whole label,
-		-- or the next tick would overwrite whatever was just set.
+		-- Progress updates do not restart the spinner or elapsed timer.
 		function handle.set(text)
-			base = tostring(text)
-			label.Text = base
+			label.Text = tostring(text)
 		end
 		return handle
 	end

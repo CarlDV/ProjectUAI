@@ -50,6 +50,15 @@ local function contains(label, haystack, needle)
 		or ("looking for: " .. tostring(needle) .. "\nin: " .. tostring(haystack):sub(1, 400)))
 end
 
+-- Compare rendered source as the reader sees it, independently of syntax colours.
+local function renderedText(text)
+	return (tostring(text or "")
+		:gsub("<[^>]+>", "")
+		:gsub("&lt;", "<"):gsub("&gt;", ">")
+		:gsub("&quot;", '"'):gsub("&apos;", "'")
+		:gsub("&amp;", "&"))
+end
+
 local function scenario(name, fn)
 	if #filters > 0 then
 		local matched = false
@@ -179,7 +188,7 @@ scenario("boot mounts the interface", function()
 		table.concat(harness.console.warnings, "\n"))
 
 	local text = harness.textOf(screen)
-	contains("the sidebar offers a new conversation", text, "+ New")
+	contains("the sidebar offers a new conversation", text, "New conversation")
 	contains("and names the place the client is in", text, "Mock Place")
 	contains("the empty state explains what to do", text, "No provider configured")
 
@@ -3511,7 +3520,7 @@ scenario("the composer states what is actually in force", function()
 	check("and reads the mode in force", permissionLabel.Text, "Ask first")
 	handle.env.require("agent/permissions").setMode("full")
 	harness.settle(1)
-	check("changing the mode changes the label", permissionLabel.Text, "Allow everything")
+	check("changing the mode changes the label", permissionLabel.Text, "Full access")
 
 	local modelLabel = harness.byName("ModelLabel")
 	contains("the model is the one the provider is pointed at", modelLabel.Text, "claude-opus-5")
@@ -3723,7 +3732,7 @@ scenario("the home card reports the record and nothing else", function()
 	-- client that had never sent a request.
 	truthy("with no invented figures on it",
 		not blank:find("5,387") and not blank:find("1.5B"), blank)
-	contains("and says why it is empty", blank, "Nothing recorded in this window yet")
+	contains("and says why it is empty", blank, "Your activity will appear here as you work")
 
 	local today = clock.dayNumber()
 	stats.data.days[clock.keyFromDayNumber(today)] = {
@@ -3969,8 +3978,11 @@ scenario("a tool call shows the code it was given", function()
 	local row = harness.byName("Tool")
 	truthy("the tool row is there", row ~= nil)
 	local shown = harness.textOf(row)
-	contains("the code is on screen without opening anything", shown, "part.Anchored = true")
-	contains("and the last line too", shown, "return part.Name")
+	local code = harness.byName("Source", row)
+	local rendered = renderedText(code and code.Text)
+	contains("the code is on screen without opening anything", rendered, "part.Anchored = true")
+	contains("and the last line too", rendered, "return part.Name")
+	check("highlighting keeps every source character", rendered, source)
 	contains("under its language", shown, "lua")
 	contains("with a line count", shown, "3 lines")
 
@@ -4377,7 +4389,7 @@ scenario("a turn's tool calls arrive as one foldable block", function()
 	local step = 0
 	-- Five different lookups rather than the same one five times: identical calls are
 	-- what the repeat breaker exists to stop, and it would end the run at three.
-	local paths = { "Workspace", "Players", "Lighting", "ReplicatedStorage", "SoundService" }
+	local paths = { "Workspace", "Workspace.Terrain", "Lighting", "ReplicatedStorage", "CoreGui" }
 	local harness, handle = bootWith({
 		handler = function(entry)
 			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
@@ -4396,6 +4408,11 @@ scenario("a turn's tool calls arrive as one foldable block", function()
 	handle.sessions.current().send("look at the tree five times")
 	harness.settle(20)
 
+	local failedTools = 0
+	for _, event in ipairs(handle.sessions.current().log) do
+		if event.kind == "tool:error" then failedTools = failedTools + 1 end
+	end
+	check("the successful-run fixture has no failed tools", failedTools, 0)
 	local runs = harness.allByName("ToolRun")
 	check("the whole run is one block", #runs, 1)
 	local rows = harness.allByName("Tool", runs[1])
@@ -4416,6 +4433,15 @@ scenario("a turn's tool calls arrive as one foldable block", function()
 	check("a finished run of this size folds itself away", calls.Visible, false)
 	harness.click(header)
 	check("and the header opens it again", calls.Visible, true)
+
+	local failed = handle.env.require("ui/chat/message").toolRun(harness.screen(), 99)
+	failed.opened()
+	failed.opened()
+	failed.closed(true)
+	failed.closed(false)
+	check("a failed run keeps its details visible", failed.rows.Visible, true)
+	harness.click(harness.byName("RunHeader", failed.root))
+	check("failed details can still be folded deliberately", failed.rows.Visible, false)
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
@@ -4609,6 +4635,87 @@ scenario("a bullet sits on the line it belongs to, and output has room", functio
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+
+scenario("syntax highlighting escapes markup and preserves source", function()
+	local harness, handle = bootWith({ provider = false })
+	local markdown = handle.env.require("ui/markdown")
+	local samples = {
+		{ lang = "luau", text = 'local label = "<font color=\\"red\\"> & </font>"\n-- <comment>\nreturn 12' },
+		{ lang = "lua", text = 'local text = [=[<b> & "quoted"</b>]=]\n--[=[ a < b ]=]\nreturn text' },
+		{ lang = "javascript", text = 'const label = "<b>&</b>"; /* <comment> */\nconsole.log(label);' },
+		{ lang = "json", text = '{"label":"<&>","count":12,"ready":true}' },
+		{ lang = "python", text = 'value = "<&>" # <comment>\nprint(value)' },
+		{ lang = "lua", text = 'local value = "unfinished <&' },
+	}
+	for _, sample in ipairs(samples) do
+		local highlighted = markdown.highlight(sample.text, sample.lang)
+		contains(sample.lang .. " has syntax styling", highlighted, '<font color="#')
+		check(sample.lang .. " preserves all source characters", renderedText(highlighted), sample.text)
+		falsy(sample.lang .. " does not interpret source markup", highlighted:find("<b>", 1, true))
+	end
+	local unknown = '<font color="red">literal &amp; text</font>'
+	check("unknown languages still escape literal markup", markdown.highlight(unknown, "unknown"), markdown.escape(unknown))
+	local large = ("local <&> "):rep(4000)
+	check("large listings retain safe plain rendering", markdown.highlight(large, "lua"), markdown.escape(large))
+	check("no thread errors", #harness.errors(), 0)
+end)
+
+scenario("long code blocks stay bounded and copy complete source", function()
+	local harness, handle = bootWith({ provider = false })
+	local theme = handle.env.require("ui/theme")
+	local message = handle.env.require("ui/chat/message")
+	local lines = { 'local label = "<b>&</b>"', 'local wide = "' .. ("long "):rep(200) .. '"' }
+	for index = 3, 80 do lines[index] = string.format("\tprint(%d, label)", index) end
+	local original = table.concat(lines, "\n")
+	local holder = harness.Instance.new("Frame", harness.screen())
+	holder.Name = "CodeRegression"
+	holder.Size = harness.dt.UDim2.fromOffset(480, 500)
+	local card = message.codeBlock(holder, { text = original, lang = "luau", maxLines = 6 })
+	local source = harness.byName("Source", card)
+	local viewport = harness.byName("Viewport", card)
+	local numbers = harness.byName("Numbers", card)
+	local gutter = harness.byName("Gutter", card)
+	local body = harness.byName("CodeScroll", card)
+	local bodyRow = harness.byName("Body", card)
+	local function viewportHeight()
+		return bodyRow.Size.Y.Offset * viewport.Size.Y.Scale + viewport.Size.Y.Offset
+	end
+	local fold = harness.byName("Fold", card)
+	local copy = harness.byName("Copy", card)
+	check("code is rich text", source.RichText, true)
+	check("long lines do not wrap", source.TextWrapped, false)
+	check("both scroll axes remain available", tostring(viewport.ScrollingDirection), "Enum.ScrollingDirection.XY")
+	check("both content dimensions can grow", tostring(viewport.AutomaticCanvasSize), "Enum.AutomaticSize.XY")
+	check("the scroll region has a fixed-height parent", bodyRow.Size.Y.Scale, 0)
+	truthy("the viewport stays within its bounded parent", viewportHeight() <= bodyRow.Size.Y.Offset)
+	truthy("with positive reading space", viewportHeight() > 0)
+	check("the preview preserves its first six lines", renderedText(source.Text), table.concat(lines, "\n", 1, 6))
+	harness.click(copy)
+	check("copy includes every hidden line and original character", harness.sandbox.__clipboard, original)
+	contains("copy gives inline confirmation", harness.textOf(copy), "Copied")
+
+	harness.click(fold)
+	check("expansion reveals the whole source", renderedText(source.Text), original)
+	contains("the gutter includes the final line", numbers.Text, "\n80")
+	truthy("expanded code remains bounded", body.Size.Y.Offset <= theme.size.codeViewport)
+	truthy("long content can scroll inside that bound", source.Size.Y.Offset > viewportHeight())
+	check("the gutter clips offscreen numbers", gutter.ClipsDescendants, true)
+	viewport.CanvasPosition = harness.dt.Vector2.new(96, 120)
+	harness.settle(0.1)
+	check("line numbers track vertical code scrolling", numbers.Position.Y.Offset, -120)
+	check("horizontal code scrolling leaves the gutter fixed", numbers.Position.X.Offset, 0)
+	harness.click(copy)
+	check("copy stays exact after expansion and scrolling", harness.sandbox.__clipboard, original)
+
+	harness.click(fold)
+	check("folding resets horizontal scrolling", viewport.CanvasPosition.X, 0)
+	check("folding resets vertical scrolling", viewport.CanvasPosition.Y, 0)
+	check("and resets the gutter", numbers.Position.Y.Offset, 0)
+	check("folding restores the bounded preview", renderedText(source.Text), table.concat(lines, "\n", 1, 6))
+	card:Destroy()
+	check("no thread errors", #harness.errors(), 0)
 end)
 
 scenario("icons use getcustomasset when the capability is present", function()
@@ -4976,19 +5083,17 @@ scenario("each turn says who said it, and the reply says with what", function()
 	truthy("the reply rendered", agent ~= nil)
 	local agentByline = harness.byName("Byline", agent)
 	truthy("with a byline of its own", agentByline ~= nil, harness.dump(agent))
-	-- The model is the whole byline, not a detail beside a name. This surface is a client
-	-- for one agent, so "Claude" on every reply is a constant -- and a constant next to
-	-- the one field that varies is what makes the varying field hard to find.
+	-- The role distinguishes a reply from a user or a tool, while the model remains
+	-- explicit because providers can change between turns.
 	local speaker = harness.byName("Speaker", agentByline)
-	check("naming the model that answered", speaker and speaker.Text, "claude-opus-5")
-	truthy("and nothing else", harness.textOf(agentByline):find("Claude", 1, true) == nil,
-		harness.textOf(agentByline))
+	check("naming the role that answered", speaker and speaker.Text, "Assistant")
+	check("separate model attribution", harness.byName("ModelAttribution", agentByline).Text, "claude-opus-5")
 
 	handle.providers.setModel(handle.providers.active().id, "some/other-model")
 	harness.settle(1)
 	handle.sessions.current().send("and now")
 	harness.settle(10)
-	local bylines = harness.allByName("Speaker", harness.byName("Transcript"))
+	local bylines = harness.allByName("ModelAttribution", harness.byName("Transcript"))
 	check("a second reply names the model that produced it",
 		bylines[#bylines].Text, "some/other-model")
 
@@ -5186,11 +5291,10 @@ scenario("OpenRouter requests carry Project UAI app attribution and disable Clau
 	check("stainless package header is suppressed", headers["X-Stainless-Package-Version"], nil)
 end)
 
--- OpenCode Zen: the relay meters and routes by the session headers the OpenCode
--- TUI sends, and answers MissingSessionID without them. The headers belong to the
--- Zen record alone -- nowhere else in the client do they appear, because a header
--- a relay never asked for is one more thing to explain in a rejection.
-scenario("an OpenCode Zen record presents the identity the relay expects", function()
+-- OpenCode Zen retains its existing request compatibility headers.
+-- Exact-host matching and suppression of competing Claude headers apply to
+-- preset and manually entered records alike.
+scenario("an OpenCode Zen record preserves its request compatibility headers", function()
 	local requests = {}
 	local harness, handle = bootWith({
 		preset = "zen",
@@ -5213,11 +5317,10 @@ scenario("an OpenCode Zen record presents the identity the relay expects", funct
 		tostring(headers["x-opencode-session"] or ""), "ses_")
 	truthy("a per-request id",
 		tostring(headers["x-opencode-request"] or ""):find("^req_") ~= nil)
-	check("naming the client the relay gates on", headers["x-opencode-client"], "opencode")
-	contains("with the OpenCode user agent",
-		tostring(headers["User-Agent"] or ""), "opencode/")
-	-- The preset turns the Claude Code identity off for this record, so what is on
-	-- the wire is the OpenCode TUI and nothing else.
+	check("uses the upstream default client header", headers["x-opencode-client"], "cli")
+	check("uses the current upstream compatibility version",
+		headers["User-Agent"], "opencode/1.18.31")
+	-- The preset turns the Claude Code identity off for this record.
 	check("the record carries no claude identity flag", record.claudeUa, false)
 	check("the claude cli marker header is absent", headers["x-app"], nil)
 	check("the stainless language header is absent", headers["X-Stainless-Lang"], nil)
@@ -5230,16 +5333,15 @@ scenario("an OpenCode Zen record presents the identity the relay expects", funct
 	local second = requests[2] and requests[2].headers["x-opencode-session"]
 	check("the second turn keeps the same session", second, first)
 
-	-- The gate is the base URL, not the preset: a custom record pointed at the
-	-- relay by hand -- the shape a config saved before the preset existed has --
-	-- has to carry the same headers, or the relay rejects it with MissingSessionID
-	-- exactly the way it rejected this client before the headers existed.
+	-- Hand-entered official URLs get the same routing and compatibility identity, even
+	-- when an older record still has the default Claude identity flag.
 	local hand = handle.providers.blank("custom")
 	hand.label = "Hand-typed Zen"
 	hand.baseUrl = "https://opencode.ai/zen/v1"
 	hand.apiKey = "sk-hand"
 	hand.model = "m"
 	hand.models = { "m" }
+	hand.opencode = { version = "1.0.118-test", client = "opencode" }
 	handle.providers.save(hand)
 	harness.settle(2)
 	handle.providers.setActive(hand.id)
@@ -5248,7 +5350,11 @@ scenario("an OpenCode Zen record presents the identity the relay expects", funct
 	local third = requests[3] and requests[3].headers or {}
 	contains("a hand-typed record carries the session header too",
 		tostring(third["x-opencode-session"] or ""), "ses_")
-	check("with the client the relay gates on", third["x-opencode-client"], "opencode")
+	check("honours a configured compatibility client", third["x-opencode-client"], "opencode")
+	check("honours a configured compatibility version", third["User-Agent"], "opencode/1.0.118-test")
+	check("preserves ordinary bearer authentication", third["Authorization"], "Bearer sk-hand")
+	check("manual Zen also omits Claude identity", third["x-app"], nil)
+	check("manual Zen also omits Stainless identity", third["X-Stainless-Lang"], nil)
 
 	-- And nowhere else: the same client talking to an unrelated host sends none
 	-- of these, because a header a relay never asked for is one more thing to
@@ -5267,6 +5373,35 @@ scenario("an OpenCode Zen record presents the identity the relay expects", funct
 	local fourth = requests[4] and requests[4].headers or {}
 	check("an unrelated host gets no session header", fourth["x-opencode-session"], nil)
 	check("and no opencode client header", fourth["x-opencode-client"], nil)
+end)
+
+scenario("Zen detection and free labels do not imply account access", function()
+	local harness, handle = bootWith({ provider = false })
+	local registry = handle.env.require("provider/registry")
+	local models = handle.env.require("provider/models")
+	local openai = handle.env.require("provider/openai")
+	for _, base in ipairs({ "https://opencode.ai/zen/v1", "https://OPENCODE.AI:443/zen/v1" }) do
+		truthy("recognises the official authority", registry.isOpencode({ baseUrl = base }))
+	end
+	for _, base in ipairs({
+		"https://opencode.ai.evil.test/v1", "https://opencode.ai@evil.test/v1",
+		"https://evil.test/opencode.ai", "https://evil.test/v1?host=opencode.ai",
+	}) do
+		falsy("does not match unrelated URL components", registry.isOpencode({ baseUrl = base }))
+		check("does not add routing IDs to an unrelated host",
+			registry.opencodeHeaders({ baseUrl = base })["x-opencode-session"], nil)
+	end
+	local zen = { baseUrl = "https://opencode.ai/zen/v1" }
+	truthy("Big Pickle is labelled free on Zen", models.isFree(zen, "big-pickle"))
+	falsy("the alias is scoped to Zen", models.isFree({ baseUrl = "https://example.test/v1" }, "big-pickle"))
+	truthy("recognises a free model suffix", models.isFree(zen, "mimo-v2.5-free"))
+	falsy("does not label freedom as free", models.isFree(zen, "freedom-model"))
+	local errorText = openai.errorText({ status = 403, body = json.encode({ error = {
+		type = "FreeTierError",
+		message = "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode",
+	} }) })
+	contains("preserves the relay error message", errorText, "free tier can only be used from within OpenCode")
+	contains("preserves the HTTP status", errorText, "403")
 end)
 
 -- Azure AI Foundry: the v1 endpoint of a Foundry resource, which speaks plain

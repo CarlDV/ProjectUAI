@@ -503,7 +503,7 @@ return function(env)
 				method = "POST",
 				headers = headers,
 				body = util.encode(payload),
-				identity = (record.claudeUa ~= false) and "claude" or "none",
+				identity = registry.identityFor(record),
 				attempts = request.attempts or config.get("agent.retries", 5),
 				skipStatus = skip429,
 				aborted = request.aborted,

@@ -40,12 +40,26 @@ return function(env)
 
 		out = out:gsub("%*%*%*(.-)%*%*%*", "<b><i>%1</i></b>")
 		out = out:gsub("%*%*(.-)%*%*", "<b>%1</b>")
-		out = out:gsub("___(.-)___", "<b><i>%1</i></b>")
-		out = out:gsub("__(.-)__", "<b>%1</b>")
-		-- Single-marker emphasis only when the marker is not part of a word, so
-		-- snake_case and a bare 2*3 survive.
+		-- Word-internal underscores are literal identifier separators. A frontier
+		-- around underscore alone does not distinguish foo_bar_baz from emphasis.
+		local function underscoreSpans(marker, innerPattern, opening, closing)
+			local padded = " " .. out .. " "
+			local pattern = "([^%w_])" .. marker .. innerPattern .. marker .. "([^%w_])"
+			while true do
+				local nextText, count = padded:gsub(pattern, function(left, inner, right)
+					return left .. opening .. inner .. closing .. right
+				end)
+				padded = nextText
+				if count == 0 then break end
+				-- Adjacent spans share boundary whitespace; another pass picks up
+				-- the neighbour without swallowing the separator.
+			end
+			out = padded:sub(2, -2)
+		end
+		underscoreSpans("___", "(.-)", "<b><i>", "</i></b>")
+		underscoreSpans("__", "(.-)", "<b>", "</b>")
 		out = out:gsub("%f[%*]%*([^%*\n]+)%*%f[^%*]", "<i>%1</i>")
-		out = out:gsub("%f[_]_([^_\n]+)_%f[^_]", "<i>%1</i>")
+		underscoreSpans("_", "([^_\n]+)", "<i>", "</i>")
 		out = out:gsub("~~(.-)~~", "<s>%1</s>")
 
 		-- Links render as their label plus the target, because nothing in a Roblox
@@ -65,6 +79,91 @@ return function(env)
 		end)
 
 		return out
+	end
+
+	-- A small lexical pass for code readability. Source is always escaped, including
+	-- unknown languages and large listings. Copying still uses the original string.
+	local KEYWORDS = {}
+	for word in ("and break do else elseif end false for function if in local nil not or repeat return then true until while "
+		.. "export type typeof continue const let var async await class extends import from new null undefined "
+		.. "try catch finally throw switch case default def elif except pass with as is None True False"):gmatch("%S+") do
+		KEYWORDS[word] = true
+	end
+
+	local LUA_KEYWORDS = {}
+	for word in ("and break do else elseif end false for function if in local nil not or repeat return then true until while "
+		.. "export type typeof continue"):gmatch("%S+") do
+		LUA_KEYWORDS[word] = true
+	end
+
+	function M.highlight(source, language)
+		local text = tostring(source or "")
+		local lang = tostring(language or ""):lower()
+		local lua = lang == "lua" or lang == "luau"
+		local json = lang == "json" or lang == "jsonc"
+		local python = lang == "python" or lang == "py"
+		local js = lang == "javascript" or lang == "js" or lang == "typescript" or lang == "ts"
+		if #text > 32000 or not (lua or json or python or js) then return M.escape(text) end
+		local out, index = {}, 1
+		local function emit(value, tone)
+			local escaped = M.escape(value)
+			if tone then
+				escaped = '<font color="#' .. theme.code[tone]:ToHex() .. '">' .. escaped .. '</font>'
+			end
+			out[#out + 1] = escaped
+			index = index + #value
+		end
+		local function longEnd(start)
+			local equals = text:sub(start):match("^%[(=*)%[")
+			if equals == nil then return nil end
+			local closing = "]" .. equals .. "]"
+			local _, finish = text:find(closing, start + #equals + 2, true)
+			return finish or #text
+		end
+		while index <= #text do
+			local rest = text:sub(index)
+			local first, pair = rest:sub(1, 1), rest:sub(1, 2)
+			local comment = (lua and pair == "--") or (js and pair == "//")
+				or (python and first == "#") or (lang == "jsonc" and pair == "//")
+			if comment then
+				local finish = lua and longEnd(index + 2) or nil
+				finish = finish or ((text:find("\n", index, true) or (#text + 1)) - 1)
+				emit(text:sub(index, finish), "comment")
+			elseif js and pair == "/*" then
+				local _, finish = text:find("*/", index + 2, true)
+				emit(text:sub(index, finish or #text), "comment")
+			elseif first == '"' or first == "'" or (js and first == string.char(96)) then
+				local finish = index + 1
+				while finish <= #text do
+					local char = text:sub(finish, finish)
+					if char == "\\" then
+						finish = finish + 2
+					elseif char == first then
+						finish = finish + 1
+						break
+					else
+						finish = finish + 1
+					end
+				end
+				emit(text:sub(index, finish - 1), "string")
+			elseif lua and longEnd(index) then
+				emit(text:sub(index, longEnd(index)), "string")
+			elseif first:match("%d") then
+				local number = rest:match("^0[xX][%da-fA-F]+")
+					or rest:match("^%d+%.?%d*[eE][%+%-]?%d+") or rest:match("^%d+%.?%d*")
+				emit(number, "number")
+			elseif first:match("[%a_]") then
+				local word = rest:match("^[%w_]+")
+				local keyword = lua and LUA_KEYWORDS[word] or (not lua and KEYWORDS[word])
+				if json then keyword = word == "true" or word == "false" or word == "null" end
+				local tone = keyword and "keyword" or nil
+				if not tone and not json and rest:sub(#word + 1):match("^%s*%(") then tone = "call" end
+				emit(word, tone)
+			else
+				emit(rest:match("^%s+") or first)
+			end
+		end
+		return table.concat(out)
 	end
 
 	-- Splits a reply into blocks the renderer can lay out:

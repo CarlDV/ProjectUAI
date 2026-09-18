@@ -32,7 +32,7 @@ return function(env)
 			name = "Todos",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
-			bg = theme.color.surfaceRaised,
+			bg = theme.color.canvas,
 			gap = 0,
 			layoutOrder = props.layoutOrder,
 			visible = false,
@@ -48,22 +48,16 @@ return function(env)
 			layoutOrder = 3,
 		})
 
-		local header = Instance.new("TextButton", shell)
-		header.Text = ""
-		header.AutoButtonColor = false
-		header.BackgroundTransparency = 1
-		header.Size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget() - theme.space.sm))
-		header.LayoutOrder = 1
-		header.Selectable = true
-
-		local headerRow = P.row(header, {
-			size = UDim2.fromScale(1, 1),
+		local toggle = P.rowButton(shell, {
+			name = "PlanToggle",
+			height = math.max(theme.size.control, responsive.minTarget()),
+			radius = theme.radius.none,
 			gap = theme.space.xs,
-			-- The transcript's own horizontal inset. At md the task strip's caret sat four
-			-- pixels left of every row in the conversation under it, down the full height
-			-- of the panel.
 			padding = { x = theme.space.xl },
+			layoutOrder = 1,
 		})
+		local header = toggle.instance
+		local headerRow = toggle.row
 		local caret = P.frame(headerRow, {
 			size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
 			layoutOrder = 1,
@@ -78,21 +72,32 @@ return function(env)
 		})
 		summary.Size = UDim2.new(1, -(theme.size.icon + theme.space.xs), 1, 0)
 
-		local list = P.column(shell, {
+		local planScroll = P.scroll(shell, {
 			name = "Items",
 			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			gap = theme.space.xxs,
-			padding = { x = theme.space.xl, bottom = theme.space.sm },
+			gap = theme.space.xs,
+			padding = { x = theme.space.xl, top = theme.space.xxs, bottom = theme.space.md },
 			layoutOrder = 2,
 			visible = false,
 		})
+
+		local list = planScroll.instance
+		list.Visible = false
+		-- A long plan keeps its own scroll area instead of consuming the conversation.
+		local function sizePlan()
+			if not list.Parent or not planScroll.layout.Parent then return end
+			local measured = planScroll.layout.AbsoluteContentSize
+			if not measured then return end
+			local height = measured.Y + theme.space.xxs + theme.space.md
+			list.Size = UDim2.new(1, 0, 0, math.min(height, math.floor(theme.size.codeViewport * 0.5)))
+		end
+		planScroll.layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(sizePlan)
 
 		local open = false
 		header.Activated:Connect(function()
 			open = not open
 			list.Visible = open
-			caret.Rotation = open and 90 or 0
+			P.animate(caret, "hover", { Rotation = open and 90 or 0 })
 		end)
 
 		local handle = { shell = shell, session = nil }
@@ -113,9 +118,9 @@ return function(env)
 			for _, item in ipairs(items) do
 				if item.status == "active" then activeText = item.text end
 			end
-			summary.Text = string.format("%d of %d done%s",
+			summary.Text = string.format("Plan  ·  %d of %d complete%s",
 				counts.done, counts.total,
-				activeText and ("  -  " .. util.ellipsis(activeText, 60)) or "")
+				activeText and ("  ·  " .. util.ellipsis(activeText, 60)) or "")
 
 			for index, item in ipairs(items) do
 				local mark = MARKS[item.status] or MARKS.pending
@@ -150,6 +155,8 @@ return function(env)
 				})
 				label.Size = UDim2.new(1, -(theme.size.icon + theme.space.xs), 0, 0)
 			end
+
+			sizePlan()
 
 			-- An active item is worth showing without a click; a finished list is not.
 			if activeText and not open then

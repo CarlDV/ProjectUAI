@@ -34,17 +34,17 @@ return function(env)
 	end
 
 	local NEUTRAL = {
-		[0] = rgb(19, 19, 18),
-		[1] = rgb(26, 26, 24),
-		[2] = rgb(31, 30, 29),
-		[3] = rgb(38, 38, 36),
-		[4] = rgb(47, 47, 44),
-		[5] = rgb(58, 58, 55),
+		[0] = rgb(23, 23, 22),
+		[1] = rgb(30, 30, 28),
+		[2] = rgb(35, 35, 33),
+		[3] = rgb(42, 42, 39),
+		[4] = rgb(50, 50, 46),
+		[5] = rgb(62, 62, 57),
 		[6] = rgb(74, 74, 71),
 		[7] = rgb(92, 91, 86),
 		[8] = rgb(108, 107, 102),
-		[9] = rgb(152, 150, 142),
-		[10] = rgb(176, 174, 166),
+		[9] = rgb(163, 161, 152),
+		[10] = rgb(194, 191, 181),
 		[11] = rgb(245, 244, 238),
 	}
 
@@ -217,6 +217,11 @@ return function(env)
 			addText = rgb(126, 217, 148),
 			removeSurface = rgb(64, 28, 32),
 			removeText = rgb(240, 138, 132),
+			keyword = rgb(201, 171, 235),
+			string = rgb(165, 201, 148),
+			number = rgb(227, 184, 134),
+			comment = NEUTRAL[9],
+			call = rgb(149, 193, 225),
 		},
 		light = {
 			label = "Claude Light",
@@ -224,11 +229,16 @@ return function(env)
 			border = rgb(214, 211, 202),
 			bar = rgb(237, 235, 228),
 			text = rgb(38, 38, 36),
-			gutter = rgb(112, 110, 103),
+			gutter = rgb(104, 102, 95),
 			addSurface = rgb(219, 245, 226),
 			addText = rgb(21, 105, 55),
 			removeSurface = rgb(252, 226, 226),
 			removeText = rgb(163, 32, 32),
+			keyword = rgb(116, 63, 156),
+			string = rgb(53, 106, 43),
+			number = rgb(144, 81, 23),
+			comment = rgb(103, 104, 94),
+			call = rgb(31, 96, 147),
 		},
 	}
 	local CODE_THEME_ORDER = { "dark", "light" }
@@ -245,10 +255,10 @@ return function(env)
 	-- a time, looking for the one that matters, and at the 1.5 the rest of the mono
 	-- text uses, eleven lines of `key: value` arrive as a solid slab -- the gaps
 	-- between the lines are what the eye scans down.
-	M.line = { tight = 1.2, snug = 1.35, normal = 1.5, reading = 1.6, code = 1.85 }
+	M.line = { tight = 1.2, snug = 1.35, normal = 1.5, reading = 1.6, code = 1.65 }
 
 	-- Body text is the one thing in here a person actually reads, so it gets the
-	-- room: 14 on a 1.6 line, which is a reading measure rather than a UI measure.
+	-- room: 15 on a 1.6 line, which is a reading measure rather than a UI measure.
 	-- Everything that is not prose is quieter and tighter than it used to be --
 	-- headings a step down, labels one weight rather than bold-and-uppercase --
 	-- because the interface this follows gets its hierarchy from spacing and colour,
@@ -259,11 +269,11 @@ return function(env)
 	-- the family is a setting: the interface font and the code font are both pickable,
 	-- and a resolved Enum.Font baked in here could not follow them.
 	local BASE_TEXT = {
-		display = { size = 19, weight = "strong", line = M.line.tight },
-		title = { size = 16, weight = "strong", line = M.line.tight },
+		display = { size = 22, weight = "strong", line = M.line.tight },
+		title = { size = 17, weight = "strong", line = M.line.tight },
 		heading = { size = 15, weight = "medium", line = M.line.snug },
-		body = { size = 14, weight = "regular", line = M.line.reading },
-		bodyStrong = { size = 14, weight = "medium", line = M.line.reading },
+		body = { size = 15, weight = "regular", line = M.line.reading },
+		bodyStrong = { size = 15, weight = "medium", line = M.line.reading },
 		small = { size = 13, weight = "regular", line = M.line.normal },
 		label = { size = 12, weight = "medium", line = M.line.tight },
 		caption = { size = 12, weight = "regular", line = M.line.snug },
@@ -277,16 +287,16 @@ return function(env)
 	}
 
 	local BASE_SIZE = {
-		control = 32,      -- default button / field height
-		controlSmall = 26,
-		controlLarge = 38,
+		control = 34,      -- default button / field height
+		controlSmall = 28,
+		controlLarge = 42,
 		icon = 16,
 		iconLarge = 20,
-		row = 34,
+		row = 36,
 		-- Tall enough for two lines of chrome plus air. At 42 the window header's title
 		-- and subtitle -- 40px of type between them at the reading measure -- had a
 		-- single pixel above and below, so the title touched the window's top edge.
-		header = 48,
+		header = 56,
 		rail = 52,
 		tab = 30,
 		launcher = 44,
@@ -325,16 +335,17 @@ return function(env)
 		-- sentence a foot long, which is unreadable however correct the layout is.
 		-- Overridden by the transcript-width setting, which is why the three widths it
 		-- offers are tokens too rather than numbers in a panel.
-		reading = 1180,
-		readingNarrow = 760,
-		readingMedium = 980,
-		sidebar = 240,
+		codeViewport = 380,
+		reading = 1000,
+		readingNarrow = 720,
+		readingMedium = 860,
+		sidebar = 248,
 		-- Dense list furniture: a session row in the sidebar, a group header above it,
 		-- the pinned profile bar at the bottom, a chip in the composer.
-		rowSmall = 26,
+		rowSmall = 30,
 		rowTight = 22,
 		bar = 36,
-		chip = 22,
+		chip = 26,
 		-- The home card: its column, one metric tile, and one cell of the activity
 		-- grid. All three were literals in the surface that drew them.
 		statCard = 560,
@@ -348,7 +359,7 @@ return function(env)
 
 	-- Corners are tighter than they were. A 16px radius on a card reads as a mobile
 	-- widget; 6 to 10 reads as a document panel, which is what this is.
-	M.radius = { none = 0, xs = 2, sm = 4, md = 6, lg = 10, xl = 14, pill = 999 }
+	M.radius = { none = 0, xs = 2, sm = 6, md = 8, lg = 12, xl = 16, pill = 999 }
 	M.stroke = { hair = 1, focus = 2 }
 
 	-- The visual constants that are neither a colour nor a size. They were literals
@@ -509,9 +520,9 @@ return function(env)
 			successSurface = M.mix(NEUTRAL[3], rgb(94, 200, 124), 0.13),
 			warn = rgb(226, 170, 78),
 			warnSurface = M.mix(NEUTRAL[3], rgb(226, 170, 78), 0.13),
-			danger = rgb(219, 82, 76),
-			dangerSurface = M.mix(NEUTRAL[3], rgb(219, 82, 76), 0.13),
-			dangerBorder = M.mix(NEUTRAL[5], rgb(219, 82, 76), 0.45),
+			danger = rgb(240, 132, 124),
+			dangerSurface = M.mix(NEUTRAL[3], rgb(240, 132, 124), 0.13),
+			dangerBorder = M.mix(NEUTRAL[5], rgb(240, 132, 124), 0.45),
 			info = rgb(120, 162, 226),
 			infoSurface = M.mix(NEUTRAL[3], rgb(120, 162, 226), 0.13),
 
@@ -525,7 +536,7 @@ return function(env)
 			-- and the composer below it were the same colour with the same corner radius
 			-- -- which is why a sent question read as an input box someone had typed into
 			-- and not submitted.
-			bubbleUser = M.mix(NEUTRAL[3], accent.base, 0.07),
+			bubbleUser = M.mix(NEUTRAL[3], accent.base, 0.045),
 			bubbleUserBorder = M.mix(NEUTRAL[5], accent.base, 0.18),
 			-- The code palette, which is a setting: a fenced block in the transcript,
 			-- the diff preview in the appearance pane and the identity readout all draw

@@ -780,6 +780,7 @@ return function(env)
 		P.text(headText, {
 			name = "FeaturedName",
 			text = tostring(featured.label),
+			truncate = true,
 			role = "title",
 			color = theme.color.text,
 			size = UDim2.new(1, 0, 0, theme.text.title.height),
@@ -881,7 +882,7 @@ return function(env)
 		local railHolder = P.frame(root, {
 			name = "ProviderRail",
 			size = wide and UDim2.new(0, theme.size.dialogNav, 1, 0)
-				or UDim2.new(1, 0, 0, theme.size.controlLarge + theme.space.md),
+				or UDim2.new(1, 0, 0, math.max(theme.size.controlLarge, responsive.minTarget()) + theme.space.md + theme.size.scrollbar),
 			bg = theme.color.sidebar,
 			layoutOrder = 1,
 		})
@@ -907,6 +908,7 @@ return function(env)
 			local addButton = P.button(rail, {
 				name = "AddProvider",
 				text = "Add a provider",
+				icon = "plus",
 				variant = "secondary",
 				size = "sm",
 				fill = true,
@@ -957,7 +959,7 @@ return function(env)
 				local isActive = active and active.id == record.id
 				local row = P.rowButton(railScroll.instance, {
 					name = "Provider_" .. tostring(record.id),
-					size = (not wide) and UDim2.fromOffset(theme.size.menu, theme.size.controlLarge) or nil,
+					size = (not wide) and UDim2.fromOffset(theme.size.menu, math.max(theme.size.controlLarge, responsive.minTarget())) or nil,
 					height = theme.size.controlLarge,
 					padding = { x = theme.space.sm },
 					radius = theme.radius.md,
@@ -998,7 +1000,7 @@ return function(env)
 					padding = { x = theme.space.sm, y = theme.space.xs },
 					layoutOrder = 1,
 				})
-				empty.Size = UDim2.new(1, 0, 0, 0)
+				empty.Size = wide and UDim2.new(1, 0, 0, 0) or UDim2.fromOffset(theme.size.menuMin, theme.text.caption.height)
 			end
 			if not wide then
 				-- With the rail collapsed to a strip there is no room under it for the
@@ -1006,6 +1008,7 @@ return function(env)
 				local add = P.button(railScroll.instance, {
 					name = "AddProvider",
 					text = "Add",
+					icon = "plus",
 					variant = "secondary",
 					size = "sm",
 					layoutOrder = #list + 1,

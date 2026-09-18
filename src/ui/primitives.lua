@@ -15,6 +15,35 @@ return function(env)
 
 	-- Shared helpers ---------------------------------------------------------
 
+	-- One current transition per element. Repeated hover/focus changes retarget from
+	-- the rendered value instead of leaving competing tweens behind.
+	local transitions = setmetatable({}, { __mode = "k" })
+
+	function P.animate(instance, motion, goals)
+		local state = transitions[instance]
+		if not state then
+			state = {}
+			transitions[instance] = state
+			instance.Destroying:Connect(function()
+				if state.finished then state.finished:Disconnect() end
+				if state.tween then state.tween:Cancel() end
+				transitions[instance] = nil
+			end)
+		end
+		if state.finished then state.finished:Disconnect() end
+		if state.tween then state.tween:Cancel() end
+		local tween = env.tween:Create(instance, theme.tween(motion), goals)
+		state.tween = tween
+		state.finished = tween.Completed:Connect(function()
+			if state.tween ~= tween then return end
+			state.tween = nil
+			if state.finished then state.finished:Disconnect() end
+			state.finished = nil
+		end)
+		tween:Play()
+		return tween
+	end
+
 	function P.corner(instance, radius)
 		local corner = Instance.new("UICorner", instance)
 		corner.CornerRadius = UDim.new(0, radius == nil and theme.radius.md or radius)
@@ -279,7 +308,7 @@ return function(env)
 		end,
 		accent = function()
 			return {
-				bg = theme.color.accent, bgHover = theme.color.accentHot, bgPress = theme.color.accentMuted,
+				bg = theme.color.accent, bgHover = theme.color.accentHot, bgPress = theme.color.accent,
 				text = theme.color.textOnAccent, stroke = nil, font = "bodyStrong",
 			}
 		end,
@@ -297,13 +326,24 @@ return function(env)
 				text = theme.color.textSecondary, stroke = nil, font = "body",
 			}
 		end,
+		-- Code actions follow the selected code palette, including its light surface.
+		code = function()
+			return {
+				bg = nil,
+				bgHover = theme.mix(theme.color.codeSurface, theme.color.codeText, 0.08),
+				bgPress = theme.mix(theme.color.codeSurface, theme.color.codeText, 0.14),
+				text = theme.color.codeGutter, textHover = theme.color.codeText,
+				textPress = theme.color.codeText, focus = theme.color.codeText,
+				stroke = nil, font = "small",
+			}
+		end,
 		-- Text and outline only until it is pressed. A pre-filled danger button reads
 		-- as already-dangerous and gets clicked past; the fill arriving on hover is the
 		-- moment it is worth noticing.
 		danger = function()
 			return {
 				bg = nil, bgHover = theme.color.dangerSurface, bgPress = theme.color.danger,
-				text = theme.color.danger, textHover = theme.color.danger,
+				text = theme.color.danger, textHover = theme.color.danger, textPress = theme.color.onSolid,
 				stroke = theme.color.dangerBorder, font = "bodyStrong",
 			}
 		end,
@@ -316,7 +356,7 @@ return function(env)
 	-- it per call site ends up with buttons that behave differently from each other.
 	function P.button(parent, props)
 		props = props or {}
-		local variant = (VARIANTS[props.variant or "secondary"])()
+		local variant = (VARIANTS[props.variant or "secondary"] or VARIANTS.secondary)()
 		local height = math.max(theme.size[HEIGHTS[props.size or "md"]], responsive.minTarget())
 		-- A button with neither a fixed width nor fill sizes to its label. That means
 		-- the content row has to size to its own children too: AutomaticSize ignores
@@ -341,7 +381,8 @@ return function(env)
 			radius = props.radius or theme.radius.md,
 			zIndex = props.zIndex,
 		})
-		if variant.stroke then P.stroke(button, variant.stroke) end
+		local outline = P.stroke(button, variant.stroke or theme.color.accent)
+		outline.Transparency = variant.stroke and 0 or 1
 		if not variant.bg then button.BackgroundTransparency = 1 end
 
 		local content, layout = P.row(button, {
@@ -360,13 +401,14 @@ return function(env)
 
 		local icons = env.require("ui/icons")
 		local iconHolder
+		local iconTint = props.iconColor
 		if props.icon then
 			iconHolder = P.frame(content, {
 				name = "IconSlot",
 				size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
 				layoutOrder = 1,
 			})
-			icons.draw(props.icon, iconHolder, theme.size.icon, props.iconColor or variant.text, props.iconDirection)
+			icons.draw(props.icon, iconHolder, theme.size.icon, iconTint or variant.text, props.iconDirection)
 		end
 
 		local label
@@ -375,47 +417,71 @@ return function(env)
 				text = props.text,
 				role = variant.font,
 				color = variant.text,
-				align = "Center",
-				auto = "XY",
+				align = props.align or "Center",
+				auto = autoWidth and "XY" or nil,
+				size = not autoWidth and UDim2.new(0, 0, 1, 0) or nil,
+				flex = not autoWidth and "Fill" or nil,
+				truncate = not autoWidth,
 				layoutOrder = 2,
 			})
-			label.Size = UDim2.fromOffset(0, 0)
+			if autoWidth then label.Size = UDim2.fromOffset(0, 0) end
 		end
 
-		local handle = { instance = button, label = label, enabled = true, busy = false }
+		local handle = { instance = button, label = label, enabled = props.enabled ~= false, busy = false }
+		local hovered, focused, pressed = false, false, false
+		local iconParts = {}
+		local function collectIconParts()
+			iconParts = {}
+			if not iconHolder then return end
+			for _, child in ipairs(iconHolder:GetDescendants()) do
+				if child:IsA("ImageLabel") then
+					iconParts[#iconParts + 1] = { instance = child, property = "ImageColor3" }
+				elseif child:IsA("UIStroke") then
+					iconParts[#iconParts + 1] = { instance = child, property = "Color" }
+				elseif child:IsA("Frame") and child.BackgroundTransparency < 1 then
+					iconParts[#iconParts + 1] = { instance = child, property = "BackgroundColor3" }
+				end
+			end
+		end
+		collectIconParts()
 
-		local function paint(state)
+		local function paint()
 			local target = variant.bg
 			local textColour = variant.text
+			local active = handle.enabled and not handle.busy
+			local motion = pressed and "press" or "hover"
 			if not handle.enabled then
-				target = theme.color.surfaceRaised
+				target = variant.bg and theme.color.surfaceRaised or nil
 				textColour = theme.color.textDisabled
-			elseif state == "hover" then
+			elseif active and pressed then
+				target = variant.bgPress or variant.bgHover or variant.bg
+				textColour = variant.textPress or variant.textHover or variant.text
+			elseif active and (hovered or focused) then
 				target = variant.bgHover or variant.bg
 				textColour = variant.textHover or variant.text
-			elseif state == "press" then
-				target = variant.bgPress or variant.bgHover or variant.bg
-				textColour = variant.textHover or variant.text
 			end
-			if target then
-				button.BackgroundTransparency = 0
-				env.tween:Create(button, theme.tween("hover"), { BackgroundColor3 = target }):Play()
-			else
-				env.tween:Create(button, theme.tween("hover"), { BackgroundTransparency = 1 }):Play()
-			end
-			if label then
-				env.tween:Create(label, theme.tween("hover"), { TextColor3 = textColour }):Play()
+			P.animate(button, motion, {
+				BackgroundColor3 = target or variant.bgHover or theme.color.surfaceHover,
+				BackgroundTransparency = target and 0 or 1,
+			})
+			P.animate(outline, motion, {
+				Color = focused and (variant.focus or theme.color.accent) or (variant.stroke or theme.color.border),
+				Transparency = (focused or variant.stroke) and 0 or 1,
+			})
+			if label then P.animate(label, motion, { TextColor3 = textColour }) end
+			for _, part in ipairs(iconParts) do
+				P.animate(part.instance, motion, {
+					[part.property] = handle.enabled and (iconTint or textColour) or theme.color.textDisabled,
+				})
 			end
 		end
 
-		button.MouseEnter:Connect(function() if handle.enabled then paint("hover") end end)
-		button.MouseLeave:Connect(function() paint("rest") end)
-		button.MouseButton1Down:Connect(function() if handle.enabled then paint("press") end end)
-		button.MouseButton1Up:Connect(function() if handle.enabled then paint("hover") end end)
-		-- Gamepad focus has to look like hover or a console user cannot see where
-		-- they are.
-		button.SelectionGained:Connect(function() if handle.enabled then paint("hover") end end)
-		button.SelectionLost:Connect(function() paint("rest") end)
+		button.MouseEnter:Connect(function() hovered = true; paint() end)
+		button.MouseLeave:Connect(function() hovered = false; pressed = false; paint() end)
+		button.MouseButton1Down:Connect(function() pressed = true; paint() end)
+		button.MouseButton1Up:Connect(function() pressed = false; paint() end)
+		button.SelectionGained:Connect(function() focused = true; paint() end)
+		button.SelectionLost:Connect(function() focused = false; pressed = false; paint() end)
 
 		button.Activated:Connect(function()
 			if not handle.enabled or handle.busy then return end
@@ -431,19 +497,37 @@ return function(env)
 			handle.enabled = value ~= false
 			button.Active = handle.enabled
 			button.Selectable = handle.enabled
-			paint("rest")
+			if not handle.enabled then focused = false; pressed = false end
+			paint()
 		end
 
 		function handle.setText(text)
 			if label then label.Text = tostring(text) end
 		end
 
-		function handle.setVariant(name)
-			variant = (VARIANTS[name] or VARIANTS.secondary)()
-			paint("rest")
+		function handle.setIcon(name, colour)
+			iconTint = colour
+			if not iconHolder then
+				iconHolder = P.frame(content, {
+					name = "IconSlot",
+					size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+					layoutOrder = 1,
+				})
+			end
+			for _, child in ipairs(iconHolder:GetChildren()) do child:Destroy() end
+			iconHolder.Visible = name ~= nil
+			if name then icons.draw(name, iconHolder, theme.size.icon, iconTint or variant.text, props.iconDirection) end
+			collectIconParts()
+			paint()
 		end
 
-		paint("rest")
+		function handle.setVariant(name)
+			variant = (VARIANTS[name] or VARIANTS.secondary)()
+			if label then applyFont(label, theme.textRole(variant.font), {}) end
+			paint()
+		end
+
+		handle.setEnabled(handle.enabled)
 		return handle
 	end
 
@@ -511,7 +595,8 @@ return function(env)
 			clip = props.clip,
 			flex = props.flex,
 		})
-		if props.stroke then P.stroke(button, props.strokeColor) end
+		local outline = P.stroke(button, props.strokeColor or theme.color.borderSubtle)
+		outline.Transparency = props.stroke and 0 or 1
 
 		local inner = P.row
 		if props.vertical then inner = P.column end
@@ -526,26 +611,31 @@ return function(env)
 		})
 
 		local handle = { instance = button, row = row, selected = props.selected == true }
+		local hovered, focused, pressed = false, false, false
 
-		local function paint(state)
+		local function paint()
 			local target = props.bg
 			if handle.selected then target = props.bgSelected or theme.color.surfaceActive end
-			if state == "hover" and not handle.selected then target = props.bgHover or theme.color.surfaceHover end
-			if state == "press" then target = props.bgPress or theme.color.surfaceActive end
-			if target then
-				button.BackgroundColor3 = target
-				button.BackgroundTransparency = 0
-			else
-				button.BackgroundTransparency = 1
-			end
+			if (hovered or focused) and not handle.selected then target = props.bgHover or theme.color.surfaceHover end
+			if pressed then target = props.bgPress or theme.color.surfaceActive end
+			local motion = pressed and "press" or "hover"
+			P.animate(button, motion, {
+				BackgroundColor3 = target or props.bgHover or theme.color.surfaceHover,
+				BackgroundTransparency = target and 0 or 1,
+			})
+			P.animate(outline, motion, {
+				Color = focused and theme.color.accent or (props.strokeColor or theme.color.borderSubtle),
+				Transparency = (focused or props.stroke) and 0 or 1,
+			})
 		end
 
-		button.MouseEnter:Connect(function() paint("hover") end)
-		button.MouseLeave:Connect(function() paint("rest") end)
-		button.MouseButton1Down:Connect(function() paint("press") end)
-		button.MouseButton1Up:Connect(function() paint("hover") end)
-		button.SelectionGained:Connect(function() paint("hover") end)
-		button.SelectionLost:Connect(function() paint("rest") end)
+		button.MouseEnter:Connect(function() hovered = true; paint() end)
+		button.MouseLeave:Connect(function() hovered = false; pressed = false; paint() end)
+		button.MouseButton1Down:Connect(function() pressed = true; paint() end)
+		button.MouseButton1Up:Connect(function() pressed = false; paint() end)
+		button.SelectionGained:Connect(function() focused = true; paint() end)
+		button.SelectionLost:Connect(function() focused = false; pressed = false; paint() end)
+
 		button.Activated:Connect(function()
 			if props.onClick then
 				local ok, err = pcall(props.onClick, handle)
@@ -630,6 +720,7 @@ return function(env)
 
 		local box = Instance.new("TextBox", shell)
 		box.BackgroundTransparency = 1
+		box.BorderSizePixel = 0
 		box.Size = UDim2.new(1, 0, 1, 0)
 		box.Text = tostring(props.text or "")
 		box.PlaceholderText = tostring(props.placeholder or "")
@@ -653,21 +744,27 @@ return function(env)
 
 		local handle = { instance = box, shell = shell, stroke = stroke }
 
+		local focused, hovered = false, false
+		local function paintField()
+			if not stroke then return end
+			P.animate(stroke, "hover", {
+				Color = focused and theme.color.accent or (hovered and theme.color.borderStrong or theme.color.border),
+			})
+			P.animate(shell, "hover", {
+				BackgroundColor3 = focused and theme.color.surfaceOverlay or (props.bg or theme.color.surfaceRaised),
+			})
+		end
+		shell.MouseEnter:Connect(function() hovered = true; paintField() end)
+		shell.MouseLeave:Connect(function() hovered = false; paintField() end)
 		box.Focused:Connect(function()
-			if stroke then
-				env.tween:Create(stroke, theme.tween("hover"), { Color = theme.color.accentBorder }):Play()
-				env.tween:Create(shell, theme.tween("hover"), { BackgroundColor3 = theme.color.surfaceOverlay }):Play()
-			end
+			focused = true
+			paintField()
 			if props.onFocus then pcall(props.onFocus, handle) end
 		end)
 
 		box.FocusLost:Connect(function(enterPressed)
-			if stroke then
-				env.tween:Create(stroke, theme.tween("hover"), { Color = theme.color.border }):Play()
-				env.tween:Create(shell, theme.tween("hover"), {
-					BackgroundColor3 = props.bg or theme.color.surfaceRaised,
-				}):Play()
-			end
+			focused = false
+			paintField()
 			-- On a multiline box Enter inserts a newline, so submit is the caller's
 			-- job there; on a single line it means "go".
 			if enterPressed and not multiline and props.onSubmit then
@@ -758,6 +855,9 @@ return function(env)
 		local scroll = Instance.new("ScrollingFrame", parent)
 		base(scroll, {
 			name = props.name or "Scroll",
+			visible = props.visible,
+			zIndex = props.zIndex,
+			anchor = props.anchor,
 			size = props.size or UDim2.new(1, 0, 1, 0),
 			position = props.position,
 			layoutOrder = props.layoutOrder,
@@ -778,6 +878,16 @@ return function(env)
 		scroll.ScrollingDirection = props.horizontal and Enum.ScrollingDirection.X or Enum.ScrollingDirection.Y
 		scroll.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
 		scroll.Selectable = false
+		scroll.Active = true
+		if not props.horizontal then
+			scroll.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar
+		end
+		scroll.MouseEnter:Connect(function()
+			P.animate(scroll, "hover", { ScrollBarImageTransparency = 0 })
+		end)
+		scroll.MouseLeave:Connect(function()
+			P.animate(scroll, "hover", { ScrollBarImageTransparency = theme.opacity.scrollbar })
+		end)
 
 		local layout = Instance.new("UIListLayout", scroll)
 		layout.FillDirection = props.horizontal and Enum.FillDirection.Horizontal or Enum.FillDirection.Vertical
@@ -790,7 +900,11 @@ return function(env)
 		local handle = { instance = scroll, layout = layout }
 
 		function handle.toBottom()
-			scroll.CanvasPosition = Vector2.new(0, math.max(scroll.AbsoluteCanvasSize.Y, 1e6))
+			if props.horizontal then
+				scroll.CanvasPosition = Vector2.new(math.max(scroll.AbsoluteCanvasSize.X - scroll.AbsoluteWindowSize.X, 0), 0)
+			else
+				scroll.CanvasPosition = Vector2.new(0, math.max(scroll.AbsoluteCanvasSize.Y - scroll.AbsoluteWindowSize.Y, 0))
+			end
 		end
 
 		function handle.atBottom(slack)
@@ -806,7 +920,8 @@ return function(env)
 			end
 		end
 
-		if props.fade then
+		if props.fade and not props.horizontal then
+			local fades = {}
 			for _, spec in ipairs({
 				{ name = "FadeTop", anchor = Vector2.new(0, 0), position = UDim2.fromScale(0, 0), rotation = 90 },
 				{ name = "FadeBottom", anchor = Vector2.new(0, 1), position = UDim2.fromScale(0, 1), rotation = -90 },
@@ -819,6 +934,7 @@ return function(env)
 					bg = props.fadeColor or theme.color.surface,
 					zIndex = (props.zIndex or 1) + 5,
 				})
+				fades[spec.name] = fade
 				local gradient = Instance.new("UIGradient", fade)
 				gradient.Rotation = spec.rotation
 				gradient.Transparency = NumberSequence.new({
@@ -826,6 +942,17 @@ return function(env)
 					NumberSequenceKeypoint.new(1, 1),
 				})
 			end
+			local function updateFades()
+				fades.FadeTop.Visible = scroll.CanvasPosition.Y > theme.space.hair
+				fades.FadeBottom.Visible = not handle.atBottom(theme.space.hair)
+			end
+			scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(updateFades)
+			scroll:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(updateFades)
+			scroll:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(updateFades)
+			scroll.Destroying:Connect(function()
+				for _, fade in pairs(fades) do fade:Destroy() end
+			end)
+			updateFades()
 		end
 
 		return handle

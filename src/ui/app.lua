@@ -264,7 +264,7 @@ return function(env)
 			button.Position = UDim2.new(1, -theme.space.lg, 1, -(theme.space.lg + responsive.bottomInset))
 		end
 
-		icons.spark(button, theme.size.iconLarge, theme.color.accent)
+		icons.brand(button, theme.size.iconLarge)
 
 		local pulse = P.statusDot(button, {
 			diameter = theme.size.dot,
@@ -398,7 +398,9 @@ return function(env)
 	function M.buildWindow()
 		M.window = windowModule.new(M.screen, {
 			name = "UAI_Window",
-			minWidth = 340,
+			minWidth = M.sidebarVisible()
+				and (theme.size.sidebar + theme.size.modalMin + theme.space.xl * 2)
+				or theme.size.modalMin + theme.space.xl * 2,
 			minHeight = 300,
 		})
 		M.buildChrome()
@@ -506,6 +508,13 @@ return function(env)
 		-- subtitle eats its own label rather than the window controls beside it: the
 		-- right cluster is anchored to the header's edge, not to how wide the longest
 		-- line happened to measure.
+		local brandSlot = P.frame(left, {
+			name = "HeaderBrand",
+			size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+			layoutOrder = 3,
+		})
+		icons.brand(brandSlot, theme.size.icon)
+
 		local titleColumn = P.column(left, {
 			name = "Title",
 			size = UDim2.new(0, 0, 1, 0),
@@ -513,7 +522,7 @@ return function(env)
 			gap = theme.space.hair,
 			alignY = "Center",
 			clip = true,
-			layoutOrder = 3,
+			layoutOrder = 4,
 		})
 		M.titleLabel = P.text(titleColumn, {
 			name = "TitleText",
@@ -626,6 +635,12 @@ return function(env)
 		end
 
 		local headerHeight = M.window.headerHeight or theme.size.header
+		P.frame(host, {
+			name = "HeaderDivider",
+			size = UDim2.new(1, 0, 0, theme.stroke.hair),
+			position = UDim2.new(0, 0, 0, headerHeight - theme.stroke.hair),
+			bg = theme.color.borderSubtle,
+		})
 		M.body = P.frame(host, {
 			name = "Panels",
 			size = UDim2.new(1, 0, 1, -headerHeight),
@@ -642,10 +657,9 @@ return function(env)
 
 	local function buildChatPanel(parent)
 		local panel = {}
-		local column = P.column(parent, {
+		local column = P.frame(parent, {
 			name = "Chat",
 			size = UDim2.fromScale(1, 1),
-			gap = 0,
 		})
 
 		panel.todos = env.require("ui/chat/todo").new(column, {
@@ -658,8 +672,6 @@ return function(env)
 			size = UDim2.new(1, 0, 1, 0),
 			layoutOrder = 2,
 		})
-		local flex = Instance.new("UIFlexItem", middle)
-		flex.FlexMode = Enum.UIFlexMode.Fill
 
 		panel.view = env.require("ui/chat/view").new(middle, {})
 
@@ -669,6 +681,7 @@ return function(env)
 				local session = sessions.current()
 				local ok, reason = session.send(text)
 				if not ok then overlay.toast(tostring(reason), "warn", 2) end
+				return ok
 			end,
 			onStop = function()
 				sessions.current().abort()
@@ -682,7 +695,22 @@ return function(env)
 				})
 			end,
 		})
-		panel.composer.shell.LayoutOrder = 3
+		panel.composer.shell.AnchorPoint = Vector2.new(0, 1)
+		panel.composer.shell.Position = UDim2.fromScale(0, 1)
+
+		-- Pin the input to the panel edge. Auto-height rows inside a filling list
+		-- can grow the flex basis and leave a dead region beneath the composer.
+		local function sizeTranscript()
+			if not middle.Parent then return end
+			local planHeight = panel.todos.shell.Visible and panel.todos.shell.AbsoluteSize.Y or 0
+			local composerHeight = panel.composer.shell.AbsoluteSize.Y
+			middle.Position = UDim2.fromOffset(0, planHeight)
+			middle.Size = UDim2.new(1, 0, 1, -(planHeight + composerHeight))
+		end
+		panel.composer.shell:GetPropertyChangedSignal("AbsoluteSize"):Connect(sizeTranscript)
+		panel.todos.shell:GetPropertyChangedSignal("AbsoluteSize"):Connect(sizeTranscript)
+		panel.todos.shell:GetPropertyChangedSignal("Visible"):Connect(sizeTranscript)
+		sizeTranscript()
 
 		function panel.destroy()
 			if panel.view then panel.view.destroy() end

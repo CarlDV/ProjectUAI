@@ -62,7 +62,10 @@ return function(env)
 					local ok, result = pcall(caps.fn.isfolder, walk)
 					exists = ok and result == true
 				end
-				if not exists then pcall(caps.fn.makefolder, walk) end
+				if not exists then
+					local ok, made = pcall(caps.fn.makefolder, walk)
+					if not ok or made == false then return false end
+				end
 				knownFolders[walk] = true
 			end
 		end
@@ -134,6 +137,14 @@ return function(env)
 		if M.isDir(path, opts) then
 			if not caps.fn.delfolder then return false, "this host cannot delete folders" end
 			local ok, delErr = pcall(caps.fn.delfolder, full)
+			if ok then
+				-- A later write must recreate this directory and every cached descendant.
+				local removed = full:gsub("/+$", "")
+				local prefix = removed .. "/"
+				for folder in pairs(knownFolders) do
+					if folder == removed or folder:sub(1, #prefix) == prefix then knownFolders[folder] = nil end
+				end
+			end
 			return ok, ok and full or tostring(delErr)
 		end
 		if not caps.fn.delfile then return false, "this host cannot delete files" end

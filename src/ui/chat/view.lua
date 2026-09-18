@@ -21,14 +21,8 @@ return function(env)
 		local scroll = P.scroll(parent, {
 			name = "Transcript",
 			size = props.size or UDim2.new(1, 0, 1, 0),
-			-- More air between turns than inside one. A turn's own paragraphs are md
-			-- apart, so the gap between turns has to be clearly larger or a reply and
-			-- the question after it read as one block of text. At xl the difference was
-			-- eight pixels, which is not a boundary anyone reads as one -- a turn, its
-			-- thinking, its tool calls and its answer are all siblings in this list, so
-			-- whatever separates them is the only thing giving the transcript structure.
-			gap = theme.space.xxl,
-			padding = { x = theme.space.xl, top = theme.space.lg, bottom = theme.space.xl },
+			gap = theme.space.lg,
+			padding = { x = theme.space.lg, top = theme.space.lg, bottom = theme.space.sm },
 			fade = false,
 		})
 
@@ -48,14 +42,37 @@ return function(env)
 			pinned = true,
 		}
 
+		local latest = P.button(parent, {
+			name = "Latest",
+			text = "Jump to latest",
+			variant = "primary",
+			size = "sm",
+			anchor = Vector2.new(0.5, 1),
+			position = UDim2.new(0.5, 0, 1, -theme.space.sm),
+			zIndex = theme.z.raised,
+			onClick = function()
+				view.pinned = true
+				scroll.toBottom()
+			end,
+		})
+		latest.instance.Visible = false
+
 		-- Autoscroll only when the user is already at the bottom. Yanking someone
 		-- back down while they are reading earlier output is the most irritating
 		-- thing a chat view can do.
+		local followQueued = false
 		local function follow(force)
-			if force or view.pinned then
-				scroll.toBottom()
-			end
+			if force then view.pinned = true end
+			if not view.pinned or followQueued then return end
+			followQueued = true
+			-- Let text measurement settle before following; several events can land together.
+			clock.delay(0, function()
+				followQueued = false
+				if scroll.instance.Parent and view.pinned then scroll.toBottom() end
+			end)
 		end
+		scroll.layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() follow() end)
+		scroll.instance:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() follow() end)
 
 		-- Called when the window is shown again after being minimized. A hidden
 		-- scroll frame's canvas position is not trustworthy and `pinned` may have
@@ -69,6 +86,7 @@ return function(env)
 
 		scroll.instance:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
 			view.pinned = scroll.atBottom(theme.space.huge)
+			latest.instance.Visible = not view.pinned
 		end)
 
 		local function nextOrder()
@@ -130,61 +148,39 @@ return function(env)
 			return view.working
 		end
 
-		-- Progressive reveal.
-		--
-		-- No Roblox HTTP transport reads a body incrementally, so a reply arrives whole
-		-- and there is nothing to stream. The motion is manufactured here instead: the
-		-- bubble is built empty and filled over a fixed number of ticks, so a long
-		-- answer takes the same time to land as a short one rather than crawling.
-		-- Revealed in chunks, not per character, because setText re-renders the whole
-		-- markdown tree on each call.
-		local REVEAL_TICKS = 40
-		local REVEAL_STEP = 0.04
-
+		-- Render the complete answer once. A short text fade keeps arrival fluid without
+		-- repeatedly rebuilding code blocks or making a completed answer wait to be read.
 		local function stopReveal(complete)
-			local reveal = view.reveal
-			if not reveal then return end
-			view.reveal = nil
-			pcall(reveal.stop)
-			-- Whatever interrupts a reveal, the full text still has to land: a half
-			-- written answer left in the transcript would be a far worse bug than the
-			-- missing animation this replaces.
-			if complete and reveal.handle then
-				pcall(reveal.handle.setText, reveal.text)
+			if not view.reveal then return end
+			for _, entry in ipairs(view.reveal) do
+				pcall(function()
+					entry.tween:Cancel()
+					if complete then entry.label.TextTransparency = 0 end
+				end)
 			end
+			view.reveal = nil
 		end
 
-		-- Progressive reveal. Live only, never on replay: an old message re-typed
-		-- out on open is a replay of the interface rather than of the conversation.
 		local function revealAgent(text, animate)
-			local handle = message.agent(scroll.instance, "", nextOrder())
+			local handle = message.agent(scroll.instance, text, nextOrder(), view.model)
 			view.agentHandle = handle
-			if not animate or responsive.reduceMotion then
-				handle.setText(text)
-				follow()
-				return handle
-			end
-			-- Cuts land on a UTF-8 boundary. Replies are full of em dashes and curly
-			-- quotes, and slicing one in half shows a replacement glyph for a frame --
-			-- Lua's # and sub work in bytes, not characters.
-			local function boundary(index)
-				while index < #text do
-					local byte = text:byte(index + 1)
-					if not byte or byte < 128 or byte >= 192 then return index end
-					index = index + 1
+			if animate and not responsive.reduceMotion then
+				view.reveal = {}
+				for _, label in ipairs(handle.column:GetDescendants()) do
+					if label:IsA("TextLabel") then
+						label.TextTransparency = 0.65
+						view.reveal[#view.reveal + 1] = {
+							label = label,
+							tween = (function()
+								local tween = env.tween:Create(label, theme.tween("enter"), { TextTransparency = 0 })
+								tween:Play()
+								return tween
+							end)(),
+						}
+					end
 				end
-				return #text
 			end
-			local shown = 0
-			local step = math.max(1, math.ceil(#text / REVEAL_TICKS))
-			local reveal = { handle = handle, text = text }
-			reveal.stop = clock.interval(REVEAL_STEP, function()
-				shown = boundary(math.min(#text, shown + step))
-				handle.setText(text:sub(1, shown))
-				follow()
-				if shown >= #text then stopReveal(false) end
-			end)
-			view.reveal = reveal
+			follow()
 			return handle
 		end
 
@@ -201,7 +197,9 @@ return function(env)
 			view.working = nil
 			view.run = nil
 			view.agentHandle = nil
+			view.model = nil
 			view.pinned = true
+			latest.instance.Visible = false
 		end
 
 
@@ -251,6 +249,7 @@ return function(env)
 					clearWorking()
 				end
 			elseif event.kind == "request:start" then
+				view.model = event.model or event.provider
 				-- The entire HTTP round trip sits between this and request:done with no
 				-- events in between, and it can run for the better part of a minute.
 				-- Without a row here that whole wait looks like nothing is happening,
@@ -261,18 +260,18 @@ return function(env)
 				local into, order = target()
 				message.reasoning(into, event.text, order)
 				follow()
-		elseif event.kind == "assistant:text" then
-			local trimmed = util.trim(event.text or "")
-			if trimmed ~= "" and trimmed ~= "..." and trimmed ~= "…" then
-				stopReveal(true)
-				clearWorking()
-				closeRun()
-				-- The reveal is for a reply that is landing now. A message replayed out
-				-- of the log arrived long ago and goes up whole, or reopening a panel
-				-- would re-type the entire conversation.
-				revealAgent(event.text, view.replaying ~= true)
-				follow()
-			end
+			elseif event.kind == "assistant:text" then
+				local trimmed = util.trim(event.text or "")
+				if trimmed ~= "" and trimmed ~= "..." and trimmed ~= "…" then
+					stopReveal(true)
+					clearWorking()
+					closeRun()
+					-- The reveal is for a reply that is landing now. A message replayed out
+					-- of the log arrived long ago and goes up whole, or reopening a panel
+					-- would re-type the entire conversation.
+					revealAgent(event.text, view.replaying ~= true)
+					follow()
+				end
 			elseif event.kind == "tool:call" then
 				-- The working row deliberately survives a tool call: it is the "this
 				-- turn is still running" indicator and it sorts last, so it stays put
@@ -294,7 +293,7 @@ return function(env)
 				local handle = view.tools[event.id]
 				if handle then
 					handle.finish(event)
-					if handle.run then handle.run.closed() end
+					if handle.run then handle.run.closed(event.ok) end
 					view.tools[event.id] = nil
 				else
 					local into, order = target()
@@ -403,16 +402,20 @@ return function(env)
 			if #session.log == 0 then
 				view.greeting()
 			else
+				view.replaying = true
 				for _, event in ipairs(session.log) do
 					local ok, err = pcall(view.render, event)
 					if not ok then env.require("runtime/log").warn("ui", "replay failed", err) end
 				end
+				view.replaying = false
 			end
 			-- Anything still open after a replay is a call or a dispatch whose outcome is
 			-- not in the log: trimmed away by the stored transcript's own ceiling, or lost
 			-- because the turn died before it landed. On a live session those are genuinely
 			-- in flight, so only a settled one is swept.
-			if not session.busy then
+			if session.busy then
+				ensureWorking().set(session.status or "Working")
+			else
 				clearWorking()
 				closeRun()
 				for id, handle in pairs(view.tools) do
@@ -436,6 +439,8 @@ return function(env)
 		end
 
 		function view.destroy()
+			stopReveal(false)
+			pcall(function() latest.instance:Destroy() end)
 			if view.unsubscribe then view.unsubscribe() end
 			pcall(function() scroll.instance:Destroy() end)
 		end

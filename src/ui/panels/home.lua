@@ -31,7 +31,7 @@ return function(env)
 	-- Four tiles to a row on anything with room, two on a phone. Eight tiles of a
 	-- quarter width each on a 276px card leaves 53px for "Longest streak".
 	local function tilesPerRow()
-		if responsive.mode == "sheet" then return 2 end
+		if responsive.mode == "sheet" or responsive.mode == "panel" then return 2 end
 		return 4
 	end
 
@@ -107,9 +107,9 @@ return function(env)
 		local handle = P.rowButton(parent, {
 			name = "Pill_" .. tostring(label),
 			auto = "X",
-			height = theme.size.chip,
-			size = UDim2.fromOffset(0, theme.size.chip),
-			bg = selected and theme.color.surfaceActive or nil,
+			height = math.max(theme.size.chip, responsive.minTarget()),
+			size = UDim2.fromOffset(0, math.max(theme.size.chip, responsive.minTarget())),
+			bgSelected = theme.color.surfaceActive,
 			radius = theme.radius.sm,
 			padding = { x = theme.space.sm },
 			selected = selected,
@@ -293,6 +293,7 @@ return function(env)
 			local row = P.row(holder, {
 				name = "Week_" .. clock.weekdayName(weekday),
 				size = UDim2.new(1, 0, 0, theme.size.cell),
+				maxSize = Vector2.new(#map.columns * theme.size.cell + (#map.columns - 1) * theme.space.hair, math.huge),
 				gap = theme.space.hair,
 				layoutOrder = weekday,
 			})
@@ -319,7 +320,8 @@ return function(env)
 				-- A cell is eleven pixels square: the hit-target floor would make it a
 				-- button the size of the whole row, so this one control opts out and the
 				-- grid stays a grid.
-				button.instance.Size = UDim2.fromOffset(theme.size.cell, theme.size.cell)
+				button.instance.Size = UDim2.new(1 / #map.columns,
+				-theme.space.hair * (#map.columns - 1) / #map.columns, 0, theme.size.cell)
 			end
 		end
 		return holder
@@ -348,7 +350,7 @@ return function(env)
 			layoutOrder = order,
 		})
 
-		local greeting = P.row(holder, {
+		local greeting = P.column(holder, {
 			name = "Greeting",
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
@@ -356,17 +358,20 @@ return function(env)
 			gap = theme.space.md,
 			layoutOrder = 1,
 		})
-		local sparkSlot = P.frame(greeting, {
-			size = UDim2.fromOffset(theme.size.iconLarge, theme.size.iconLarge),
+		local brandSlot = P.frame(greeting, {
+			name = "HomeBrand",
+			size = UDim2.fromOffset(theme.size.iconLarge + theme.space.sm, theme.size.iconLarge + theme.space.sm),
 			layoutOrder = 1,
 		})
-		icons.spark(sparkSlot, theme.size.iconLarge, theme.color.accent)
+		icons.brand(brandSlot, theme.size.iconLarge + theme.space.sm)
 		P.text(greeting, {
 			name = "GreetingText",
-			text = string.format("What's up next, %s?", name),
+			text = string.format("What shall we work on, %s?", name),
 			role = "display",
 			color = theme.color.text,
-			auto = "XY",
+			align = "Center",
+			wrap = true,
+			auto = "Y",
 			layoutOrder = 2,
 		})
 
@@ -414,7 +419,7 @@ return function(env)
 			local footer = stats.comparison(window.tokens)
 			if not footer then
 				if window.messages == 0 and window.requests == 0 then
-					footer = "Nothing recorded in this window yet. Everything here is counted from what this client does, so it fills in as you use it."
+					footer = "Your activity will appear here as you work. Every figure comes from this client's recorded usage."
 				else
 					footer = string.format("%s in, %s out across %s.",
 						util.formatCompact(window.tokensIn), util.formatCompact(window.tokensOut),
@@ -435,7 +440,9 @@ return function(env)
 
 		local header = P.row(card, {
 			name = "CardHeader",
-			size = UDim2.new(1, 0, 0, math.max(theme.size.chip, theme.size.controlSmall)),
+			size = UDim2.new(1, 0, 0, 0),
+			auto = "Y",
+			wrap = true,
 			gap = theme.space.xs,
 			layoutOrder = 1,
 		})
@@ -455,7 +462,7 @@ return function(env)
 
 		local tabRow = P.row(header, {
 			name = "Tabs",
-			size = UDim2.new(0, 0, 1, 0),
+			size = UDim2.fromOffset(0, math.max(theme.size.chip, responsive.minTarget())),
 			auto = "X",
 			gap = theme.space.hair,
 			layoutOrder = 1,
@@ -474,7 +481,7 @@ return function(env)
 
 		local rangeRow = P.row(header, {
 			name = "Ranges",
-			size = UDim2.new(0, 0, 1, 0),
+			size = UDim2.fromOffset(0, math.max(theme.size.chip, responsive.minTarget())),
 			auto = "X",
 			gap = theme.space.hair,
 			layoutOrder = 3,

@@ -19,6 +19,15 @@ return function(env)
 
 	local M = { toasts = {}, open = {} }
 
+	local function toastCapacity()
+		local height = math.max(theme.size.avatar, theme.size.controlSmall,
+			responsive.minTarget(), theme.text.small.height) + theme.space.md * 2
+		local room = responsive.viewport.Y - responsive.inset.Y
+			- responsive.bottomObstruction() - theme.space.lg * 2
+		return math.max(1, math.min(TOAST_LIMIT,
+			math.floor((room + theme.space.sm) / (height + theme.space.sm))))
+	end
+
 	function M.mount(screenGui)
 		if M.layer and M.layer.Parent then return M.layer end
 		M.layer = P.frame(screenGui, {
@@ -30,21 +39,39 @@ return function(env)
 
 		M.toastColumn = P.column(M.layer, {
 			name = "Toasts",
-			size = UDim2.new(0, theme.size.menuWide, 0, 0),
+			size = UDim2.new(0, theme.size.modal, 0, 0),
 			auto = "Y",
-			anchor = Vector2.new(0.5, 0),
-			position = UDim2.new(0.5, 0, 0, theme.space.lg + responsive.inset.Y),
-			gap = theme.space.xs,
+			gap = theme.space.sm,
 			zIndex = theme.z.toast,
 		})
 
+		local function layoutToasts()
+			if not M.toastColumn or not M.toastColumn.Parent then return end
+			while #M.toasts > toastCapacity() do
+				local oldest = table.remove(M.toasts, 1)
+				if oldest then oldest.close() end
+			end
+			local narrow = responsive.isNarrow()
+			local width = math.max(theme.size.control, math.min(theme.size.modal,
+				responsive.viewport.X - theme.space.md * 2))
+			M.toastColumn.Size = UDim2.new(0, width, 0, 0)
+			M.toastColumn.AnchorPoint = narrow and Vector2.new(0.5, 0) or Vector2.new(1, 0)
+			M.toastColumn.Position = narrow
+				and UDim2.new(0.5, 0, 0, theme.space.md + responsive.inset.Y)
+				or UDim2.new(1, -theme.space.lg, 0, theme.space.lg + responsive.inset.Y)
+		end
+		layoutToasts()
+		local unbindToasts = dispose.add(responsive.changed:connect(layoutToasts), "toast layout")
+		M.toastColumn.Destroying:Connect(unbindToasts)
+
 		-- Escape closes the topmost surface. Bound once, on the layer's lifetime.
-		dispose.connection(env.uis.InputBegan:Connect(function(input, processed)
+		local unbindEscape = dispose.connection(env.uis.InputBegan:Connect(function(input, processed)
 			if processed then return end
 			if input.KeyCode ~= Enum.KeyCode.Escape and input.KeyCode ~= Enum.KeyCode.ButtonB then return end
 			local topmost = M.open[#M.open]
 			if topmost then topmost.close() end
 		end))
+		M.layer.Destroying:Connect(unbindEscape)
 
 		return M.layer
 	end
@@ -61,148 +88,199 @@ return function(env)
 
 	function M.toast(text, tone, seconds)
 		if not ensure() then return nil end
-		-- Old toasts leave rather than stack forever; three is as many as anyone
-		-- reads.
-		while #M.toasts >= TOAST_LIMIT do
+		while #M.toasts >= toastCapacity() do
 			local oldest = table.remove(M.toasts, 1)
 			if oldest then oldest.close() end
 		end
 
 		local toneKey = tone or "info"
+		if toneKey == "danger" then toneKey = "bad" end
+		if toneKey == "success" then toneKey = "good" end
 		local toneColor = theme.toneColor(toneKey)
+		local pad = theme.space.md
+		local closeSize = math.max(theme.size.controlSmall, responsive.minTarget())
+		local badgeSize = theme.size.avatar
+		local inset = pad + badgeSize + theme.space.sm
+		local trailing = pad + closeSize + theme.space.xs
+		local minimum = math.max(badgeSize, closeSize, theme.text.small.height) + pad * 2
 
-		-- The card is a self-contained clickable notification surface.
-		-- Width is 100% of M.toastColumn (theme.size.menuWide = 320px).
-		-- Children use concrete parent-relative sizing to prevent Roblox's
-		-- UIFlexItem AutomaticSize.Y 0-width text wrap bug.
-		local card = Instance.new("TextButton", M.toastColumn)
+		-- The list owns this slot; only its child moves. Tweening the old toast's
+		-- Position fought UIListLayout, while separately fading its parts left icons
+		-- hanging in the air. An unscaled group fades every part together.
+		local slot = P.frame(M.toastColumn, {
+			name = "ToastSlot",
+			size = UDim2.new(1, 0, 0, minimum),
+			zIndex = theme.z.toast,
+		})
+		local group = Instance.new("CanvasGroup", slot)
+		group.Name = "ToastSurface"
+		group.BackgroundTransparency = 1
+		group.BorderSizePixel = 0
+		group.Size = UDim2.fromScale(1, 1)
+		group.Position = UDim2.fromOffset(0, responsive.reduceMotion and 0 or -theme.space.sm)
+		group.GroupTransparency = 1
+		group.ZIndex = theme.z.toast
+		P.corner(group, theme.radius.lg)
+
+		local card = Instance.new("TextButton", group)
 		card.Name = "Toast"
 		card.Text = ""
 		card.AutoButtonColor = false
 		card.BorderSizePixel = 0
-		card.BackgroundColor3 = theme.color.surfaceRaised
-		card.Size = UDim2.new(1, 0, 0, 0)
-		card.AutomaticSize = Enum.AutomaticSize.Y
+		card.BackgroundColor3 = theme.color.surfaceOverlay
+		card.Size = UDim2.fromScale(1, 1)
 		card.ZIndex = theme.z.toast
-		card.BackgroundTransparency = 1
-		card.Position = UDim2.new(0, 0, 0, -10)
-		card.ClipsDescendants = true
-		Instance.new("UICorner", card).CornerRadius = UDim.new(0, theme.radius.md)
+		card.Selectable = true
+		P.corner(card, theme.radius.lg)
+		local stroke = P.stroke(card, theme.color.border)
 
-		local stroke = Instance.new("UIStroke", card)
-		stroke.Color = theme.color.borderSubtle
-		stroke.Thickness = theme.stroke.hair
-		stroke.Transparency = 1
-
-		local pad = Instance.new("UIPadding", card)
-		pad.PaddingLeft = UDim.new(0, theme.space.md)
-		pad.PaddingRight = UDim.new(0, theme.space.md)
-		pad.PaddingTop = UDim.new(0, theme.space.sm + 2)
-		pad.PaddingBottom = UDim.new(0, theme.space.sm + 2)
-
-		-- Minimum height constraint ensures comfortable touch target
-		local sizeConstraint = Instance.new("UISizeConstraint", card)
-		sizeConstraint.MinSize = Vector2.new(0, 42)
-
-		-- Distinct 22x22 tone badge on the left
-		local indicator = Instance.new("Frame", card)
-		indicator.Name = "Indicator"
-		indicator.Size = UDim2.fromOffset(22, 22)
-		indicator.Position = UDim2.new(0, 0, 0, 0)
-		indicator.BackgroundColor3 = theme.color[toneKey .. "Surface"] or theme.color.surfaceOverlay
-		indicator.BackgroundTransparency = 1
-		indicator.BorderSizePixel = 0
-		indicator.ZIndex = theme.z.toast + 1
-		Instance.new("UICorner", indicator).CornerRadius = UDim.new(1, 0)
-
+		local indicator = P.frame(card, {
+			name = "Indicator",
+			size = UDim2.fromOffset(badgeSize, badgeSize),
+			position = UDim2.fromOffset(pad, pad),
+			bg = theme.toneSurface(toneKey),
+			radius = theme.radius.md,
+			zIndex = theme.z.toast + 1,
+		})
 		if toneKey == "good" then
-			icons.check(indicator, 12, theme.color.success)
-		elseif toneKey == "danger" or toneKey == "bad" then
-			icons.close(indicator, 10, theme.color.danger)
+			icons.check(indicator, theme.size.icon, toneColor)
+		elseif toneKey == "bad" then
+			icons.close(indicator, theme.size.icon, toneColor)
 		elseif toneKey == "warn" then
-			icons.spark(indicator, 12, theme.color.warn)
+			P.text(indicator, {
+				text = "!", role = "bodyStrong", color = toneColor,
+				size = UDim2.fromScale(1, 1), align = "Center", alignY = "Center",
+			})
 		else
 			P.statusDot(indicator, {
 				color = toneColor,
-				diameter = theme.size.dot,
 				anchor = Vector2.new(0.5, 0.5),
 				position = UDim2.fromScale(0.5, 0.5),
 			})
 		end
 
-		-- Close slot on the right
-		local closeSlot = Instance.new("Frame", card)
-		closeSlot.Name = "CloseSlot"
-		closeSlot.Size = UDim2.fromOffset(14, 14)
-		closeSlot.AnchorPoint = Vector2.new(1, 0)
-		closeSlot.Position = UDim2.new(1, 0, 0, 3)
-		closeSlot.BackgroundTransparency = 1
-		closeSlot.BorderSizePixel = 0
-		closeSlot.ZIndex = theme.z.toast + 1
-		icons.close(closeSlot, 10, theme.color.textTertiary)
-
-		-- Label is explicitly positioned between indicator and close button.
-		-- Size width is strictly parent-relative (1, -54), giving Roblox's text engine
-		-- a guaranteed concrete width (~242px) so text wrapped lines wrap cleanly and
-		-- NEVER measure at 0-width (which produced the 1-character vertical text bug).
-		local label = Instance.new("TextLabel", card)
-		label.Name = "Message"
-		label.Text = tostring(text)
-		label.TextColor3 = theme.color.text
-		label.TextTransparency = 1
-		label.BackgroundTransparency = 1
-		label.BorderSizePixel = 0
-		label.TextWrapped = true
-		label.TextXAlignment = Enum.TextXAlignment.Left
-		label.TextYAlignment = Enum.TextYAlignment.Top
-		label.Position = UDim2.new(0, 32, 0, 1)
-		label.Size = UDim2.new(1, -54, 0, 0)
-		label.AutomaticSize = Enum.AutomaticSize.Y
-		label.ZIndex = theme.z.toast + 1
-
-		local role = theme.text.small
-		label.TextSize = role.size
-		label.Font = role.font
-		if role.face then pcall(function() label.FontFace = role.face end) end
+		-- A bounded reading area retains the complete message even for a provider
+		-- error containing a long response. It cannot push the stack off-screen.
+		local message = P.scroll(card, {
+			name = "ToastMessage",
+			position = UDim2.fromOffset(inset, pad),
+			size = UDim2.new(1, -(inset + trailing), 1, -pad * 2),
+			gap = 0,
+			zIndex = theme.z.toast + 1,
+		})
+		local label = P.text(message.instance, {
+			name = "Message",
+			text = tostring(text),
+			role = "small",
+			color = theme.color.text,
+			size = UDim2.new(1, -theme.size.scrollbar, 0, 0),
+			wrap = true,
+			auto = "Y",
+			zIndex = theme.z.toast + 1,
+		})
 
 		local entry = { card = card, closed = false }
+		local hovered, focused = false, false
+		local remaining = math.max(0, seconds or TOAST_SECONDS)
+		local started = clock.ms()
+		local generation = 0
+		local unbindLayout
+
+		local function layoutMessage()
+			if entry.closed then return end
+			local available = responsive.viewport.Y - responsive.inset.Y
+				- responsive.bottomObstruction() - theme.space.lg * 2
+			local ceiling = math.max(minimum, math.min(theme.text.small.height * 5 + pad * 2,
+				math.floor(available / toastCapacity()) - theme.space.sm))
+			local wanted = math.max(minimum, math.ceil(label.TextBounds.Y) + pad * 2)
+			slot.Size = UDim2.new(1, 0, 0, math.min(wanted, ceiling))
+		end
+		label:GetPropertyChangedSignal("TextBounds"):Connect(layoutMessage)
+		unbindLayout = dispose.add(responsive.changed:connect(layoutMessage), "toast size")
+		layoutMessage()
 
 		function entry.close()
 			if entry.closed then return end
 			entry.closed = true
+			generation = generation + 1
+			if unbindLayout then unbindLayout() end
 			for index, item in ipairs(M.toasts) do
-				if item == entry then table.remove(M.toasts, index) end
+				if item == entry then table.remove(M.toasts, index) break end
 			end
-			local out = env.tween:Create(card, theme.tween("exit"), {
-				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 0, 0, -10),
+			local out = P.animate(group, "exit", {
+				GroupTransparency = 1,
+				Position = UDim2.fromOffset(0, responsive.reduceMotion and 0 or -theme.space.xs),
 			})
-			out.Completed:Connect(function() pcall(function() card:Destroy() end) end)
-			out:Play()
-			env.tween:Create(stroke, theme.tween("exit"), { Transparency = 1 }):Play()
-			env.tween:Create(indicator, theme.tween("exit"), { BackgroundTransparency = 1 }):Play()
-			env.tween:Create(label, theme.tween("exit"), { TextTransparency = 1 }):Play()
+			out.Completed:Connect(function() pcall(function() slot:Destroy() end) end)
 		end
+		slot.Destroying:Connect(function()
+			for index, item in ipairs(M.toasts) do
+				if item == entry then table.remove(M.toasts, index) break end
+			end
+			entry.closed = true
+			generation = generation + 1
+			if unbindLayout then unbindLayout() end
+		end)
 
+		local close = P.iconButton(card, {
+			name = "DismissNotification",
+			icon = "close",
+			diameter = closeSize,
+			anchor = Vector2.new(1, 0),
+			position = UDim2.new(1, -pad, 0, pad),
+			zIndex = theme.z.toast + 2,
+			onClick = entry.close,
+		})
+		close.instance.ZIndex = theme.z.toast + 2
 		card.Activated:Connect(entry.close)
 
-		-- Subtle hover feedback
+		local function schedule()
+			generation = generation + 1
+			local mine = generation
+			started = clock.ms()
+			clock.delay(remaining, function()
+				if not entry.closed and mine == generation and not hovered and not focused then entry.close() end
+			end)
+		end
+		local function pause()
+			remaining = math.max(0, remaining - clock.since(started) / 1000)
+			generation = generation + 1
+		end
+		local function paint()
+			if entry.closed then return end
+			P.animate(stroke, "hover", { Color = focused and theme.color.accentBorder or theme.color.border })
+			P.animate(card, "hover", {
+				BackgroundColor3 = (hovered or focused) and theme.color.surfaceActive or theme.color.surfaceOverlay,
+			})
+		end
 		card.MouseEnter:Connect(function()
-			env.tween:Create(stroke, theme.tween("quick"), { Color = theme.color.border }):Play()
+			if not hovered and not focused then pause() end
+			hovered = true
+			paint()
 		end)
 		card.MouseLeave:Connect(function()
-			env.tween:Create(stroke, theme.tween("quick"), { Color = theme.color.borderSubtle }):Play()
+			hovered = false
+			if not focused and not entry.closed then schedule() end
+			paint()
 		end)
+		local function focus()
+			if not hovered and not focused then pause() end
+			focused = true
+			paint()
+		end
+		local function blur()
+			focused = false
+			if not hovered and not entry.closed then schedule() end
+			paint()
+		end
+		card.SelectionGained:Connect(focus)
+		card.SelectionLost:Connect(blur)
+		close.instance.SelectionGained:Connect(focus)
+		close.instance.SelectionLost:Connect(blur)
 
 		M.toasts[#M.toasts + 1] = entry
-		env.tween:Create(card, theme.tween("enter"), {
-			BackgroundTransparency = 0,
-			Position = UDim2.new(0, 0, 0, 0),
-		}):Play()
-		env.tween:Create(stroke, theme.tween("enter"), { Transparency = 0 }):Play()
-		env.tween:Create(indicator, theme.tween("enter"), { BackgroundTransparency = 0 }):Play()
-		env.tween:Create(label, theme.tween("enter"), { TextTransparency = 0 }):Play()
-		clock.delay(seconds or TOAST_SECONDS, entry.close)
+		P.animate(group, "enter", { GroupTransparency = 0, Position = UDim2.fromOffset(0, 0) })
+		schedule()
 		return entry
 	end
 
@@ -240,7 +318,7 @@ return function(env)
 		scrim.Active = true
 
 		local sheetMode = responsive.mode == "sheet"
-		local widest = math.max(responsive.viewport.X - theme.space.xxl * 2, theme.size.modalMin)
+		local widest = math.max(responsive.viewport.X - theme.space.lg * 2, theme.size.modalMin)
 		local scrolls = props.scroll == true
 		-- Everything the screen has, less the margin a floating card keeps and whatever
 		-- the platform is covering: the top inset, and the on-screen keyboard, which is
@@ -276,11 +354,13 @@ return function(env)
 					0, scrolls and height or 0),
 			auto = (not scrolls) and "Y" or nil,
 			anchor = sheetMode and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5),
-			position = sheetMode and UDim2.new(0.5, 0, 1, -(theme.space.lg + bottomObstruction)) or UDim2.fromScale(0.5, 0.5),
+			position = sheetMode and UDim2.new(0.5, 0, 1, -(theme.space.lg + bottomObstruction))
+				or UDim2.new(0.5, 0, 0.5, math.floor((responsive.inset.Y - bottomObstruction) / 2)),
 			bg = theme.color.surfaceRaised,
 			radius = theme.radius.xl,
 			padding = (not scrolls) and theme.space.lg or nil,
 			zIndex = theme.z.modal + 1,
+			clip = true,
 		}
 
 		local card
@@ -294,7 +374,7 @@ return function(env)
 		card.Active = true
 		P.stroke(card, theme.color.border)
 		local scale = Instance.new("UIScale", card)
-		scale.Scale = theme.scale.enter
+		scale.Scale = responsive.reduceMotion and 1 or theme.scale.enter
 
 		local closeDiameter = math.max(theme.size.control, responsive.minTarget())
 		local descLines = props.description and math.ceil(#tostring(props.description) / 38) or 0
@@ -302,14 +382,14 @@ return function(env)
 			theme.text.title.height + (props.description and (theme.space.xs + descLines * theme.text.small.height) or 0))
 		local footerContentHeight = math.max(theme.size.control, responsive.minTarget())
 		local pad = theme.space.lg
-		local headerTotal = headerContentHeight + pad
-		local footerTotal = footerContentHeight + pad
+		local headerTotal = headerContentHeight + pad * 2
+		local footerTotal = footerContentHeight + pad * 2
 
 		local header = P.row(card, {
 			name = "Header",
 			size = scrolls and UDim2.new(1, 0, 0, headerTotal) or UDim2.new(1, 0, 0, 0),
 			position = scrolls and UDim2.new(0, 0, 0, 0) or nil,
-			padding = scrolls and { x = pad, top = pad } or nil,
+			padding = scrolls and { x = pad, y = pad } or nil,
 			auto = (not scrolls) and "Y" or nil,
 			gap = theme.space.sm,
 			alignY = "Top",
@@ -324,14 +404,15 @@ return function(env)
 			gap = theme.space.hair,
 			layoutOrder = 1,
 		})
-		P.text(titleColumn, {
+		local titleLabel = P.text(titleColumn, {
 			text = tostring(props.title or ""),
 			role = "title",
 			wrap = true,
 			auto = "Y",
 		})
+		local descriptionLabel
 		if props.description then
-			P.text(titleColumn, {
+			descriptionLabel = P.text(titleColumn, {
 				text = props.description,
 				role = "small",
 				color = theme.color.textSecondary,
@@ -343,7 +424,7 @@ return function(env)
 		local handle = { card = card, scrim = scrim, closed = false }
 		local unbindResponsive
 
-		function handle.close()
+		function handle.close(confirmed)
 			if handle.closed then return end
 			handle.closed = true
 			if unbindResponsive then
@@ -357,13 +438,13 @@ return function(env)
 			local out = env.tween:Create(scrim, theme.tween("exit"), { BackgroundTransparency = 1 })
 			out.Completed:Connect(function() pcall(function() scrim:Destroy() end) end)
 			out:Play()
-			if props.onClose then pcall(props.onClose) end
+			if confirmed ~= true and props.onClose then pcall(props.onClose) end
 		end
 
 		local function relayout()
 			if handle.closed then return end
 			local isSheet = responsive.mode == "sheet"
-			local curWidest = math.max(responsive.viewport.X - theme.space.xxl * 2, theme.size.modalMin)
+			local curWidest = math.max(responsive.viewport.X - theme.space.lg * 2, theme.size.modalMin)
 			local curObstruction = responsive.bottomObstruction()
 			local curRoom = responsive.viewport.Y - responsive.inset.Y
 				- curObstruction - theme.space.lg * 2
@@ -377,14 +458,15 @@ return function(env)
 			card.AnchorPoint = isSheet and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5)
 			card.Position = isSheet
 				and UDim2.new(0.5, 0, 1, -(theme.space.lg + curObstruction))
-				or UDim2.fromScale(0.5, 0.5)
+				or UDim2.new(0.5, 0, 0.5, math.floor((responsive.inset.Y - curObstruction) / 2))
 			card.Size = isSheet
 				and UDim2.new(1, -theme.space.md * 2, 0, scrolls and curHeight or 0)
 				or UDim2.new(0, util.clamp(props.width or theme.size.modal, theme.size.modalMin, curWidest),
 					0, scrolls and curHeight or 0)
 		end
 
-		unbindResponsive = responsive.changed:connect(relayout)
+		unbindResponsive = dispose.add(responsive.changed:connect(relayout), "modal layout")
+		card.Destroying:Connect(unbindResponsive)
 
 		if dismiss then
 			dismiss.Activated:Connect(handle.close)
@@ -424,9 +506,16 @@ return function(env)
 				size = UDim2.new(1, 0, 0, footerTotal),
 				anchor = Vector2.new(0, 1),
 				position = UDim2.new(0, 0, 1, 0),
-				padding = { x = pad, bottom = pad },
+				padding = { x = pad, y = pad },
+				bg = theme.color.surface,
 				gap = theme.space.sm,
 				alignX = "Right",
+			})
+			P.frame(card, {
+				name = "FooterDivider",
+				size = UDim2.new(1, 0, 0, theme.stroke.hair),
+				position = UDim2.new(0, 0, 1, -footerTotal),
+				bg = theme.color.borderSubtle,
 			})
 		else
 			handle.content = P.column(card, {
@@ -444,6 +533,24 @@ return function(env)
 				alignX = "Right",
 				layoutOrder = 3,
 			})
+		end
+
+		if scrolls then
+			local divider = card:FindFirstChild("FooterDivider")
+			local function fitHeader()
+				if handle.closed or titleLabel.AbsoluteSize.X <= theme.size.icon then return end
+				local titleHeight = math.max(theme.text.title.height, math.ceil(titleLabel.TextBounds.Y))
+				local descriptionHeight = descriptionLabel
+					and (theme.space.hair + math.max(theme.text.small.height, math.ceil(descriptionLabel.TextBounds.Y))) or 0
+				local measured = math.max(closeDiameter, titleHeight + descriptionHeight) + pad * 2
+				header.Size = UDim2.new(1, 0, 0, measured)
+				handle.scroll.instance.Position = UDim2.fromOffset(0, measured)
+				handle.scroll.instance.Size = UDim2.new(1, 0, 1, -(measured + footerTotal))
+				if divider then divider.Position = UDim2.new(0, 0, 1, -footerTotal) end
+			end
+			titleLabel:GetPropertyChangedSignal("TextBounds"):Connect(fitHeader)
+			if descriptionLabel then descriptionLabel:GetPropertyChangedSignal("TextBounds"):Connect(fitHeader) end
+			fitHeader()
 		end
 
 		M.open[#M.open + 1] = handle
@@ -487,11 +594,7 @@ return function(env)
 			size = "sm",
 			layoutOrder = 2,
 			onClick = function()
-				modal.closed = true
-				for index, item in ipairs(M.open) do
-					if item == modal then table.remove(M.open, index) end
-				end
-				pcall(function() modal.scrim:Destroy() end)
+				modal.close(true)
 				if props.onConfirm then pcall(props.onConfirm) end
 			end,
 		})
@@ -525,7 +628,9 @@ return function(env)
 				if props.onConfirm then pcall(props.onConfirm, util.trim(text)) end
 			end,
 		})
-		clock.delay(theme.motion.fast, function() field.focus() end)
+		clock.delay(theme.duration("fast"), function()
+			if not modal.closed then field.focus() end
+		end)
 
 		P.button(modal.footer, {
 			text = props.cancelText or "Cancel",
@@ -564,24 +669,31 @@ return function(env)
 		})
 		if not modal then return nil end
 
+		-- The outer viewport owns both axes. Code keeps its indentation and long
+		-- lines stay reachable instead of being clipped by an auto-height child.
+		modal.scroll.instance.AutomaticCanvasSize = Enum.AutomaticSize.XY
+		modal.scroll.instance.ScrollingDirection = Enum.ScrollingDirection.XY
+		modal.scroll.instance.BackgroundColor3 = theme.color.codeSurface
+		modal.scroll.instance.BackgroundTransparency = 0
 		local body = P.frame(modal.content, {
 			name = "CodeBody",
-			size = UDim2.new(1, 0, 0, 0),
+			size = UDim2.fromOffset(0, 0),
+			auto = "XY",
 			bg = theme.color.codeSurface,
-			clip = true,
 		})
-
+		modal.content.Size = UDim2.fromOffset(0, 0)
+		modal.content.AutomaticSize = Enum.AutomaticSize.XY
 		P.text(body, {
 			name = "CodeText",
 			text = tostring(props.code or ""),
-			role = "monoSmall",
+			role = "mono",
 			line = theme.line.normal,
 			color = theme.color.codeText,
-			size = UDim2.new(1, 0, 0, 0),
+			size = UDim2.fromOffset(0, 0),
 			wrap = false,
-			auto = "Y",
-			alignX = "Left",
-			padding = { x = theme.space.md, y = theme.space.sm },
+			auto = "XY",
+			align = "Left",
+			padding = { x = theme.space.sm, y = theme.space.md },
 		})
 
 		if caps.clipboard then
@@ -620,7 +732,7 @@ return function(env)
 		local margin = theme.space.lg * 2
 		local width = math.min(props.width or theme.size.dialog, responsive.viewport.X - margin)
 		local height = math.min(props.height or theme.size.dialogTall,
-			responsive.viewport.Y - margin - responsive.inset.Y)
+			responsive.viewport.Y - margin - responsive.inset.Y - responsive.bottomObstruction())
 
 		local scrim = P.frame(M.layer, {
 			name = "Scrim",
@@ -652,13 +764,29 @@ return function(env)
 		card.Active = true
 		P.stroke(card, theme.color.border)
 		local scale = Instance.new("UIScale", card)
-		scale.Scale = theme.scale.enter
+		scale.Scale = responsive.reduceMotion and 1 or theme.scale.enter
 
 		local handle = { card = card, scrim = scrim, closed = false, width = width, height = height }
+		local unbindResponsive
+		local function relayout()
+			if handle.closed then return end
+			local usableWidth = math.max(theme.size.control, responsive.viewport.X - margin)
+			local usableHeight = math.max(theme.size.control, responsive.viewport.Y - margin
+				- responsive.inset.Y - responsive.bottomObstruction())
+			handle.width = math.min(props.width or theme.size.dialog, usableWidth)
+			handle.height = math.min(props.height or theme.size.dialogTall, usableHeight)
+			card.Size = UDim2.fromOffset(handle.width, handle.height)
+			card.Position = UDim2.new(0.5, 0, 0.5,
+				math.floor((responsive.inset.Y - responsive.bottomObstruction()) / 2))
+		end
+		unbindResponsive = dispose.add(responsive.changed:connect(relayout), "dialog layout")
+		card.Destroying:Connect(unbindResponsive)
+		relayout()
 
 		function handle.close()
 			if handle.closed then return end
 			handle.closed = true
+			if unbindResponsive then unbindResponsive() end
 			for index, item in ipairs(M.open) do
 				if item == handle then table.remove(M.open, index) end
 			end
@@ -771,17 +899,17 @@ return function(env)
 
 		local anchorY
 		if flip then
-			local maxH = math.max(120, spaceAbove)
+			local maxH = math.max(rowHeight, spaceAbove)
 			bodyHeight = math.min(bodyHeight, maxH)
 			anchorY = targetY - theme.space.xxs - bodyHeight
 		else
-			local maxH = math.max(120, spaceBelow)
+			local maxH = math.max(rowHeight, spaceBelow)
 			bodyHeight = math.min(bodyHeight, maxH)
 			anchorY = below
 		end
 
 		anchorY = util.clamp(anchorY, topLimit, math.max(topLimit, bottomLimit - bodyHeight))
-		local maxWidth = math.max(theme.size.menuMin, layerSize.X - theme.space.sm * 2)
+		local maxWidth = math.max(theme.size.control, layerSize.X - theme.space.sm * 2)
 		width = math.min(width, maxWidth)
 		local anchorX = util.clamp(targetX, theme.space.sm, math.max(theme.space.sm, layerSize.X - width - theme.space.sm))
 
@@ -790,11 +918,13 @@ return function(env)
 			size = UDim2.fromOffset(width, bodyHeight),
 			position = UDim2.fromOffset(anchorX, anchorY),
 			bg = theme.color.surfaceOverlay,
-			radius = theme.radius.md,
+			radius = theme.radius.lg,
 			zIndex = theme.z.dropdown + 1,
 			clip = true,
 		})
 		P.stroke(card, theme.color.border)
+		local scale = Instance.new("UIScale", card)
+		scale.Scale = responsive.reduceMotion and 1 or theme.scale.enter
 
 		local handle = { closed = false }
 
@@ -841,19 +971,19 @@ return function(env)
 					text = tostring(option.title or ""),
 					role = "bodyStrong",
 					color = theme.color.text,
-					auto = "X",
+					truncate = true,
 					layoutOrder = 1,
 				})
-				title.Size = UDim2.fromOffset(0, theme.text.bodyStrong.height)
+				title.Size = UDim2.new(1, 0, 0, theme.text.bodyStrong.height)
 				if option.subtitle then
 					local sub = P.text(headRow, {
 						text = tostring(option.subtitle or ""),
 						role = "caption",
 						color = theme.color.textTertiary,
-						auto = "X",
+						truncate = true,
 						layoutOrder = 2,
 					})
-					sub.Size = UDim2.fromOffset(0, theme.text.caption.height)
+					sub.Size = UDim2.new(1, 0, 0, theme.text.caption.height)
 				end
 			else
 				local button = Instance.new("TextButton", list.instance)
@@ -869,7 +999,9 @@ return function(env)
 				button.Size = UDim2.new(1, 0, 0, rowHeight)
 				button.LayoutOrder = index
 				button.Selectable = true
-				P.corner(button, theme.radius.sm)
+				P.corner(button, theme.radius.md)
+				local focusStroke = P.stroke(button, theme.color.accentBorder)
+				focusStroke.Transparency = 1
 
 				local row = P.row(button, {
 					size = UDim2.fromScale(1, 1),
@@ -911,9 +1043,10 @@ return function(env)
 				if option.shortcut then
 					local keycap = P.frame(row, {
 						name = "Keycap",
+						size = UDim2.fromOffset(0, theme.text.caption.height + theme.space.hair * 2),
 						bg = theme.color.surfaceRaised,
 						radius = theme.radius.xs,
-						padding = { x = theme.space.xs, y = 1 },
+						padding = { x = theme.space.xs, y = theme.space.hair },
 						auto = "X",
 						layoutOrder = 3,
 					})
@@ -939,16 +1072,32 @@ return function(env)
 					icons.check(mark, theme.size.icon, theme.color.accent)
 				end
 
-				button.MouseEnter:Connect(function()
-					if not option.selected then
-						env.tween:Create(button, theme.tween("hover"), {
-							BackgroundTransparency = 0, BackgroundColor3 = theme.color.surfaceHover,
-						}):Play()
+				local hovered, focused, pressed = false, false, false
+				local function paint()
+					if handle.closed then return end
+					local active = option.selected or hovered or focused or pressed
+					P.animate(button, pressed and "press" or "hover", {
+						BackgroundTransparency = active and 0 or 1,
+						BackgroundColor3 = (pressed or option.selected) and theme.color.surfaceActive or theme.color.surfaceHover,
+					})
+					P.animate(focusStroke, "hover", { Transparency = focused and 0 or 1 })
+				end
+				button.MouseEnter:Connect(function() hovered = true paint() end)
+				button.MouseLeave:Connect(function() hovered = false pressed = false paint() end)
+				button.SelectionGained:Connect(function() focused = true paint() end)
+				button.SelectionLost:Connect(function() focused = false pressed = false paint() end)
+				button.InputBegan:Connect(function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1
+						or input.UserInputType == Enum.UserInputType.Touch then
+						pressed = true
+						paint()
 					end
 				end)
-				button.MouseLeave:Connect(function()
-					if not option.selected then
-						env.tween:Create(button, theme.tween("hover"), { BackgroundTransparency = 1 }):Play()
+				button.InputEnded:Connect(function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1
+						or input.UserInputType == Enum.UserInputType.Touch then
+						pressed = false
+						paint()
 					end
 				end)
 				button.Activated:Connect(function()
@@ -959,6 +1108,10 @@ return function(env)
 		end
 
 		M.open[#M.open + 1] = handle
+		local enter = P.animate(scale, "enter", { Scale = 1 })
+		enter.Completed:Connect(function()
+			if not handle.closed then scale.Scale = 1 end
+		end)
 		return handle
 	end
 

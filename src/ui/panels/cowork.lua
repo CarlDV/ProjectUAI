@@ -27,8 +27,8 @@ return function(env)
 		local scroll = P.scroll(parent, {
 			name = "Cowork",
 			size = UDim2.new(1, 0, 1, 0),
-			gap = theme.space.md,
-			padding = theme.space.md,
+			gap = theme.space.lg,
+			padding = theme.space.lg,
 		})
 
 		P.sectionHeader(scroll.instance, {

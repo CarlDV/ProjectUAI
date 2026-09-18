@@ -112,7 +112,6 @@ return function(env)
 		field = P.field(modal.content, {
 			name = "AskField",
 			placeholder = "Or type an answer",
-			size = UDim2.new(1, 0, 0, 0),
 			layoutOrder = #options + 2,
 			onSubmit = function(text)
 				reply(util.trim(text))

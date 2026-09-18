@@ -533,7 +533,7 @@ return function(env)
 				method = "POST",
 				headers = headers,
 				body = util.encode(payload),
-				identity = (record.claudeUa ~= false) and "claude" or "none",
+				identity = registry.identityFor(record),
 				attempts = attemptsAllowed,
 				skipStatus = skip429,
 				aborted = request.aborted,
