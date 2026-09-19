@@ -158,7 +158,7 @@ return function(env)
 					usage.record(result.usage, result.model or bot.model, {
 						prompt = usage.estimateMessages(messages),
 						completion = usage.estimateText(result.content) + usage.estimateText(result.reasoning), background = true,
-					})
+					}, record)
 				end
 				if not active(job) then return end
 				if not result then error(tostring(failure or "Chatbot inference failed."), 0) end

@@ -238,7 +238,7 @@ return function(env)
 			usage.record(result.usage, result.model or (record and record.model), {
 				prompt = usage.estimateMessages(request.messages),
 				completion = usage.estimateText(result.content) + usage.estimateText(result.reasoning),
-			})
+			}, record)
 			session.emit("usage", { session = usage.session, turn = usage.turn })
 
 			if util.trim(result.reasoning) ~= "" then

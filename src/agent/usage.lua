@@ -56,7 +56,7 @@ return function(env)
 		["gemini-2.5-flash"] = { 0.30, 2.50 },
 	}
 
-	function M.priceFor(model)
+	function M.priceFor(model, record) local ok, pricing = pcall(env.require, "agent/pricing"); if ok and pricing and pricing.priceFor then local price = pricing.priceFor(model, record); if price then return price end end
 		local id = tostring(model or ""):lower()
 		local best, bestLength = nil, 0
 		for prefix, price in pairs(PRICES) do
@@ -96,7 +96,7 @@ return function(env)
 
 	-- `usage` is the provider block when it exists. `fallback` supplies estimates
 	-- so a provider that reports nothing still moves the counters.
-	function M.record(usage, model, fallback)
+	function M.record(usage, model, fallback, record)
 		local prompt, completion, estimated
 		if type(usage) == "table" and (usage.prompt_tokens or usage.completion_tokens) then
 			prompt = tonumber(usage.prompt_tokens) or 0
@@ -108,7 +108,7 @@ return function(env)
 			estimated = true
 		end
 
-		local price = M.priceFor(model)
+		local price = M.priceFor(model, record)
 		local cost = 0
 		if price then
 			cost = (prompt / 1000000) * price[1] + (completion / 1000000) * price[2]

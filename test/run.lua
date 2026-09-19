@@ -6689,6 +6689,50 @@ scenario("the what's new modal renders every release on wide and narrow viewport
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+scenario("universal model pricing resolves across inference providers", function()
+	local _, handle = bootWith({ provider = false })
+	local usage = handle.env.require("agent/usage")
+
+	-- Bare models from different vendors
+	local gpt4o = usage.priceFor("gpt-4o")
+	check("gpt-4o resolves prompt rate", gpt4o and gpt4o[1], 2.50)
+	check("gpt-4o resolves completion rate", gpt4o and gpt4o[2], 10.00)
+
+	local sonnet5 = usage.priceFor("claude-sonnet-5")
+	check("claude-sonnet-5 resolves prompt rate", sonnet5 and sonnet5[1], 2.00)
+
+	local deepseek = usage.priceFor("deepseek-chat")
+	truthy("deepseek-chat resolves", deepseek ~= nil)
+
+	local gemini = usage.priceFor("gemini-3.8-flash")
+	check("gemini-3.8-flash resolves", gemini and gemini[1], 0.75)
+
+	-- OpenRouter prefixed names
+	local orGpt = usage.priceFor("openai/gpt-4o")
+	check("openai/gpt-4o resolves identically", orGpt and orGpt[1], 2.50)
+
+	local orClaude = usage.priceFor("anthropic/claude-sonnet-5")
+	check("anthropic/claude-sonnet-5 resolves identically", orClaude and orClaude[1], 2.00)
+
+	-- Dated snapshot prefix matching
+	local snapshot = usage.priceFor("gpt-4o-2024-11-20")
+	check("dated snapshot matches base model pricing", snapshot and snapshot[1], 2.50)
+
+	-- Local providers always cost $0.00
+	local ollamaPrice = usage.priceFor("llama-3.3-70b", { preset = "ollama" })
+	check("ollama preset costs nothing", ollamaPrice and ollamaPrice[1], 0)
+	check("ollama completion costs nothing", ollamaPrice and ollamaPrice[2], 0)
+
+	local localPrice = usage.priceFor("any-model", { baseUrl = "http://localhost:11434/v1" })
+	check("localhost endpoint costs nothing", localPrice and localPrice[1], 0)
+
+	-- OpenCode free models cost $0.00
+	local zen = { baseUrl = "https://opencode.ai/zen/v1" }
+	local pickle = usage.priceFor("big-pickle", zen)
+	check("big-pickle on OpenCode costs nothing", pickle and pickle[1], 0)
+	check("big-pickle completion costs nothing", pickle and pickle[2], 0)
+end)
+
 print(("="):rep(72))
 print(string.format("%d scenarios, %d checks passed, %d failed",
 	suite.scenarios, suite.passed, suite.failed))if suite.failed > 0 then
