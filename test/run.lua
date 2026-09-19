@@ -5387,6 +5387,21 @@ scenario("an OpenCode Zen record preserves its request compatibility headers", f
 	local fourth = requests[4] and requests[4].headers or {}
 	check("an unrelated host gets no session header", fourth["x-opencode-session"], nil)
 	check("and no opencode client header", fourth["x-opencode-client"], nil)
+
+	-- A separate conversation gets its own distinct session id.
+	local otherSession = handle.sessions.newThread()
+	handle.providers.setActive(record.id)
+	otherSession.send("separate conversation")
+	harness.settle(6)
+	local fifth = requests[5] and requests[5].headers or {}
+	local otherHeader = fifth["x-opencode-session"]
+	truthy("a separate conversation gets its own session id", otherHeader ~= first)
+	contains("separate conversation session id has canonical prefix", tostring(otherHeader or ""), "ses_")
+	truthy("separate conversation session id has canonical length", #(otherHeader or "") >= 25)
+	handle.sessions.persist(otherSession)
+	handle.sessions.restore()
+	local restored = handle.sessions.threads[otherSession.id]
+	check("restores preserved opencodeSession", restored and restored.opencodeSession, otherHeader)
 end)
 
 scenario("Zen detection and free labels do not imply account access", function()

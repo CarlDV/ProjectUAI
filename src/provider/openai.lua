@@ -610,7 +610,7 @@ return function(env)
 				end
 			end
 			local headers = registry.authHeaders(record, currentKey)
-			for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
+			for key, value in pairs(registry.opencodeHeaders(record, request)) do headers[key] = value end
 			for key, value in pairs(record.headers or {}) do headers[key] = value end
 			headers["Accept"] = (wantStream or registry.isOpencode(record)) and "text/event-stream" or "application/json"
 			return headers

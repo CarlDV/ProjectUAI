@@ -208,8 +208,61 @@ return function(env)
 	local function opencodeId(prefix)
 		return (prefix or "ses_") .. randomHex(12) .. randomBase62(14)
 	end
+	M.opencodeId = opencodeId
 
-	function M.opencodeHeaders(record)
+	local sessionCache = {}
+	M.opencodeSessionCache = sessionCache
+
+	function M.opencodeSessionFor(record, context)
+		local session = nil
+		local sessionId = nil
+		if type(context) == "table" then
+			if context.session then
+				session = context.session
+				sessionId = session.id or context.sessionId
+			elseif context.id and (type(context.emit) == "function" or type(context.send) == "function") then
+				session = context
+				sessionId = session.id
+			elseif context.sessionId then
+				sessionId = context.sessionId
+			end
+		elseif type(context) == "string" and context ~= "" then
+			sessionId = context
+		end
+
+		if session then
+			local existing = session.opencodeSession
+			if type(existing) == "string" and util.trim(existing) ~= "" and #existing >= 25 then
+				if session.id then sessionCache[session.id] = existing end
+				return existing
+			end
+			if session.id and sessionCache[session.id] then
+				session.opencodeSession = sessionCache[session.id]
+				return sessionCache[session.id]
+			end
+			local created = opencodeId("ses_")
+			session.opencodeSession = created
+			if session.id then sessionCache[session.id] = created end
+			return created
+		end
+
+		if sessionId then
+			if sessionCache[sessionId] then
+				return sessionCache[sessionId]
+			end
+			local created = opencodeId("ses_")
+			sessionCache[sessionId] = created
+			return created
+		end
+
+		if util.trim(record.opencodeSession or "") == "" or #record.opencodeSession < 25 then
+			record.opencodeSession = opencodeId("ses_")
+			M.save(record, { quiet = true })
+		end
+		return record.opencodeSession
+	end
+
+	function M.opencodeHeaders(record, context)
 		if not M.isOpencode(record) then return {} end
 		-- Match the current upstream CLI defaults; saved overrides remain supported.
 		local version, client = "1.18.31", "cli"
@@ -219,12 +272,9 @@ return function(env)
 			if configuredVersion ~= "" then version = configuredVersion end
 			if configuredClient ~= "" then client = configuredClient end
 		end
-		if util.trim(record.opencodeSession or "") == "" or #record.opencodeSession < 25 then
-			record.opencodeSession = opencodeId("ses_")
-			M.save(record, { quiet = true })
-		end
+		local sessionId = M.opencodeSessionFor(record, context)
 		return {
-			["x-opencode-session"] = record.opencodeSession,
+			["x-opencode-session"] = sessionId,
 			["x-opencode-request"] = opencodeId("req_"),
 			["x-opencode-project"] = "global",
 			["x-opencode-client"] = client,

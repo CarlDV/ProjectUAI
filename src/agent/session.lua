@@ -487,7 +487,7 @@ return function(env)
 			placeName = session.placeName,
 			updatedAt = session.updatedAt,
 			createdAt = session.createdAt,
-			turns = session.turns,
+			turns = session.turns, opencodeSession = session.opencodeSession,
 			context = session.ctx.serialise(),
 			transcript = transcriptOf(session),
 		})
@@ -509,7 +509,7 @@ return function(env)
 					session.named = data.named == true
 					session.createdAt = data.createdAt or session.createdAt
 					session.updatedAt = data.updatedAt or session.updatedAt
-					session.turns = data.turns or 0
+					session.turns = data.turns or 0; session.opencodeSession = data.opencodeSession
 					session.ctx.restore(data.context)
 					-- Replayed by the view in the order it happened. A file written before
 					-- transcripts were stored simply has none, and that conversation opens on

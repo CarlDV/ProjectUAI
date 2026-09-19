@@ -485,7 +485,7 @@ return function(env)
 		local function rebuildHeaders()
 			if #pool > 1 then currentKey = registry.nextKey(record) end
 			local headers = M.headers(record, currentKey)
-			for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
+			for key, value in pairs(registry.opencodeHeaders(record, request)) do headers[key] = value end
 			headers["Accept"] = wantStream and "text/event-stream" or "application/json"
 			return headers
 		end

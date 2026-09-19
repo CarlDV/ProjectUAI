@@ -39,11 +39,11 @@ return function(env)
 	-- The headers a record's requests carry, including the ones its wire protocol
 	-- requires. Model discovery hits the same host, so it asks for these too rather
 	-- than assembling auth itself and getting the Anthropic case wrong.
-	function M.headers(record)
+	function M.headers(record, request)
 		local adapter = M.adapterFor(record)
 		local registry = env.require("provider/registry")
 		local headers = adapter.headers and adapter.headers(record) or registry.authHeaders(record)
-		for key, value in pairs(registry.opencodeHeaders(record)) do headers[key] = value end
+		for key, value in pairs(registry.opencodeHeaders(record, request)) do headers[key] = value end
 		for key, value in pairs(record.headers or {}) do headers[key] = value end
 		return headers
 	end
