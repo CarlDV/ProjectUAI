@@ -198,7 +198,8 @@ return function(env)
 		})
 		P.text(bar, {
 			name = "Language",
-			text = (props.lang and props.lang:lower() or "code") .. (props.unterminated and " (incomplete)" or ""),
+			text = (props.label and (props.label .. " · ") or "")
+				.. (props.lang and props.lang:lower() or "code") .. (props.unterminated and " (incomplete)" or ""),
 			role = "caption",
 			color = theme.color.codeGutter,
 			-- Fills rather than reserving controlSmall: the copy button is sized to
@@ -892,6 +893,8 @@ return function(env)
 		{ key = "expression", lang = "lua" },
 		{ key = "patch", lang = "diff" },
 		{ key = "diff", lang = "diff" },
+		{ key = "old_text", label = "Before" },
+		{ key = "new_text", label = "After" },
 		-- Language from the path it is being written to, since a file_write is whatever
 		-- the extension says it is.
 		{ key = "content" },
@@ -928,15 +931,16 @@ return function(env)
 		local pathHint = args.path or args.file or args.name
 		for _, spec in ipairs(CODE_KEYS) do
 			local value = args[spec.key]
-			if type(value) == "string" and value ~= "" and not taken[spec.key] then
+			if type(value) == "string" and (value ~= "" or spec.label) and not taken[spec.key] then
 				-- Only a listing if there is something to look at. A one-line `text` is a
 				-- value, and a code card around three words is more chrome than content.
 				local multiline = value:find("\n") ~= nil
-				if spec.lang or multiline then
+				if spec.lang or spec.label or multiline then
 					code[#code + 1] = {
 						key = spec.key,
 						text = value,
 						lang = spec.lang or langForPath(pathHint),
+						label = spec.label,
 					}
 					taken[spec.key] = true
 				end
@@ -1323,6 +1327,7 @@ return function(env)
 				M.codeBlock(codeColumn, {
 					text = part.text,
 					lang = part.lang or part.key,
+					label = part.label,
 					maxLines = TOOL_CODE_LINES,
 					layoutOrder = index,
 				})
@@ -1439,11 +1444,14 @@ return function(env)
 		end
 
 		function handle.finish(result)
+			local stopped = result.error == "aborted" or (result.data and result.data.status == "aborted")
+			local timedOut = result.error == "timeout" or (result.data and result.data.status == "timeout")
+			local quiet = stopped or result.denied
 			pcall(function() spinner:Destroy() end)
 			dotSlot.Visible = true
 			dot.Visible = false
 			icons.draw(result.ok and "check" or "close", dotSlot, theme.size.icon - theme.space.hair,
-				result.ok and theme.color.success or (result.denied and theme.color.warn or theme.color.danger))
+				result.ok and theme.color.success or (quiet and theme.color.warn or theme.color.danger))
 
 			if result.ms then
 				timing.Text = result.ms >= 1000 and util.formatDuration(result.ms) or string.format("%dms", result.ms)
@@ -1454,19 +1462,19 @@ return function(env)
 			end
 			if not result.ok then
 				timing.TextColor3 = theme.color.danger
-				setTone(result.denied and theme.color.warn or theme.color.dangerBorder)
+				setTone(quiet and theme.color.warn or theme.color.dangerBorder)
 			else
 				timing.TextColor3 = theme.color.textTertiary
 				setTone(nil)
 			end
 			local text = tostring(result.text or "")
 			if not result.ok then
-				timing.Text = result.denied and "Declined" or "Failed"
-				timing.TextColor3 = result.denied and theme.color.warn or theme.color.danger
+				timing.Text = stopped and "Stopped" or (timedOut and "Timed out" or (result.denied and "Declined" or "Failed"))
+				timing.TextColor3 = quiet and theme.color.warn or theme.color.danger
 				timingPill.Visible = true
 			end
 			preview.Text = util.ellipsis(text:gsub("[\n\r]+", " "), ARG_PREVIEW)
-			preview.TextColor3 = result.ok and theme.color.textTertiary or theme.color.danger
+			preview.TextColor3 = result.ok and theme.color.textTertiary or (quiet and theme.color.warn or theme.color.danger)
 
 			-- An ask's result is the user's own answer, and the one thing on a finished
 			-- row worth reading at a glance: "You answered: X" on the header rather
@@ -1478,10 +1486,11 @@ return function(env)
 			local label = P.text(resultHolder, {
 				name = "ResultLabel",
 				text = isAnswer and "You answered"
-				or (result.ok and "Result" or (result.denied and "Permission declined" or "Execution failed")),
+				or (result.ok and "Result" or (stopped and "Execution stopped"
+					or (timedOut and "Execution timed out" or (result.denied and "Permission declined" or "Execution failed")))),
 				role = "label",
 				color = isAnswer and theme.color.accent
-					or (result.ok and theme.color.textTertiary or theme.color.danger),
+					or (result.ok and theme.color.textTertiary or (quiet and theme.color.warn or theme.color.danger)),
 				auto = "Y",
 				layoutOrder = 1,
 			})

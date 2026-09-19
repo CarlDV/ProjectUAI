@@ -138,22 +138,22 @@ else
 end
 
 local files = {}
--- `dir /b /s` and `find` both answer with absolute paths, so the module id is
--- taken from the text after the scanned folder's own name rather than by
--- subtracting the (possibly relative) base string.
+local function moduleId(path)
+	local clean = path:gsub("\\", "/")
+	return clean:match(".*/src/(.+)%.lua$") or clean:match("^src/(.+)%.lua$")
+end
+
+-- IDs are always relative to src/, even when only src/tools is being checked.
 local function addTree(dir)
 	local base = dir:gsub("\\", "/"):gsub("/+$", "")
-	local tail = base:match("([^/]+)$") or base
-	local pattern = ".*/" .. tail:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1") .. "/(.+)$"
 	for _, path in ipairs(listFiles(base)) do
-		local rel = (path:match(pattern) or path:match("([^/]+)$")):gsub("%.lua$", "")
-		files[#files + 1] = { path = path, id = rel }
+		files[#files + 1] = { path = path, id = moduleId(path) }
 	end
 end
 
 for _, target in ipairs(targets) do
 	if target:match("%.lua$") then
-		files[#files + 1] = { path = target:gsub("\\", "/") }
+		files[#files + 1] = { path = target:gsub("\\", "/"), id = moduleId(target) }
 	else
 		addTree(target)
 	end
@@ -164,6 +164,11 @@ if not (arg and arg[1]) then
 end
 
 local known, order = {}, {}
+-- A targeted check still resolves imports against the whole source tree.
+for _, path in ipairs(listFiles(ROOT .. "/src")) do
+	local id = moduleId(path)
+	if id then known[id] = path end
+end
 for _, item in ipairs(files) do
 	if item.id then
 		known[item.id] = item.path
@@ -172,6 +177,11 @@ for _, item in ipairs(files) do
 end
 
 local failures, warnings, checked = 0, 0, 0
+
+if #files == 0 then
+	print("FAIL no Lua files matched the requested paths")
+	os.exit(1)
+end
 
 print("uai check: " .. #files .. " file(s)")
 print(("-"):rep(72))

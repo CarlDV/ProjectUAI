@@ -346,10 +346,15 @@ return function(env)
 				view.tools[event.id or util.uid("tool")] = handle
 				follow()
 			elseif event.kind == "tool:progress" then
-				-- Progress has no id: it belongs to whichever call is still open.
-				for _, handle in pairs(view.tools) do
-					if handle.progress then handle.progress(event.text) end
+				local handle = event.id and view.tools[event.id]
+				-- Older hosts may emit unaddressed progress. It is only unambiguous
+				-- when a single call is open; never copy it onto unrelated parallel work.
+				if not event.id and util.count(view.tools) == 1 then
+					local _, only = next(view.tools)
+					handle = only
 				end
+				if handle and handle.progress then handle.progress(event.text) end
+				follow()
 			elseif event.kind == "tool:result" or event.kind == "tool:error" then
 				local handle = view.tools[event.id]
 				if handle then

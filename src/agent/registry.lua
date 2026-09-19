@@ -247,6 +247,32 @@ return function(env)
 		result.risk = tool.risk
 		result.group = tool.group
 
+		-- Advertised tools can become stale while a request or approval is pending.
+		-- Enforce the conversation's actual scope at dispatch as well as discovery.
+		local function blocked()
+			local owner = ctx and ctx.session
+			local reason
+			if ctx and ctx.aborted and ctx.aborted() then
+				result.error = "aborted"
+				result.text = "Stopped before " .. name .. " ran."
+			elseif not M.groupEnabled(tool.group) then
+				reason = "its tool group is disabled"
+			elseif owner and ((owner.toolFilter and not owner.toolFilter[name])
+				or (owner.toolGroups and not owner.toolGroups[tool.group])
+				or (owner.toolExclude and owner.toolExclude[name])) then
+				reason = "it is outside this conversation's tool scope"
+			else
+				return false
+			end
+			if reason then
+				result.error = "tool disabled"
+				result.text = name .. " was not run: " .. reason .. ". Do not retry it in this conversation."
+			end
+			result.ms = clock.since(started)
+			return true
+		end
+		if blocked() then return result end
+
 		local missing = M.missingCapability(tool)
 		if missing then
 			result.text = string.format("%s is unavailable: %s. Do not retry this tool.",
@@ -288,6 +314,7 @@ return function(env)
 		end
 
 		local allowed, source = permissions.request(tool, coerced, ctx)
+		if blocked() then return result end
 		if not allowed then
 			result.text = string.format("The user did not approve %s (%s). Do not retry it; ask what to do instead.",
 				name, source or "denied")
@@ -312,16 +339,32 @@ return function(env)
 		-- live feed has to appear under the call that started it. Shallow, deliberately:
 		-- ctx carries the session and the module env, and a deep copy of either would be
 		-- both enormous and wrong.
-		local scoped = ctx
-		if type(ctx) == "table" then
-			scoped = util.copy(ctx)
-			scoped.callId = call.id
+		local scoped = type(ctx) == "table" and util.copy(ctx) or {}
+		local expired, settled = false, false
+		scoped.callId = call.id
+		scoped.aborted = function()
+			return expired or (ctx and ctx.aborted and ctx.aborted()) or false
+		end
+		if ctx and ctx.emit then
+			scoped.emit = function(kind, value)
+				if settled then return end
+				if kind == "tool:progress" then
+					local payload = type(value) == "table" and util.copy(value) or { text = tostring(value) }
+					payload.id, payload.name = call.id, name
+					ctx.emit(kind, payload)
+				else
+					ctx.emit(kind, value)
+				end
+			end
+			scoped.progress = function(text) scoped.emit("tool:progress", { text = tostring(text) }) end
 		end
 		local finished, ok, value = clock.timeout(timeout, function()
 			return tool.run(coerced, scoped)
 		end)
+		settled = true
 
 		if not finished then
+			expired = true
 			result.text = string.format(
 				"%s did not finish within %ds. It may still be running, but nothing will collect its result, so treat it as lost. Do not retry the same call.",
 				name, timeout)
@@ -374,7 +417,7 @@ return function(env)
 	-- runs on its own thread, up to `agent.toolConcurrency` at a time. Dispatch
 	-- carries its own timeout, so the batch cannot outlive the slowest permitted
 	-- call by more than a poll interval.
-	function M.runAll(calls, ctx)
+	function M.runAll(calls, ctx, onResult)
 		local total = #calls
 		local results = {}
 		if total == 0 then return results end
@@ -400,6 +443,10 @@ return function(env)
 							ms = 0,
 						}
 						log.error("tools", "dispatch crashed", value)
+					end
+					if onResult then
+						local notified, err = pcall(onResult, results[index], index)
+						if not notified then log.warn("tools", "result subscriber failed", err) end
 					end
 					completed = completed + 1
 				end)

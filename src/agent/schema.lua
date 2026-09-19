@@ -13,6 +13,27 @@ return function(env)
 
 	-- Repair -----------------------------------------------------------------
 
+	-- Repair JSON punctuation and literals, never the source code or file contents
+	-- inside a quoted argument. An invalid outer object must not rewrite its data.
+	local function outsideStrings(text, transform)
+		local parts, at = {}, 1
+		while at <= #text do
+			local quote = text:find('"', at, true)
+			if not quote then parts[#parts + 1] = transform(text:sub(at)); break end
+			parts[#parts + 1] = transform(text:sub(at, quote - 1))
+			local finish = quote + 1
+			while finish <= #text do
+				local char = text:sub(finish, finish)
+				if char == "\\" then finish = finish + 2
+				elseif char == '"' then finish = finish + 1; break
+				else finish = finish + 1 end
+			end
+			parts[#parts + 1] = text:sub(quote, finish - 1)
+			at = finish
+		end
+		return table.concat(parts)
+	end
+
 	-- Walks the text tracking string state, so a brace inside a string literal
 	-- does not count towards the balance. Returns the closers needed, and whether
 	-- a string was left open.
@@ -66,15 +87,17 @@ return function(env)
 			text = slice
 		end
 
-		local noTrailing = text:gsub(",%s*([%}%]])", "%1")
+		local noTrailing = outsideStrings(text, function(part) return (part:gsub(",%s*([%}%]])", "%1")) end)
 		local attempt = util.decode(noTrailing)
 		if type(attempt) == "table" then return attempt, "removed a trailing comma" end
 		text = noTrailing
 
 		-- Python-flavoured literals show up from some fine-tunes.
-		local pythonic = text:gsub("%f[%w]None%f[%W]", "null")
-			:gsub("%f[%w]True%f[%W]", "true")
-			:gsub("%f[%w]False%f[%W]", "false")
+		local pythonic = outsideStrings(text, function(part)
+			return (part:gsub("%f[%w_]None%f[^%w_]", "null")
+				:gsub("%f[%w_]True%f[^%w_]", "true")
+				:gsub("%f[%w_]False%f[^%w_]", "false"))
+		end)
 		if pythonic ~= text then
 			attempt = util.decode(pythonic)
 			if type(attempt) == "table" then return attempt, "converted Python literals" end
@@ -82,9 +105,9 @@ return function(env)
 		end
 
 		local closers, openString = scanBalance(text)
-		if openString or closers ~= "" then
+		if openString then return nil, "arguments ended inside a string; send the complete JSON object" end
+		if closers ~= "" then
 			local patched = text
-			if openString then patched = patched .. '"' end
 			-- A truncated object usually ends mid-value; dropping the dangling
 			-- key-value pair is more likely to parse than closing around it.
 			local candidates = {
@@ -121,7 +144,6 @@ return function(env)
 		if wanted == "number" or wanted == "integer" then
 			local number = tonumber(value)
 			if number == nil then return value, false end
-			if wanted == "integer" then number = math.floor(number) end
 			return number, true
 		end
 		if wanted == "string" then
@@ -177,6 +199,13 @@ return function(env)
 		end
 
 		if wanted == "number" or wanted == "integer" then
+			if value ~= value or value == math.huge or value == -math.huge then
+				out.errors[#out.errors + 1] = path .. " must be a finite number"
+				return value
+			end
+			if wanted == "integer" and value ~= math.floor(value) then
+				out.errors[#out.errors + 1] = path .. " must be a whole number"
+			end
 			if schema.minimum and value < schema.minimum then
 				out.errors[#out.errors + 1] = string.format("%s must be at least %s", path, tostring(schema.minimum))
 			end
@@ -187,6 +216,9 @@ return function(env)
 
 		if wanted == "string" and schema.maxLength and #value > schema.maxLength then
 			out.errors[#out.errors + 1] = string.format("%s is longer than %d characters", path, schema.maxLength)
+		end
+		if wanted == "string" and schema.minLength and #value < schema.minLength then
+			out.errors[#out.errors + 1] = string.format("%s must contain at least %d characters", path, schema.minLength)
 		end
 
 		if actual == "object" and type(schema.properties) == "table" then

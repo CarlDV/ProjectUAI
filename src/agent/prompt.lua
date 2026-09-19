@@ -33,6 +33,14 @@ How to work:
   active.
 - Run independent lookups in the same step. Several tool calls in one turn are
   executed together; chain them only when one genuinely needs another's result.
+- Use check_luau to validate complex code before execution. run_luau captures
+  print/warn and all return values, including tables. It waits for functions
+  started with task.spawn/defer/delay; the default deadline is 10 seconds and the
+  timeout argument can extend it to 60. Those tasks are scoped to the call, so do
+  not start an endless background task and expect it to survive the deadline.
+- file_read and script_source return contiguous slices with continuation offsets.
+  Follow those offsets to inspect the rest. Use file_edit for exact replacements
+  after reading a file; include enough surrounding text to make the match unique.
 - One tool call that fails the same way twice will fail a third time. Change the
   approach instead of repeating it.
 - If a tool reports that a capability is unavailable in this host, do not retry
@@ -75,8 +83,10 @@ Care:
   character from what the tool returned. Never retype it from memory; a paraphrase
   presented as a quote is a fabricated result.
 - Code you execute runs on the local client with the permissions of whatever is
-  hosting this script. Do not write code that loops without yielding: use
-  task.wait() inside any loop, or the client freezes and nothing can stop it.
+  hosting this script. Keep it bounded and use task.wait() to pace repeated work.
+  run_luau adds cooperative loop checkpoints, but dynamically loaded code, event
+  callbacks and blocking engine calls can bypass them. This is not a security
+  sandbox, and cancellation does not undo changes that already happened.
 - Do not disable, bypass or work around the permission prompts.]]
 
 	-- Without this block the model has no picture of what is routine in an

@@ -19,6 +19,18 @@ return function(env)
 
 	local M = {}
 
+	local function stopped(session)
+		session.emit("abort", {})
+		session.emit("status", { text = "Ready" })
+		return "Stopped."
+	end
+
+	local function failed(session, text)
+		session.emit("turn:end", { text = text, failed = true })
+		session.emit("status", { text = "Ready" })
+		return text
+	end
+
 	local function callSignature(calls)
 		local parts = {}
 		for _, call in ipairs(calls or {}) do
@@ -178,12 +190,11 @@ return function(env)
 		while unlimited or turn < maxTurns do
 			turn = turn + 1
 			if session.aborted() then
-				session.emit("abort", {})
-				return "Stopped."
+				return stopped(session)
 			end
 			if deadline and clock.ms() > deadline then
 				session.emit("error", { message = "This turn ran out of time.", fatal = false })
-				return "I ran out of time on this turn. Ask me to continue if you want me to keep going."
+				return failed(session, "I ran out of time on this turn. Ask me to continue if you want me to keep going.")
 			end
 
 			session.emit("status", { text = turn == 1 and "Thinking" or ("Working (step " .. turn .. ")") })
@@ -228,11 +239,10 @@ return function(env)
 
 			if not result then
 				if err == "aborted" then
-					session.emit("abort", {})
-					return "Stopped."
+					return stopped(session)
 				end
 				session.emit("error", { message = err, fatal = true })
-				return "I could not reach a provider. " .. tostring(err)
+				return failed(session, "I could not reach a provider. " .. tostring(err))
 			end
 
 			usage.record(result.usage, result.model or (record and record.model), {
@@ -297,7 +307,11 @@ return function(env)
 					and ("Running " .. ((result.toolCalls[1]["function"] or {}).name or "tool"))
 					or ("Running " .. util.pluralise(#result.toolCalls, "tool")) })
 
-				local results = registry.runAll(result.toolCalls, session.toolContext())
+				-- The transcript sees a result as soon as that call finishes. Keep the
+				-- model's results in original call order after the entire batch settles.
+				local results = registry.runAll(result.toolCalls, session.toolContext(), function(outcome)
+					session.emit(outcome.ok and "tool:result" or "tool:error", outcome)
+				end)
 
 				for index, call in ipairs(result.toolCalls) do
 					local outcome = results[index] or {
@@ -307,12 +321,8 @@ return function(env)
 						text = "The tool produced no result.",
 					}
 					ctx.pushToolResult(call.id, outcome.name, outcome.text)
-					if outcome.ok then
-						session.emit("tool:result", outcome)
-					else
-						session.emit("tool:error", outcome)
-					end
 				end
+				if session.aborted() then return stopped(session) end
 			end
 		end
 

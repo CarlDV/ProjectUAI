@@ -58,8 +58,8 @@ provider-controlled, so compatibility headers do not guarantee availability.
 on a host with no executor HTTP function the client says the identity did not
 reach the wire rather than pretending it did.
 
-**About sixty tools**, all of which work in any game: the instance tree,
-properties with type-aware conversion, sandboxed Luau execution, files, HTTP, web
+**Native tools for any game**: the instance tree,
+properties with type-aware conversion, bounded Luau execution, files, HTTP, web
 search and page reading, players, your character, raycasts and lighting and the
 camera, remotes (discover, fire, watch), on-screen interfaces, diagnostics, place
 and account metadata, plus the agent's own task list, memory and subagent
@@ -183,7 +183,7 @@ src/net/              ua, http, sse, ws, bridge
 src/provider/         catalog, registry, openai, anthropic, chat, models, traits
 src/agent/            prompt, context, schema, registry, permissions,
                       hooks, state, usage, stats, loop, session, subagent
-src/tools/            13 groups behind one registry
+src/tools/            native tool groups behind one registry
 src/ui/               theme, responsive, icons, primitives, controls,
                       overlay, markdown, window, sidebar, app,
                       settingsrows, settingspanes, chat/*, panels/*
@@ -197,19 +197,20 @@ counted and where it is persisted, and the authoring rules.
 
 ## Building and testing
 
-Everything runs offline under LuaJIT. There is no Luau interpreter outside
-Roblox, so the sources are written in a dialect LuaJIT can also parse -- no type
+The offline suite runs under LuaJIT. The sources use a dialect LuaJIT can also parse -- no type
 annotations, no backtick interpolation, no `continue` -- and `test/check.lua`
 fails the build on a violation.
 
 ```bash
-luajit test/check.lua      # lint, parse and link all 74 modules
+luajit test/check.lua      # lint, parse and link all modules
 luajit tools/bundle.lua    # src/ + init.lua -> dist/uai.lua
 luajit test/run.lua        # full scenarios against the built bundle
 luajit test/chat_regressions.lua
 luajit test/config_transfer.lua
 luajit test/build_reload.lua
 luajit test/audit_regressions.lua
+luajit test/execution_tools.lua
+luajit test/execution_ui.lua
 luajit test/controls_loading.lua
 luajit test/controls_interactions.lua
 luajit test/markdown_regressions.lua
@@ -334,6 +335,7 @@ luajit test/web_runtime.lua
 luajit test/bridge_install.lua
 # Optional browser checks, with Playwright installed:
 node bridge/test-browser.js
+node bridge/test-browser-workflows.js
 ```
 
 Loopback only, token-gated, and Origin-checked. Whoever reaches it drives an agent
@@ -371,10 +373,28 @@ where providers put reasoning text and per-request usage. `net/ws.lua` does real
 token streaming for a gateway that speaks a small WebSocket envelope, when the
 executor exposes `WebSocket.connect`.
 
-A Luau loop that never yields cannot be interrupted by anything, including this
-client's own timeouts. `run_luau` rewrites the two unconditional freeze forms and
-reports honestly when a script outlives its deadline: the thread was abandoned,
-not stopped.
+`check_luau` checks syntax without executing code. `run_luau` captures print/warn,
+tables, and multiple return values, and inserts cooperative checkpoints in loop
+bodies without changing strings or comments. Its `timeout` argument accepts 1–60
+seconds and defaults to 10. It waits for functions started through its
+`task.spawn`, `task.defer`, and `task.delay` wrappers; errors, Stop, deadlines, and
+unload cancel those managed tasks. An endless spawned task therefore ends at the
+deadline rather than continuing silently after the tool returns.
+
+This is not a security sandbox. Dynamically compiled code, blocking engine calls,
+and callbacks registered on engine signals can bypass these controls. Later work
+in a persistent engine callback is outside a successfully completed call. Hosts
+without usable `task.cancel` fall back to cooperative cancellation and report the
+remaining uncertainty. Changes already made are not rolled back.
+
+`file_read` and `script_source` return contiguous slices and a continuation
+`offset` when more remains. Offsets count bytes and preserve UTF-8 boundaries.
+After reading a workspace file, use `file_edit` with exact `old_text` and `new_text`
+to change it. The default requires a unique match; `replace_all=true` replaces all
+non-overlapping matches. Empty replacement text deletes the match. The tool refuses
+a file that changed while the edit was being prepared.
+
+See [CHANGELOG.md](CHANGELOG.md) or **What's New** for the latest release notes.
 
 ## Unloading
 

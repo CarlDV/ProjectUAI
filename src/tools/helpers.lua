@@ -299,6 +299,36 @@ return function(env)
 		return math.floor(util.clamp(number, 1, ceiling or 200))
 	end
 
+	-- A contiguous, resumable slice. Leave room for its cursor inside the registry's
+	-- result budget so a second truncation cannot silently remove the middle.
+	function H.readSlice(name, content, args, defaultLimit)
+		args = args or {}
+		local cap = tonumber(env.require("runtime/config").get("agent.resultCap", 8000)) or 8000
+		if cap < 256 then return H.fail("increase the tool result budget to at least 256 bytes before reading files") end
+		local offset = math.max(1, math.floor(tonumber(args.offset) or 1))
+		if offset > #content + 1 then return H.fail("offset is past the end; this source has " .. #content .. " bytes") end
+		while offset > 1 do
+			local byte = content:byte(offset)
+			if not byte or byte < 128 or byte >= 192 then break end
+			offset = offset - 1
+		end
+		local label = util.ellipsis(name, 100)
+		local limit = math.max(4, math.min(tonumber(args.limit) or defaultLimit or 6000, cap - 220))
+		local last = math.min(#content, offset + math.floor(limit) - 1)
+		while last >= offset and last < #content do
+			local byte = content:byte(last + 1)
+			if byte < 128 or byte >= 192 then break end
+			last = last - 1
+		end
+		local nextOffset = last < #content and last + 1 or nil
+		local header = string.format("%s (bytes %d-%d of %d%s):\n", label, offset, last, #content,
+			nextOffset and ("; continue with offset=" .. nextOffset) or "; end of file")
+		if #content == 0 then header = label .. " (empty, 0 bytes):\n" end
+		return { text = header .. content:sub(offset, last), data = {
+			offset = offset, nextOffset = nextOffset, totalBytes = #content, eof = nextOffset == nil,
+		} }
+	end
+
 	-- A tool that could not do what was asked returns this rather than a bare
 	-- string, so the registry can mark the call as failed and the transcript can
 	-- colour it. The model sees the same sentence either way.

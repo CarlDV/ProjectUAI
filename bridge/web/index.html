@@ -12,7 +12,7 @@
   </form></main>
   <div id="app" hidden>
     <aside id="sidebar">
-      <div class="sidebar-top"><button id="newThread" title="New conversation">＋</button><button id="searchThreads" title="Search conversations">⌕</button><span>Project UAI</span><button id="closeSidebar" aria-label="Close sidebar">×</button></div>
+      <div class="sidebar-top"><button id="newThread" title="New conversation" aria-label="New conversation">＋</button><button id="searchThreads" title="Search conversations" aria-label="Search conversations" aria-controls="threadSearch" aria-expanded="false">⌕</button><span>Project UAI</span><button id="closeSidebar" aria-label="Close sidebar">×</button></div>
       <div class="segments"><button data-page="cowork">▣ Cowork</button><button data-page="chat" class="selected">✳ Chat</button></div>
       <button id="newConversation" class="outline">＋ <span>New conversation</span></button>
       <button data-page="settings" class="nav-row">☷ Customize</button>
@@ -24,13 +24,13 @@
       <button id="profile" data-page="settings"><img src="icon.svg" width="24" height="24" alt=""><span><strong id="playerName">you</strong><small id="providerName">No provider connected</small></span><span>⌃</span></button>
     </aside>
     <div class="workspace">
-      <header><button id="sidebarToggle" aria-label="Toggle sidebar">☰</button><strong id="pageTitle">Chat</strong><span id="status" class="muted">Connecting…</span><span class="spacer"></span><button id="runtimeBadge" data-page="cowork">Game runtime</button><button id="exportChat" title="Export conversation">Export</button><button id="clear" title="Clear conversation">Clear</button></header>
+      <header><button id="sidebarToggle" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="true">☰</button><strong id="pageTitle">Chat</strong><span id="status" class="muted" role="status">Connecting…</span><span class="spacer"></span><button id="runtimeBadge" data-page="cowork">Game runtime</button><button id="exportChat" title="Export conversation">Export</button><button id="clear" title="Clear conversation">Clear</button></header>
       <section id="chatPage">
         <div id="taskStrip" hidden></div><div id="loopStrip" hidden></div>
         <main id="transcript" aria-live="polite"></main><button id="latest" hidden>↓ Jump to latest</button>
         <div id="questions"></div>
         <footer class="composer-wrap"><div id="attachments"></div><div class="composer">
-          <button id="attach" aria-label="Attach files">＋</button><input id="fileInput" type="file" multiple hidden>
+          <button id="attach" aria-label="Attach text or code files">＋</button><input id="fileInput" type="file" accept="text/*,.lua,.luau,.json,.md,.js,.ts,.tsx,.jsx,.py,.csv,.yaml,.yml,.toml,.html,.css,.log" multiple hidden>
           <textarea id="input" rows="1" placeholder="Message UAI…" aria-label="Message"></textarea>
           <button id="modelButton"><span class="dot"></span><span id="modelLabel">Select model</span><span>⌄</span></button>
           <button id="options" aria-label="Composer options">···</button><button id="send" class="primary" aria-label="Send message">↑</button><button id="stop" class="danger" hidden aria-label="Stop turn">■</button>
@@ -39,7 +39,7 @@
       <main id="panel" hidden></main>
     </div>
   </div>
-  <dialog id="modal"><div class="modal-head"><h2 id="modalTitle"></h2><button id="modalClose" aria-label="Close dialog">×</button></div><div id="modalBody"></div></dialog>
+  <dialog id="modal" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle"></h2><button id="modalClose" aria-label="Close dialog">×</button></div><div id="modalBody"></div></dialog>
   <div id="toast" role="status" hidden></div>
   <script src="markdown.js"></script><script src="app.js"></script>
 </body>

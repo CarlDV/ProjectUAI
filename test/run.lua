@@ -5925,7 +5925,7 @@ scenario("a long paste becomes a file, not a wall of context", function()
 	-- the point is that the whole body is reachable, and the file reports its full
 	-- size on the first line.
 	contains("with the body", read.text, "local value50")
-	contains("and its true size stated", read.text, "18739 characters")
+	contains("and its true size stated", read.text, "of 18739;")
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)

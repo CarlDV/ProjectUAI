@@ -140,7 +140,22 @@ takes a typed id, and saving requires one.
 `depth` (subagent nesting) and `budget`. A handler returns a string, or a table
 `{ text = "...", data = <table> }` when the UI can render something richer. A
 handler may yield. Raising an error is caught and reported to the model as a tool
-error, not a crash.
+error, not a crash. Returning `{ ok = false, text = "..." }` reports a semantic
+failure without raising. Dispatch rechecks disabled groups and the session's tool
+filters before execution, including after a pending approval resolves.
+
+`run_luau` uses a separate managed executor with a default 10-second deadline
+(configurable to 1–60 seconds), cooperative loop checkpoints, bounded output, and
+capture of multiple returns. Functions scheduled through its task wrappers share
+the deadline and complete before the result is delivered. Stop, failure, timeout,
+and unload cancel managed tasks, using `task.cancel` where available and honest
+cooperative fallback reporting otherwise. Dynamically loaded code, native engine
+calls, and persistent engine-signal callbacks are outside this guarantee.
+
+`check_luau` only compiles. `file_edit` requires an exact unique match unless
+replace-all is explicit, permits empty replacement text, and refuses stale file
+contents. `file_read` and `script_source` use contiguous UTF-8 slices with 1-based
+byte offsets and continuation cursors; each slice fits the registry's result budget.
 
 ## 6. Event stream
 
@@ -160,7 +175,7 @@ stamped by `session.emit`.
 | `assistant:text` | `{ text, final }` |
 | `assistant:reasoning` | `{ text }` |
 | `tool:call` | `{ id, name, group, risk, arguments }` (arguments is the raw JSON string) |
-| `tool:progress` | `{ text }` |
+| `tool:progress` | `{ id, name, text }` — scoped to its originating call |
 | `tool:result` / `tool:error` | the dispatch result: `{ id, name, ok, text, ms, risk, group, args, error, full, truncated, data }` |
 | `permission:ask` | `{ id, name, group, risk, description, args, resolve }` |
 | `usage` | `{ session, turn }` — the two counter tables from `agent/usage` |
@@ -172,6 +187,11 @@ stamped by `session.emit`.
 | `cleared` | `{}` |
 | `error` | `{ message, fatal }` |
 | `abort` | `{}` |
+
+Parallel tool results are emitted as each call finishes. The batch still returns
+results in the original call order for model context. A progress event without an
+ID is rendered only when one call is open, so legacy emitters cannot overwrite the
+status of unrelated parallel work. Failed and stopped turns restore Ready status.
 
 The task list does not travel on this stream: `agent/state` owns it and publishes
 `todosChanged(items, session)`, because the list outlives a turn and a panel opened

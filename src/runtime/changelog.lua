@@ -23,6 +23,35 @@ return function(env)
 
 	local ENTRIES = {
 		{
+			version = "1.3.0",
+			date = "September 19, 2026",
+			title = "Reliable code execution and clearer tool workflows",
+			highlights = "Cancellable Luau execution, syntax checks, exact file edits, resumable source reading, and a more dependable chat interface in Roblox and Cowork.",
+			sections = {
+				{ category = "added", items = {
+					"check_luau validates source with the executor's compiler without running it.",
+					"file_edit replaces exact text, rejects ambiguous or stale matches, and supports explicit replace-all and deletion.",
+					"file_read and script_source provide contiguous UTF-8 slices with continuation offsets, including long saved pastes.",
+				} },
+				{ category = "improved", items = {
+					"run_luau captures print/warn, readable tables, and multiple return values. Its configurable 1–60 second deadline includes tasks started with task.spawn/defer/delay.",
+					"Cooperative loop checkpoints keep ordinary loops responsive; Stop, deadlines, and unload cancel managed execution and report cancellation limits honestly.",
+					"Parallel tool results appear as each call finishes. Progress belongs to its own call, and the transcript distinguishes stopped, timed-out, and failed work.",
+					"Exact edits display labelled Before and After code listings. Cowork adds multiline code inputs, typed parameter controls, inline validation, and copyable code and output.",
+					"Cowork preserves reading position and newer drafts and attachments during sends; compact layouts and accessible control labels work down to 320px.",
+				} },
+				{ category = "fixed", items = {
+					"Compile and runtime errors now fail the tool call. Loop guards and JSON repairs preserve quoted source, and incomplete string arguments are rejected.",
+					"Explicitly cancelled Luau tasks stay cancelled after their parent succeeds, even on hosts without working native cancellation. Self-cancellation stops the current task immediately.",
+					"Disabled groups and conversation tool restrictions are enforced again before execution, including calls waiting for approval.",
+					"Failed and stopped turns return to Ready, including a Stop on the last allowed step. Child tool summaries and tool-only restored conversations remain visible.",
+					"Filesystem errors no longer look like successful writes or empty listings; failed append reads preserve the file, and ambiguous Windows path segments are rejected.",
+					"Cowork handles IME input and unavailable browser storage, retains empty replacement strings, and attaches asynchronously read files to their original conversation.",
+					"Targeted source checks resolve dependencies against the full source tree and reject empty scan targets.",
+				} },
+			},
+		},
+		{
 			version = "1.2.0",
 			date = "September 19, 2026",
 			title = "UI repair, Markdown tables, and managed chat loops",

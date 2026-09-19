@@ -22,6 +22,10 @@ return function(env)
 		for _, part in ipairs(util.split(clean, "/")) do
 			if part == ".." then return nil, "path may not contain '..'" end
 			if part == "." then return nil, "path may not contain '.'" end
+			if part:find("[%z\1-\31\127]") then return nil, "path contains a control character" end
+			-- Windows strips these suffixes, so '.. ' otherwise escapes a scope even
+			-- though it passed the literal '..' check above.
+			if part:match("[%. ]$") then return nil, "path segments may not end in a dot or space" end
 			if part:find('[<>:"|%?%*]') then return nil, "path contains a reserved character" end
 		end
 		if #clean > 180 then return nil, "path is too long" end
@@ -99,6 +103,7 @@ return function(env)
 		if not M.exists(path, opts) then return nil, "no such file: " .. full end
 		local ok, content = pcall(caps.fn.readfile, full)
 		if not ok then return nil, tostring(content) end
+		if type(content) ~= "string" then return nil, "host returned no file contents: " .. full end
 		return content
 	end
 
@@ -108,7 +113,8 @@ return function(env)
 		if not full then return false, err end
 		M.ensure(full:match("^(.*)/[^/]*$") or M.root)
 		local ok, writeErr = pcall(caps.fn.writefile, full, tostring(content))
-		if not ok then
+		if not ok or writeErr == false then
+			if writeErr == false then writeErr = "host refused to write " .. full end
 			log.warn("fsx", "write failed: " .. full, writeErr)
 			return false, tostring(writeErr)
 		end
@@ -122,11 +128,16 @@ return function(env)
 		M.ensure(full:match("^(.*)/[^/]*$") or M.root)
 		if caps.fn.appendfile then
 			local ok, appendErr = pcall(caps.fn.appendfile, full, tostring(content))
-			if ok then return true, full end
+			if ok and appendErr ~= false then return true, full end
+			if appendErr == false then appendErr = "host refused to append to " .. full end
 			return false, tostring(appendErr)
 		end
 		-- Not every host has appendfile; read-modify-write is correct, just worse.
-		local existing = M.read(path, opts) or ""
+		local existing, readErr = M.read(path, opts)
+		if existing == nil then
+			if M.exists(path, opts) then return false, readErr end
+			existing = ""
+		end
 		return M.write(path, existing .. tostring(content), opts)
 	end
 
@@ -137,6 +148,8 @@ return function(env)
 		if M.isDir(path, opts) then
 			if not caps.fn.delfolder then return false, "this host cannot delete folders" end
 			local ok, delErr = pcall(caps.fn.delfolder, full)
+			ok = ok and delErr ~= false
+			if delErr == false then delErr = "host refused to delete " .. full end
 			if ok then
 				-- A later write must recreate this directory and every cached descendant.
 				local removed = full:gsub("/+$", "")
@@ -149,6 +162,8 @@ return function(env)
 		end
 		if not caps.fn.delfile then return false, "this host cannot delete files" end
 		local ok, delErr = pcall(caps.fn.delfile, full)
+		ok = ok and delErr ~= false
+		if delErr == false then delErr = "host refused to delete " .. full end
 		return ok, ok and full or tostring(delErr)
 	end
 
@@ -175,7 +190,8 @@ return function(env)
 		end
 		local scopePrefix = (base ~= M.root) and (base:sub(#M.root + 2) .. "/") or ""
 		local ok, entries = pcall(caps.fn.listfiles, full)
-		if not ok or type(entries) ~= "table" then return {} end
+		if not ok then return {}, tostring(entries) end
+		if type(entries) ~= "table" then return {}, "host returned an invalid file listing" end
 		local out = {}
 		for _, entry in ipairs(entries) do
 			local normal = tostring(entry):gsub("\\", "/")
