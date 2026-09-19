@@ -234,9 +234,18 @@ return function(env)
 			end
 		end
 
-		if actual == "array" and type(schema.items) == "table" then
-			for index, item in ipairs(value) do
-				value[index] = checkValue(schema.items, item, string.format("%s[%d]", path, index), out)
+		if actual == "array" then
+			if schema.minItems and #value < schema.minItems then
+				out.errors[#out.errors + 1] = string.format("%s needs at least %d item(s)", path, schema.minItems)
+			end
+			if schema.maxItems and #value > schema.maxItems then
+				out.errors[#out.errors + 1] = string.format("%s allows at most %d item(s)", path, schema.maxItems)
+				return value
+			end
+			if type(schema.items) == "table" then
+				for index, item in ipairs(value) do
+					value[index] = checkValue(schema.items, item, string.format("%s[%d]", path, index), out)
+				end
 			end
 		end
 

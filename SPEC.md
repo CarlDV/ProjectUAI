@@ -157,6 +157,45 @@ replace-all is explicit, permits empty replacement text, and refuses stale file
 contents. `file_read` and `script_source` use contiguous UTF-8 slices with 1-based
 byte offsets and continuation cursors; each slice fits the registry's result budget.
 
+Batch tools use the existing `instance` and `fs` groups and the same permission
+and capability checks as individual operations. Array schemas enforce `minItems`
+and `maxItems` before dispatch; oversized arrays are rejected before visiting
+their members.
+
+- `instance_query` combines name/class/tag filters with up to 12 selected
+  properties and 12 attributes. `instance_get_many` accepts up to 20 known paths
+  with per-path failures. Fields are compact and bounded; bulk projections
+  direct Source reads to `script_source`.
+- `instance_find` and `instance_query` walk children incrementally, without
+  allocating a whole descendant list. Scans stop as soon as a page fills, yield
+  cooperatively, and inspect at most 20,000 nodes. Query offsets refer to the
+  current traversal order; restart if the tree changes. An incomplete scan must
+  never be presented as proof of absence.
+- `file_search` searches single-line literals in the files scope, supporting
+  filename globs and a case-sensitive option. Its inventory caps are 128
+  directories, 1,000 files, and 6,000 entries. It skips binary files and files
+  over 2 MB and scans at most 8 MB and 50,000 new lines per page. The read budget
+  counts skipped data and is checked between whole-file reads: hosts expose no
+  portable stat/range API, so the final read can exceed it. Returned cursors
+  include a path, line, and (where available) direct byte offset. Continue with
+  the same search; restart after source changes. Read errors and incomplete
+  inventories appear in both text and structured results.
+- `file_read_many` accepts up to 12 files or saved pastes, each up to 2 MB. It
+  shares the configured output budget, retains individual failures, and returns
+  per-slice offsets plus a request index if the batch fills the page. Repeated
+  slices reuse at most 2 MB of cached content within that call only.
+- `file_edit_many` accepts 1–20 ordered exact edits to one workspace file. Each
+  edit sees the previous edit's proposed result. Every match and size check must
+  pass before rereading the original to check staleness and performing one write.
+  An unchanged result performs no write. Original and resulting files are
+  bounded to 2 MB. Cancellation before the write returns an aborted status.
+
+Instance paths are parsed, never executed. Dotted paths continue to work;
+JSON-quoted bracket segments preserve exact names, including punctuation and
+surrounding whitespace. Known `Character`, `CurrentCamera`, and `PrimaryPart`
+links can resolve when no named child exists. String property coercion preserves
+whitespace, and scalar numeric coercion rejects nonfinite values.
+
 ## 6. Event stream
 
 `agent/loop` never touches the interface. It emits into `agent/session`, which
@@ -377,6 +416,10 @@ of what to fix in `archive/README.md`.
 luajit tools/bundle.lua      # src/ -> dist/uai.lua, the single loadable file
 luajit test/check.lua        # lint, parse and link every module
 luajit test/run.lua          # load dist/uai.lua against the mock client, run scenarios
+luajit test/tool_workflows.lua # batch tools, pagination, scopes, cancellation
+node tools/build_site.js      # actual tool catalog and root/docs site copies
+node tools/build_site.js --check
+python test/site_static.py    # structural checks; no browser or image loading
 ```
 
 `dist/uai.lua` is what a user runs:

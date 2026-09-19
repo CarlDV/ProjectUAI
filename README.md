@@ -65,6 +65,35 @@ camera, remotes (discover, fire, watch), on-screen interfaces, diagnostics, plac
 and account metadata, plus the agent's own task list, memory and subagent
 dispatch.
 
+**Batch inspection and file workflows.** Prefer a combined query or batch when
+the work is independent; this reduces model round trips and unnecessary local
+scanning without changing the inference provider's speed.
+
+| Tool | Use |
+| --- | --- |
+| `instance_query` | Filter by name, class, and tag while reading selected properties and attributes. Pages stop early and include a traversal offset. |
+| `instance_get_many` | Inspect up to 20 known paths with individual errors and a continuation index. |
+| `file_search` | Find literal text across workspace files, with filename globs, case selection, line numbers, byte offsets, and a cursor. |
+| `file_read_many` | Read up to 12 files or saved pastes with a shared output budget, individual failures, and per-file continuation offsets. |
+| `file_edit_many` | Apply up to 20 ordered exact edits to one file after all edits validate, using one write. |
+
+Instance projections accept up to 12 property names and 12 attribute names.
+Copy returned instance paths exactly: `Workspace["Map.v2"]["Door[1]"]` refers to
+names that contain punctuation. Query pages inspect at most 20,000 nodes; narrow
+the root if a scan is incomplete. Traversal offsets describe the live tree, so
+restart after it changes.
+
+File searches stay in `UAI/files/`, excluding client configuration and
+conversations. They skip binary files and files over 2 MB, bound inventories to
+128 directories, 1,000 files, and 6,000 entries, and process at most 8 MB and 50,000
+new lines per page. The read budget counts skipped data too and is checked between
+whole-file reads; the host must read a file before its size is known.
+Follow the returned cursor with the same query and restart
+after editing sources. Batch reads support files up to 2 MB and reuse repeated
+slices within that call. Edits preflight against the original file, refuse stale
+contents, avoid no-op writes, and limit the original and resulting file to 2 MB.
+The existing Files and Instance tree permissions and capability checks apply.
+
 **An interface built from tokens.** No use site writes a colour or a number. One
 warm neutral ramp and one accent, surfaces separated by two steps of lightness and
 a hairline rather than by shadows, a cream fill for the single loud action per view,
@@ -210,6 +239,7 @@ luajit test/config_transfer.lua
 luajit test/build_reload.lua
 luajit test/audit_regressions.lua
 luajit test/execution_tools.lua
+luajit test/tool_workflows.lua
 luajit test/execution_ui.lua
 luajit test/controls_loading.lua
 luajit test/controls_interactions.lua
@@ -254,6 +284,31 @@ pane builds, and that search finds a conversation by something said inside it.
 luajit test/run.lua identity      # run one scenario
 luajit test/mock/selftest.lua     # check the mocks themselves
 ```
+
+## Public showcase website
+
+The public site lives in root `index.html`, `style.css`, and `script.js`. The
+`docs/` copies support GitHub Pages configured to publish from that directory.
+Edit the root files, then regenerate the marked catalog and release regions:
+
+```bash
+luajit tools/bundle.lua
+node tools/build_site.js
+node tools/build_site.js --check
+node --check script.js
+python test/site_static.py
+```
+
+The site build uses Node and LuaJIT without npm dependencies. It reads the actual
+bundled registry through the offline client harness and refuses stale bundles.
+The check mode does not write files. Static checks verify HTML structure, local
+links, accessibility references, copy targets, catalog coverage, and publishing
+parity without opening a browser or loading media.
+
+For manual browser review, check narrow and wide layouts, 200% zoom, keyboard
+navigation and Escape, repeated copying and denied clipboard access, search with
+no results, clearing filters, and video playback. The catalog and navigation
+remain usable without JavaScript; only search and copy controls need it.
 
 ## First run
 

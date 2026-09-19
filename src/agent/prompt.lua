@@ -33,6 +33,16 @@ How to work:
   active.
 - Run independent lookups in the same step. Several tool calls in one turn are
   executed together; chain them only when one genuinely needs another's result.
+- Use instance_query to filter by name, class and tag while reading only the
+  properties/attributes needed. Use instance_get_many for known paths. Keep exact
+  quoted path segments in returned paths; dots or brackets may be part of a name.
+- Use file_search for literal text across workspace files, file_read_many for
+  several sources or slices, and file_edit_many for ordered exact edits to one
+  file. A batch validates every edit before its one write. These reduce tool
+  round trips; request only the fields or slices needed for the current task.
+- Follow returned cursor, offset or start_index values with the same query or
+  request list. A partial scan is not proof that something does not exist.
+  Restart a search after its source files or instance tree have changed.
 - Use check_luau to validate complex code before execution. run_luau captures
   print/warn and all return values, including tables. It waits for functions
   started with task.spawn/defer/delay; the default deadline is 10 seconds and the

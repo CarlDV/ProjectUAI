@@ -7,6 +7,7 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local H = env.require("tools/helpers")
+	local scan = env.require("tools/scan")
 
 	local SCAN_CAP = 20000
 
@@ -105,7 +106,7 @@ return function(env)
 		return lines, visited
 	end
 
-	return {
+	local tools = {
 		{
 			name = "instance_tree",
 			risk = "read",
@@ -133,7 +134,7 @@ return function(env)
 		{
 			name = "instance_find",
 			risk = "read",
-			description = "Search a subtree for instances by name and/or class. Name matching is a case-insensitive substring.",
+			description = "Search a subtree for instances by name and/or class. Stops when the requested result count is reached. For selected properties and paginated results, use instance_query.",
 			parameters = {
 				type = "object",
 				properties = {
@@ -144,7 +145,7 @@ return function(env)
 				},
 				required = {},
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local needle = util.trim(args.name):lower()
 				local class = util.trim(args.class)
 				if needle == "" and class == "" then
@@ -153,14 +154,9 @@ return function(env)
 				local root, err = H.resolve(args.root or "Workspace")
 				if not root then return H.fail(err) end
 
-				local ok, descendants = pcall(function() return root:GetDescendants() end)
-				if not ok then return H.fail("could not read that subtree") end
-
 				local limit = H.limit(args.limit, 25, 100)
-				local hits, scanned = {}, 0
-				for _, node in ipairs(descendants) do
-					scanned = scanned + 1
-					if scanned > SCAN_CAP then break end
+				local hits = {}
+				local stats = scan.descendants(root, ctx, function(node)
 					local matches = true
 					if needle ~= "" and not tostring(node.Name):lower():find(needle, 1, true) then matches = false end
 					if matches and class ~= "" then
@@ -168,12 +164,16 @@ return function(env)
 						matches = okA and isA
 					end
 					if matches then hits[#hits + 1] = node end
-				end
+					if #hits >= limit then return false end
+				end, SCAN_CAP)
+				if stats.reason == "aborted" then return { ok = false, text = "Search stopped.", data = { status = "aborted" } } end
+				if stats.reason == "unreadable root" then return H.fail("could not read that subtree") end
+				local note = stats.complete and "" or " Search incomplete; use instance_query or narrow the root."
 
 				if #hits == 0 then
-					return string.format("No match under %s (%d instances scanned).", H.pathOf(root), scanned)
+					return string.format("No match under %s (%d instances scanned).%s", H.pathOf(root), stats.scanned, note)
 				end
-				return string.format("%d match(es) under %s:\n%s", #hits, H.pathOf(root),
+				return string.format("%d match(es) under %s.%s\n%s", #hits, H.pathOf(root), note,
 					H.list(hits, limit, function(node)
 						return H.pathOf(node) .. " [" .. node.ClassName .. "]"
 					end))
@@ -463,4 +463,6 @@ return function(env)
 			end,
 		},
 	}
+	for _, tool in ipairs(env.require("tools/instance_bulk")) do tools[#tools + 1] = tool end
+	return tools
 end

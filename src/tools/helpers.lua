@@ -32,6 +32,50 @@ return function(env)
 
 	H.ROOT_NAMES = { "game", "workspace", "players", "lighting", "me", "character", "playergui", "camera" }
 
+	-- Bracket segments are JSON strings, never executable Luau. They make names
+	-- containing dots, quotes or brackets round-trip through every path tool.
+	local function segmentsOf(text)
+		local parts, at = {}, 1
+		if #text > 4096 then return nil, "instance path is too long" end
+		while at <= #text do
+			if text:sub(at, at) == "[" then
+				at = at + 1
+				while text:sub(at, at):match("%s") do at = at + 1 end
+				if text:sub(at, at) ~= '"' then return nil, 'use ["exact name"] for a bracketed path segment' end
+				local start = at
+				at = at + 1
+				while at <= #text do
+					local char = text:sub(at, at)
+					if char == "\\" then at = at + 2
+					elseif char == '"' then break
+					else at = at + 1 end
+				end
+				local value = util.decode(text:sub(start, at))
+				if type(value) ~= "string" then return nil, "invalid quoted instance name" end
+				parts[#parts + 1] = value
+				at = at + 1
+				while text:sub(at, at):match("%s") do at = at + 1 end
+				if text:sub(at, at) ~= "]" then return nil, "unclosed bracket in instance path" end
+				at = at + 1
+			else
+				local finish = text:find("[%.%[%]]", at) or (#text + 1)
+				if finish == at then return nil, "empty or malformed instance path segment" end
+				parts[#parts + 1] = text:sub(at, finish - 1)
+				at = finish
+			end
+			if at <= #text then
+				local char = text:sub(at, at)
+				if char == "." then
+					at = at + 1
+					if at > #text or text:sub(at, at) == "[" then return nil, "empty instance path segment" end
+				elseif char ~= "[" then return nil, "invalid instance path separator" end
+			end
+		end
+		return parts
+	end
+
+	local INSTANCE_LINKS = { Character = true, CurrentCamera = true, PrimaryPart = true }
+
 	-- "Workspace.Folder.Part", "game.Players.Someone", "me.Character.Humanoid".
 	--
 	-- A leading `game.` is optional, service names resolve through GetService (so a
@@ -42,7 +86,8 @@ return function(env)
 		local text = util.trim(path)
 		if text == "" then return nil, "no path given" end
 
-		local segments = util.split(text:gsub("^game%.", ""), ".")
+		local segments, parseErr = segmentsOf(text)
+		if not segments then return nil, parseErr end
 		if #segments == 0 then return nil, "no path given" end
 
 		local first = tostring(segments[1]):lower()
@@ -64,7 +109,16 @@ return function(env)
 
 		local walked = { node.Name }
 		for _, segment in ipairs(segments) do
-			local child = node:FindFirstChild(segment)
+			local okChild, child = pcall(function() return node:FindFirstChild(segment) end)
+			if not okChild then return nil, "could not inspect '" .. table.concat(walked, ".") .. "'" end
+			if not child and node == game then
+				local okService, service = pcall(function() return game:GetService(segment) end)
+				if okService then child = service end
+			end
+			if not child and INSTANCE_LINKS[segment] then
+				local okLink, linked = pcall(function() return node[segment] end)
+				if okLink and typeof(linked) == "Instance" then child = linked end
+			end
 			if not child then
 				return nil, string.format("'%s' has no child named '%s'",
 					table.concat(walked, "."), segment)
@@ -77,7 +131,25 @@ return function(env)
 
 	function H.pathOf(instance)
 		if not instance then return "nil" end
-		local ok, name = pcall(function() return instance:GetFullName() end)
+		local ok, name = pcall(function()
+			local parts, node, depth = {}, instance, 0
+			while node and node ~= game do
+				depth = depth + 1
+				if depth > 256 then return instance:GetFullName() end
+				table.insert(parts, 1, tostring(node.Name))
+				node = node.Parent
+			end
+			if #parts == 0 then return "game" end
+			local out = ""
+			for index, part in ipairs(parts) do
+				if part == "" or part:find('[%.%[%]"\\%c]') or part:match("^%s") or part:match("%s$") then
+					out = out .. "[" .. util.encode(part) .. "]"
+				else
+					out = out .. (index > 1 and "." or "") .. part
+				end
+			end
+			return out
+		end)
 		return ok and name or tostring(instance)
 	end
 
@@ -143,6 +215,7 @@ return function(env)
 	-- to know which it is looking at.
 	function H.coerce(input, current)
 		local wanted = typeof(current)
+		if wanted == "string" then return tostring(input) end
 
 		if type(input) == "table" and not (wanted == "table") then
 			-- JSON object form: { x = 1, y = 2, z = 3 } or { r = 255, ... }.
@@ -172,7 +245,9 @@ return function(env)
 
 		if wanted == "number" then
 			local value = tonumber(text)
-			if not value then return nil, "expected a number" end
+			if not value or value ~= value or value == math.huge or value == -math.huge then
+				return nil, "expected a finite number"
+			end
 			return value
 		end
 		if wanted == "boolean" then
@@ -181,7 +256,6 @@ return function(env)
 			if lowered == "false" or lowered == "0" or lowered == "no" then return false end
 			return nil, "expected true or false"
 		end
-		if wanted == "string" then return text end
 		if wanted == "Vector3" then
 			local list = numbers(text, 3)
 			if not list then return nil, "expected three numbers, e.g. '0, 10, 0'" end
@@ -301,9 +375,13 @@ return function(env)
 
 	-- A contiguous, resumable slice. Leave room for its cursor inside the registry's
 	-- result budget so a second truncation cannot silently remove the middle.
-	function H.readSlice(name, content, args, defaultLimit)
+	function H.resultBudget()
+		return tonumber(env.require("runtime/config").get("agent.resultCap", 4000)) or 4000
+	end
+
+	function H.readSlice(name, content, args, defaultLimit, budget)
 		args = args or {}
-		local cap = tonumber(env.require("runtime/config").get("agent.resultCap", 8000)) or 8000
+		local cap = math.min(H.resultBudget(), budget or math.huge)
 		if cap < 256 then return H.fail("increase the tool result budget to at least 256 bytes before reading files") end
 		local offset = math.max(1, math.floor(tonumber(args.offset) or 1))
 		if offset > #content + 1 then return H.fail("offset is past the end; this source has " .. #content .. " bytes") end

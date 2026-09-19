@@ -23,6 +23,31 @@ return function(env)
 
 	local ENTRIES = {
 		{
+			version = "1.4.0",
+			date = "September 19, 2026",
+			title = "Batch tools and a refreshed public showcase",
+			highlights = "Find and inspect together, read several files per call, and apply ordered edits in one write. The public website gains a responsive layout and a searchable catalog of the actual tools.",
+			sections = {
+				{ category = "added", items = {
+					"instance_query combines name, class and tag filters with selected properties and attributes. instance_get_many inspects up to 20 known paths with individual failures.",
+					"file_search searches literal text across workspace files and returns line numbers, byte offsets and a continuation cursor.",
+					"file_read_many reads up to 12 files or saved pastes within a shared result budget. file_edit_many preflights up to 20 ordered edits before one write.",
+				} },
+				{ category = "improved", items = {
+					"Instance searches walk incrementally and stop when a page fills, with cooperative cancellation and a bounded scan instead of collecting the entire subtree.",
+					"Repeated file slices reuse a bounded cache within one batch. Search cursors resume directly at a byte offset without scanning earlier lines again.",
+					"The agent is guided toward combined queries, selected fields, batch reads and exact edits to reduce unnecessary tool round trips.",
+					"The public showcase has a responsive layout, real tool counts, a searchable tool catalog, copyable starter prompts, and accessible navigation and copy feedback.",
+				} },
+				{ category = "fixed", items = {
+					"Instance names containing dots, brackets, quotes or surrounding whitespace have parsed, round-trippable paths. Character, camera and primary-part references resolve through known instance links.",
+					"String property conversion preserves whitespace; scalar numeric conversion refuses nonfinite values. Batch arrays enforce their size limits before execution.",
+					"Searches report incomplete inventories and unreadable files. Stopped edit batches report cancellation, stale files are preserved, and unchanged edits avoid writes.",
+					"The website catalog is generated from the bundled registry, and a reproducible build keeps the root and docs publishing copies synchronized.",
+				} },
+			},
+		},
+		{
 			version = "1.3.0",
 			date = "September 19, 2026",
 			title = "Reliable code execution and clearer tool workflows",
