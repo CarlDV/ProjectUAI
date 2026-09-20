@@ -86,19 +86,30 @@ return function(env)
 			if type(part.content) == "string" and part.content ~= "" then
 				self.content[#self.content + 1] = part.content
 			elseif type(part.content) == "table" then
-				-- Multi-part content: only the text segments concern us.
+				-- Multi-part content: text segments go to content, thinking blocks to reasoning.
 				for _, piece in ipairs(part.content) do
-					if type(piece) == "table" and type(piece.text) == "string" then
-						self.content[#self.content + 1] = piece.text
+					if type(piece) == "table" then
+						if piece.type == "thinking" then
+							local think = piece.thinking or piece.text
+							if type(think) == "string" and think ~= "" then
+								self.reasoning[#self.reasoning + 1] = think
+							end
+						elseif type(piece.text) == "string" and piece.text ~= "" then
+							self.content[#self.content + 1] = piece.text
+						end
 					end
 				end
 			end
 
-			local reasoning = part.reasoning_content or part.reasoning
+			local reasoning = part.reasoning_content or part.reasoning or part.thinking
+				or (choice and (choice.reasoning_content or choice.reasoning))
 			if type(reasoning) == "string" and reasoning ~= "" then
 				self.reasoning[#self.reasoning + 1] = reasoning
-			elseif type(reasoning) == "table" and type(reasoning.text) == "string" then
-				self.reasoning[#self.reasoning + 1] = reasoning.text
+			elseif type(reasoning) == "table" then
+				local text = reasoning.text or reasoning.thinking
+				if type(text) == "string" and text ~= "" then
+					self.reasoning[#self.reasoning + 1] = text
+				end
 			end
 
 			if type(part.tool_calls) == "table" then

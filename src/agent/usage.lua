@@ -80,6 +80,8 @@ return function(env)
 		for _, message in ipairs(messages or {}) do
 			-- Per-message framing overhead, plus the role name.
 			total = total + 4 + M.estimateText(message.content)
+			local reasoning = message.reasoning_content or message.reasoning
+			if reasoning then total = total + M.estimateText(reasoning) end
 			-- Internal messages carry toolCalls; wire messages carry tool_calls, and
 			-- the loop estimates over the wire form.
 			for _, call in ipairs(message.toolCalls or message.tool_calls or {}) do

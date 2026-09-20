@@ -66,8 +66,10 @@ return function(env)
 	end
 
 	-- Messages are rewritten into the wire shape rather than passed through, so a
-	-- field the context store finds useful (reasoning text, timing, ids) cannot
-	-- leak into a payload and trip a gateway that rejects unknown fields.
+	-- field the context store finds useful (timing, ids) cannot leak into a
+	-- payload. Reasoning models (DeepSeek-R1, Claude thinking, QwQ, etc.) require
+	-- previous assistant reasoning to be passed back on subsequent turns to
+	-- maintain thinking state.
 	function M.wireMessages(messages)
 		local out = {}
 		for _, message in ipairs(messages or {}) do
@@ -75,23 +77,37 @@ return function(env)
 			if message.role == "tool" then
 				entry.tool_call_id = message.tool_call_id
 				entry.content = tostring(message.content or "")
-			elseif message.toolCalls and #message.toolCalls > 0 then
-				-- An assistant turn that called tools must replay those calls
-				-- verbatim, and content may legitimately be an empty string.
-				entry.content = message.content or ""
-				entry.tool_calls = {}
-				for _, call in ipairs(message.toolCalls) do
-					entry.tool_calls[#entry.tool_calls + 1] = {
-						id = call.id,
-						type = "function",
-						["function"] = {
-							name = call["function"] and call["function"].name or call.name,
-							arguments = call["function"] and call["function"].arguments or call.arguments or "{}",
-						},
-					}
+			elseif message.role == "assistant" then
+				if message.toolCalls and #message.toolCalls > 0 then
+					-- An assistant turn that called tools must replay those calls
+					-- verbatim, and content may legitimately be an empty string.
+					entry.content = message.content or ""
+					entry.tool_calls = {}
+					for _, call in ipairs(message.toolCalls) do
+						entry.tool_calls[#entry.tool_calls + 1] = {
+							id = call.id,
+							type = "function",
+							["function"] = {
+								name = call["function"] and call["function"].name or call.name,
+								arguments = call["function"] and call["function"].arguments or call.arguments or "{}",
+							},
+						}
+					end
+				elseif type(message.content) == "table" then
+					entry.content = message.content
+				else
+					entry.content = tostring(message.content or "")
+				end
+				local reasoning = message.reasoning_content or message.reasoning
+				if type(reasoning) == "string" and util.trim(reasoning) ~= "" then
+					entry.reasoning_content = reasoning
 				end
 			else
-				entry.content = tostring(message.content or "")
+				if type(message.content) == "table" then
+					entry.content = message.content
+				else
+					entry.content = tostring(message.content or "")
+				end
 			end
 			out[#out + 1] = entry
 		end
@@ -532,14 +548,104 @@ return function(env)
 				if renamed then return "rewrote system messages as developer" end
 			end,
 		},
+		{
+			-- Thinking mode on Anthropic gateways (e.g. AgentRouter/NewAPI routing to Claude):
+			-- requires assistant turns to carry content blocks with type = "thinking".
+			match = "content[].thinking",
+			apply = function(body)
+				local fixed = 0
+				for _, msg in ipairs(body.messages or {}) do
+					if type(msg) == "table" and msg.role == "assistant" then
+						local reasoning = msg.reasoning_content or ""
+						local text = type(msg.content) == "string" and msg.content or ""
+						if type(msg.content) ~= "table" then
+							local blocks = {}
+							blocks[#blocks + 1] = { type = "thinking", thinking = reasoning }
+							if text ~= "" then
+								blocks[#blocks + 1] = { type = "text", text = text }
+							end
+							msg.content = blocks
+							msg.reasoning_content = nil
+							fixed = fixed + 1
+						end
+					end
+				end
+				if fixed > 0 then
+					return string.format("converted %d assistant message(s) to thinking content blocks", fixed), "content[].thinking"
+				end
+			end,
+		},
+		{
+			-- Reasoning models (DeepSeek-R1, QwQ, Step, etc.) require reasoning_content passed back
+			-- on every assistant turn, even when empty. If a gateway rejects because reasoning_content
+			-- is missing or required, ensure it is set. If a gateway rejects reasoning_content as
+			-- an unknown/unsupported parameter, drop it.
+			match = "reasoning_content",
+			apply = function(body, message)
+				local lowered = tostring(message or ""):lower()
+				local isForbidden = lowered:find("unrecognized", 1, true)
+					or lowered:find("not permitted", 1, true)
+					or lowered:find("unknown", 1, true)
+					or lowered:find("unexpected", 1, true)
+					or lowered:find("extra", 1, true)
+
+				if isForbidden then
+					local dropped = 0
+					for _, msg in ipairs(body.messages or {}) do
+						if type(msg) == "table" and msg.role == "assistant" and msg.reasoning_content ~= nil then
+							msg.reasoning_content = nil
+							dropped = dropped + 1
+						end
+					end
+					if dropped > 0 then
+						return "dropped reasoning_content", "drop_reasoning_content"
+					end
+					return nil
+				end
+
+				-- Required in thinking mode: ensure reasoning_content is present on all assistant messages
+				local fixed = 0
+				for _, msg in ipairs(body.messages or {}) do
+					if type(msg) == "table" and msg.role == "assistant" then
+						if msg.reasoning_content == nil then
+							msg.reasoning_content = ""
+							fixed = fixed + 1
+						end
+					end
+				end
+				if fixed > 0 then
+					return string.format("ensured reasoning_content on %d assistant message(s)", fixed), "require_reasoning_content"
+				end
+			end,
+		},
+		{
+			match = "require_reasoning_content",
+			apply = function(body)
+				for _, msg in ipairs(body.messages or {}) do
+					if type(msg) == "table" and msg.role == "assistant" and msg.reasoning_content == nil then
+						msg.reasoning_content = ""
+					end
+				end
+			end,
+		},
+		{
+			match = "drop_reasoning_content",
+			apply = function(body)
+				for _, msg in ipairs(body.messages or {}) do
+					if type(msg) == "table" and msg.role == "assistant" and msg.reasoning_content ~= nil then
+						msg.reasoning_content = nil
+					end
+				end
+			end,
+		},
 	}
 
 	local function repair(body, message)
 		local lowered = tostring(message or ""):lower()
 		for _, entry in ipairs(REPAIRS) do
 			if lowered:find(entry.match, 1, true) then
-				local note = entry.apply(body, message)
-				if note then return note, entry.match end
+				local note, keyOverride = entry.apply(body, message)
+				if note then return note, keyOverride or entry.match end
 			end
 		end
 		return nil

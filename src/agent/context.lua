@@ -35,9 +35,9 @@ return function(env)
 			return ctx.push({ role = "user", content = tostring(text) })
 		end
 
-		-- Reasoning text is kept locally for the transcript but never sent back:
-		-- providers reject an assistant message carrying a reasoning field, and the
-		-- ones that accept it charge for it again.
+		-- Reasoning text is kept locally for the transcript and replayed on
+		-- subsequent turns for models in thinking mode (DeepSeek-R1, Claude thinking,
+		-- QwQ, etc.) which require stateful chain-of-thought context.
 		function ctx.pushAssistant(result)
 			return ctx.push({
 				role = "assistant",
