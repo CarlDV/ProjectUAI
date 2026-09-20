@@ -555,7 +555,12 @@ return function(env)
 		local profile, profileMenu, chevron
 		profile = P.rowButton(sidebar, {
 			name = "ProfileBar",
-			height = math.max(theme.size.profileAvatar, identityHeight) + theme.space.sm * 2,
+			-- Matched to the chat composer's *visible* box, not its shell. The composer
+			-- shell is taller (control + sm*3 + xxs) but its bordered surface is inset
+			-- within it at control + sm*2; the profile bar is a bordered box that fills
+			-- its whole height. Sizing to the surface is what makes the two read as the
+			-- same height where they dock side by side at the bottom of the window.
+			height = math.max(theme.size.control, responsive.minTarget()) + theme.space.sm * 2,
 			bg = theme.color.surface,
 			radius = theme.radius.lg,
 			stroke = true,

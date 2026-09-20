@@ -522,6 +522,13 @@ return function(env)
 			minHeight = 300,
 		})
 		M.buildChrome()
+		-- The body is the heavy half of the mount: it builds the open panel, and the
+		-- chat panel's composer and transcript are the single largest synchronous chunk
+		-- of the whole boot. The window is still hidden here, so the boot indicator can
+		-- yield across this break and keep animating rather than freezing on the last
+		-- stretch. The hook is only set during the first mount, so a rebuild does not
+		-- pay for it.
+		if env.onMountPhase then env.onMountPhase("building the interface") end
 		M.buildBody()
 		M.window.onLayout = function()
 			M.syncNav()
@@ -795,10 +802,12 @@ return function(env)
 			layoutOrder = 2,
 		})
 
+		if env.onMountPhase then env.onMountPhase("building the transcript") end
 		panel.view = env.require("ui/chat/view").new(middle, {
 			onInsert = function(text) if panel.composer then panel.composer.insert(text) end end,
 		})
 
+		if env.onMountPhase then env.onMountPhase("building the composer") end
 		panel.composer = env.require("ui/chat/composer").new(column, {
 			layoutOrder = 3,
 			onSend = function(text)
@@ -819,8 +828,12 @@ return function(env)
 				})
 			end,
 		})
+		-- Lifted off the panel's bottom edge by the same inset the sidebar gives its
+		-- own bottom row, so the composer's bottom lines up with the profile bar's
+		-- rather than sitting flush against the window edge below it.
+		local BOTTOM_GAP = 3
 		panel.composer.shell.AnchorPoint = Vector2.new(0, 1)
-		panel.composer.shell.Position = UDim2.fromScale(0, 1)
+		panel.composer.shell.Position = UDim2.new(0, 0, 1, -BOTTOM_GAP)
 
 		-- Pin the input to the panel edge. Auto-height rows inside a filling list
 		-- can grow the flex basis and leave a dead region beneath the composer.
@@ -830,7 +843,7 @@ return function(env)
 			local loopHeight = panel.loops.shell.Visible and panel.loops.shell.Size.Y.Offset or 0
 			panel.loops.shell.Position = UDim2.fromOffset(0, planHeight)
 			planHeight = planHeight + loopHeight
-			local composerHeight = panel.composer.shell.AbsoluteSize.Y
+			local composerHeight = panel.composer.shell.AbsoluteSize.Y + BOTTOM_GAP
 			middle.Position = UDim2.fromOffset(0, planHeight)
 			middle.Size = UDim2.new(1, 0, 1, -(planHeight + composerHeight))
 		end

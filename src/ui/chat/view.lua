@@ -491,9 +491,20 @@ return function(env)
 				view.greeting()
 			else
 				view.replaying = true
+				-- A restored conversation is replayed whole, and on a long one that is
+				-- hundreds of rows built in one synchronous pass -- the freeze at the end
+				-- of a boot, after the loader has already reached the interface. During
+				-- the first mount the bootstrap sets this hook to yield the thread on a
+				-- budget, so the replay renders in a few slices and the boot indicator
+				-- keeps animating over it. Nil on every later attach, so switching a
+				-- conversation by hand stays a single instant rebuild.
+				local yield = env.onMountPhase
+				local count = 0
 				for _, event in ipairs(session.log) do
 					local ok, err = pcall(view.render, event)
 					if not ok then env.require("runtime/log").warn("ui", "replay failed", err) end
+					count = count + 1
+					if yield and count % 12 == 0 then yield("restoring your conversation") end
 				end
 				view.replaying = false
 			end

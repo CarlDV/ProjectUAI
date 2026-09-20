@@ -194,10 +194,53 @@ end
 
 env.loadedModules = loaded
 
--- Startup order matters in exactly one place: config has to be read before
--- anything derives from it, because the theme and the provider list are both
--- built from stored values.
 local function start()
+	-- The boot indicator first, before a single other module loads.
+	--
+	-- It is dependency free on purpose, so it can paint within a frame of execution
+	-- rather than after the theme and the control set are built -- the seconds those
+	-- take are exactly what it exists to cover, and it used to appear only once three
+	-- quarters of them were already spent. It is only a pcall deep because a client
+	-- that cannot draw it must still boot: a progress bar is not worth failing a
+	-- start over.
+	local boot
+	pcall(function() boot = env.require("ui/boot").show() end)
+
+	-- The loader reports real work finishing -- the only honest progress there is
+	-- before the interface is up -- and yields on a budget while it does, so the
+	-- indicator animates instead of freezing until the mount is done. A Roblox GUI
+	-- does not paint until the thread building it yields, and the whole boot used to
+	-- run start-to-finish without one; the throttle keeps a fast client from paying
+	-- for yields it does not need while still repainting a slow one a few times a
+	-- second. pcall on step because a watcher must never stop a module loading.
+	local lastYield = os.clock()
+	env.onModuleLoaded = function(id, count, total)
+		if boot then pcall(boot.step, id, count, total) end
+		if os.clock() - lastYield >= 0.03 then
+			task.wait()
+			lastYield = os.clock()
+		end
+	end
+
+	-- The interface build is the tail of the boot that module counting cannot see:
+	-- once every module is loaded the counter sits still while the window, the
+	-- transcript and the composer are constructed -- the single largest synchronous
+	-- chunk of the whole start, and where the bar used to jump to four fifths and then
+	-- freeze. app.mount calls this at those construction boundaries, so the indicator
+	-- yields across them and keeps animating. Set only for the first mount and cleared
+	-- with the loader below, so a later rebuild never pays for it.
+	env.onMountPhase = function(text)
+		if boot then pcall(boot.phase, text) end
+		task.wait()
+	end
+
+	-- Force the first paint before the heavy loading begins, so the indicator is on
+	-- screen for the whole of it rather than appearing at the end.
+	if boot then task.wait() end
+
+	-- Startup order matters in exactly one place: config has to be read before
+	-- anything derives from it, because the theme and the provider list are both
+	-- built from stored values.
 	local caps = env.require("runtime/caps")
 	local log = env.require("runtime/log")
 	local config = env.require("runtime/config")
@@ -205,19 +248,6 @@ local function start()
 	config.load()
 	log.mirror = config.get("logs.mirror", false) == true
 	log.info("boot", string.format("UAI %s starting -- %s", VERSION, caps.summary()))
-
-	-- The boot indicator, mounted before the work it reports rather than after.
-	--
-	-- After config, because the theme it draws with is built from stored values, and
-	-- before everything else: the tool registry, the session restore, the stats seed
-	-- and the interface itself are the seconds this is covering. It is only a pcall
-	-- deep because a client that cannot draw it must still boot -- a progress bar is
-	-- not worth failing a start over.
-	local boot
-	pcall(function()
-		boot = env.require("ui/boot").show()
-		env.onModuleLoaded = function(id, count, total) boot.step(id, count, total) end
-	end)
 
 	-- Asked for early and answered in the background: the place name is what the
 	-- conversation list groups by, and it is a web call.
@@ -278,6 +308,7 @@ local function start()
 	-- The interface is up, so the indicator has nothing left to report. The count is
 	-- what it closes on: the rest of the artifact is the panels nobody has opened yet.
 	env.onModuleLoaded = nil
+	env.onMountPhase = nil
 	if boot then
 		pcall(boot.done, string.format("%d of %d modules loaded -- the rest load with the panel that needs them",
 			env.moduleCount, env.moduleTotal))
