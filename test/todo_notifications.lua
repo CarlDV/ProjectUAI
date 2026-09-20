@@ -216,6 +216,13 @@ scenario("launcher dragging preserves the grab offset and separates clicks from 
 	click.UserInputState = h.sandbox.Enum.UserInputState.End; uis.InputEnded:Fire(click)
 	button.Activated:Fire(click)
 	check("the next ordinary click opens or minimizes once", toggles == 1)
+	local press2 = pointer(h, "MouseButton1", button.AbsolutePosition.X + 10, button.AbsolutePosition.Y + 10)
+	local release2 = pointer(h, "MouseButton1", button.AbsolutePosition.X + 10, button.AbsolutePosition.Y + 10)
+	release2.UserInputState = h.sandbox.Enum.UserInputState.End
+	button.InputBegan:Fire(press2)
+	button.Activated:Fire(release2)
+	uis.InputEnded:Fire(release2)
+	check("distinct activation input object toggles the window", toggles == 2)
 	button:Destroy()
 	app.buildLauncher()
 	check("rebuilding restores the saved placement without an inset jump", app.launcher.AbsolutePosition.X == start.X - 60 and app.launcher.AbsolutePosition.Y == start.Y - 45)

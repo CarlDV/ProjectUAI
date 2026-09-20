@@ -2363,6 +2363,9 @@ scenario("the window and its controls respond to input", function()
 	truthy("closing it works", harness.click(harness.byName("Close")) and not window.visible)
 	harness.click(harness.byName("Launcher"))
 	truthy("the launcher reopens it", window.visible)
+	truthy("minimizing it works", harness.click(harness.byName("Minimize")) and not window.visible)
+	harness.click(harness.byName("Launcher"))
+	truthy("the launcher restores it after minimize", window.visible)
 
 	-- Nav. The app menu is the path that exists in every layout mode, including the
 	-- ones with no sidebar, so it is the one worth testing.

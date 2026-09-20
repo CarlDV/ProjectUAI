@@ -350,7 +350,8 @@ return function(env)
 		local function finish(cancelled)
 			if not gesture then return end
 			if gesture.moved or cancelled then
-				suppressActivation, blockedInputs[gesture.input] = true, true
+				suppressActivation = true
+				if gesture.input then blockedInputs[gesture.input] = true end
 			end
 			if gesture.moved and not cancelled then
 				preferred = Vector2.new(button.Position.X.Offset, button.Position.Y.Offset)
@@ -378,6 +379,14 @@ return function(env)
 			feedback()
 		end)
 
+		local function matchesGestureInput(input)
+			if not gesture or not input then return false end
+			if input == gesture.input then return true end
+			local kind = input.UserInputType
+			local gkind = gesture.input and gesture.input.UserInputType
+			return kind == gkind and kind == Enum.UserInputType.MouseButton1
+		end
+
 		releases[#releases + 1] = dispose.connection(env.uis.InputChanged:Connect(function(input)
 			if not alive or not gesture then return end
 			local kind = input.UserInputType
@@ -387,11 +396,14 @@ return function(env)
 			local delta = input.Position - gesture.origin
 			if delta.X * delta.X + delta.Y * delta.Y > DRAG_SLOP * DRAG_SLOP then gesture.moved = true end
 			if not gesture.moved then return end
-			suppressActivation, blockedInputs[gesture.input] = true, true
+			suppressActivation = true
+			if gesture.input then blockedInputs[gesture.input] = true end
 			positionAt(gesture.position.X.Offset + delta.X, gesture.position.Y.Offset + delta.Y)
 		end), "launcher.move")
 		releases[#releases + 1] = dispose.connection(env.uis.InputEnded:Connect(function(input)
-			if gesture and input == gesture.input then finish(input.UserInputState == Enum.UserInputState.Cancel) end
+			if gesture and matchesGestureInput(input) then
+				finish(input.UserInputState == Enum.UserInputState.Cancel)
+			end
 		end), "launcher.release")
 		releases[#releases + 1] = dispose.connection(env.uis.WindowFocusReleased:Connect(function()
 			hovered = false
@@ -415,8 +427,11 @@ return function(env)
 		button.Activated:Connect(function(input)
 			if not alive then return end
 			if gesture and gesture.moved then return end
-			if (input and blockedInputs[input]) or (input == nil and suppressActivation) then return end
-			if gesture and input and input ~= gesture.input then return end
+			local isPointer = (not input) or (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch)
+			if (input and blockedInputs[input]) or (isPointer and suppressActivation) then return end
+			if gesture and not gesture.moved then
+				finish(false)
+			end
 			M.toggle()
 		end)
 		local release = dispose.add(function()
