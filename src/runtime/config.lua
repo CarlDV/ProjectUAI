@@ -60,7 +60,7 @@ return function(env)
 			lastSeenVersion = "0.0.0",
 		},
 		agent = {
-			maxTurns = 24,
+			maxTurns = 60,
 			-- Lifts the step limit and the turn deadline for the top-level
 			-- conversation, so a long job runs until the model answers in prose
 			-- instead of stopping mid-way with "I reached this session's step limit".
@@ -68,9 +68,9 @@ return function(env)
 			-- timeout, the provider retry cap, and Stop. Subagents keep their own
 			-- turn and time budgets either way -- an unbounded child is the one
 			-- thing here nobody is watching.
-			unlimitedTurns = false,
-			toolConcurrency = 4,
-			toolTimeout = 25,
+			unlimitedTurns = true,
+			toolConcurrency = 8,
+			toolTimeout = 60,
 			-- Seconds one model call may run before the transport gives up. No Roblox
 			-- transport delivers a body incrementally, so a reasoning model that thinks
 			-- for ninety seconds produces nothing on the wire until it answers -- and the
@@ -88,8 +88,8 @@ return function(env)
 			-- which is the honest bound -- a request nobody collects is indistinguishable
 			-- from a hung client. It exists so the slider can be lowered for a quick model
 			-- without losing the day the heavy one needs.
-			requestUnlimited = false,
-			contextTokens = 24000,
+			requestUnlimited = true,
+			contextTokens = 1000000,
 			keepTurns = 14,
 			compaction = true,
 			stream = true,
@@ -99,7 +99,7 @@ return function(env)
 			-- uses when the field is absent, so this default changes nothing until it is
 			-- moved, and "off" sends no field at all. Clamped per model, because the
 			-- scales differ by generation -- "xhigh" did not exist before Opus 4.7.
-			effort = "high",
+			effort = "max",
 			-- Manual capability claims, keyed by lowercased model id. No endpoint
 			-- publishes what a relayed id can do, so this is the user's word against
 			-- nothing: `forceReasoning` makes the adapters ask a model to think, and
@@ -108,27 +108,27 @@ return function(env)
 			-- think gets the effort scale even where the table documents none.
 			forceReasoning = {},
 			forceContext = {},
-			maxTokens = 4096,
+			maxTokens = 128000,
 			-- Characters, not tokens, and it is the last word on how much of a tool
 			-- result reaches the model. Eight thousand rather than four so that the
 			-- tools' own defaults -- a six thousand character file read, a five thousand
 			-- character response body -- arrive whole instead of being cut in half by a
 			-- limit set somewhere the caller cannot see.
-			resultCap = 8000,
+			resultCap = 128000,
 			repeatLimit = 3,
-			subagentDepth = 2,
-			subagentTurns = 14,
+			subagentDepth = 4,
+			subagentTurns = 30,
 			-- Live subagents anywhere in the tree. `toolConcurrency` bounds one batch,
 			-- so it is what caps a parallel dispatch from the main conversation; this
 			-- caps the whole tree, which nothing else did. Depth alone does not: a
 			-- subagent's own batch is bounded separately, and two levels of that
 			-- multiply rather than add.
-			subagentConcurrency = 8,
+			subagentConcurrency = 12,
 			-- Seconds one subagent may run for. The tool that dispatches it derives its
 			-- own timeout from this, so the two cannot drift apart -- when they did, the
 			-- generic 25s tool timeout fired first and every finished report was thrown
 			-- away by a caller that had already given up.
-			subagentBudget = 240,
+			subagentBudget = 900,
 			-- Lifts every clock and counter on a dispatched subagent: no step limit, no
 			-- wall-clock budget, and the call that dispatched it waits as long as the
 			-- child takes rather than abandoning a report nobody is left to collect.
@@ -140,13 +140,13 @@ return function(env)
 			-- whole dispatch. What still bounds a child either way: the repeat breaker,
 			-- each tool's own timeout, the provider retry cap, the depth and parallel
 			-- ceilings, and Stop -- from the parent turn or from the Subagents panel.
-			subagentUnlimited = false,
+			subagentUnlimited = true,
 			-- Which tool preset a dispatch gets when the call does not name one. "full"
 			-- hands a subagent every tool; permission mode still gates what actually runs,
 			-- and a prompt raised inside a child is forwarded to the parent's stream.
 			subagentPreset = "full",
-			retries = 5,
-			fallback = true,
+			retries = 6,
+			fallback = false,
 			-- Tool families the model is not told about at all, keyed by group id. A
 			-- permission rule decides whether a call is allowed; this decides whether the
 			-- tool is offered, which is the coarser thing somebody who does not want the

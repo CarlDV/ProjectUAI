@@ -454,6 +454,28 @@ return function(env)
 		-- Replays the session's own log, so opening the panel mid-turn shows what
 		-- has happened rather than an empty pane.
 		function view.attach(session)
+			-- Re-showing the conversation that is already on screen must not tear the
+			-- transcript down and replay every event again. On a long session that
+			-- replay is hundreds of rows rebuilt from scratch on each open -- the lag
+			-- when the window comes back -- and the half-built tree drawn over the old
+			-- one for a frame is the overlap someone sees before it settles. Nothing
+			-- changed, so the live view is already correct: just land at the bottom,
+			-- the way `repin` does when the window is shown. The composer guards the
+			-- same way on `draftId`.
+			if session and view.session == session and view.unsubscribe then
+				-- The transcript is already correct, but the working indicator is
+				-- transient and not in the log, so a conversation that went busy while
+				-- the panel was elsewhere has to have it restored here the same way a
+				-- full replay would. Landing at the bottom is the rest of what a re-show
+				-- owes the reader.
+				if session.busy then
+					ensureWorking().set(session.status or "Working")
+				else
+					clearWorking()
+				end
+				view.repin()
+				return
+			end
 			if view.unsubscribe then
 				view.unsubscribe()
 				view.unsubscribe = nil

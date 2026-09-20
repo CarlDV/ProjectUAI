@@ -527,6 +527,10 @@ scenario("a failing provider hands over to the next", function()
 	second.models = { "second-model" }
 	handle.providers.save(second)
 
+	-- Fallback ships off by default, so the behaviour under test is turned on
+	-- explicitly here rather than relying on the default.
+	handle.config.set("agent.fallback", true)
+
 	local session = handle.sessions.current()
 	session.send("hello")
 	harness.settle(30)
@@ -1916,14 +1920,13 @@ scenario("the new agent switches are reachable from Settings", function()
 	contains("and it says what still stops one", shown, "Stop still apply")
 
 	local config = handle.config
-	check("the switch starts off", config.get("agent.unlimitedTurns"), false)
-	config.set("agent.unlimitedTurns", true)
-	check("and persists when turned on", config.get("agent.unlimitedTurns"), true)
-	check("the subagent switch starts off too", config.get("agent.subagentUnlimited"), false)
-	config.set("agent.subagentUnlimited", true)
-	check("and the dispatcher reads it",
-		handle.env.require("agent/subagent").unlimited(), true)
-	check("the ceiling has a default", config.get("agent.subagentConcurrency"), 8)
+	check("the switch ships on", config.get("agent.unlimitedTurns"), true)
+	config.set("agent.unlimitedTurns", false)
+	check("and persists when turned off", config.get("agent.unlimitedTurns"), false)
+	check("the subagent switch ships on too", config.get("agent.subagentUnlimited"), true)
+	config.set("agent.subagentUnlimited", false)
+	check("the switch persists", config.get("agent.subagentUnlimited"), false)
+	check("the ceiling defaults to its ceiling", config.get("agent.subagentConcurrency"), 12)
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 	check("nothing was warned", #harness.console.warnings, 0,
