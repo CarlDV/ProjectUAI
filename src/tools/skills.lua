@@ -2,9 +2,8 @@
 --
 -- These are the agent's half of the skills engine. The other half is the
 -- environment block, which carries only the index -- names and one-line
--- descriptions -- so the model can tell a playbook exists without paying for
--- its body. When a task matches a description, `skills_read` is the one call
--- that brings the playbook in.
+-- descriptions. The model must use skills_read to fetch every enabled body
+-- before replying in each conversation; both the inventory and bodies paginate.
 --
 -- Reading is risk "read"; writing, deleting and installing are "write", so
 -- each passes the permission prompt -- an installed playbook is instructions
@@ -21,10 +20,13 @@ return function(env)
 			needs = { "fs" },
 			description = "List the installed markdown skills (playbooks) with their one-line "
 				.. "descriptions and whether each is enabled. The same list appears in the "
-				.. "environment block each turn; use this when you want the full set including "
-				.. "switched-off ones.",
-			parameters = { type = "object", properties = util.emptyObject(), required = {} },
-			run = function()
+				.. "environment block each turn; use this to refresh the inventory, including "
+				.. "switched-off ones. Follow continuation offsets to see every entry.",
+			parameters = { type = "object", properties = {
+				offset = { type = "integer", description = "1-based byte offset from a previous page. Default 1.", minimum = 1 },
+				limit = { type = "integer", description = "Maximum bytes in this inventory page.", minimum = 200, maximum = 64000 },
+			}, required = {} },
+			run = function(args)
 				local list = skills.list()
 				if #list == 0 then
 					return "No skills installed. Skills are .md files under skills/ -- drop one "
@@ -32,7 +34,7 @@ return function(env)
 				end
 				local lines = {}
 				for _, skill in ipairs(list) do
-					local label = skill.name
+					local label = skill.name .. " [" .. skill.file .. "]"
 					if skill.description ~= "" then
 						label = label .. " -- " .. util.ellipsis(skill.description, 90)
 					end
@@ -41,29 +43,30 @@ return function(env)
 					end
 					lines[#lines + 1] = label
 				end
-				return string.format("%d skill%s:\n%s", #list, #list == 1 and "" or "s",
-					H.list(lines, 40))
+				return H.readSlice(string.format("%d skill%s", #list, #list == 1 and "" or "s"),
+					H.list(lines), args, 6000)
 			end,
 		},
 		{
 			name = "skills_read",
 			risk = "read",
 			needs = { "fs" },
-			description = "Read the full body of a skill -- the playbook itself. Call this when a "
-				.. "task matches a skill's description in the environment block; the body is "
-				.. "never sent otherwise, which is what keeps the system prompt lean.",
+			description = "Read a skill's body. REQUIRED FIRST in every conversation, before replying "
+				.. "or other actions: read EVERY enabled skill, including in subagent conversations. "
+				.. "Follow continuation offsets until each body is fully read; descriptions are not bodies.",
 			parameters = {
 				type = "object",
 				properties = {
 					name = { type = "string", description = "The skill's name or filename, e.g. 'Ponytail' or 'ponytail.md'." },
-					limit = { type = "integer", description = "Maximum characters of body. Default 12000.", minimum = 200, maximum = 64000 },
+					offset = { type = "integer", description = "1-based byte offset from a previous page. Default 1.", minimum = 1 },
+					limit = { type = "integer", description = "Maximum bytes of body. Default 12000, bounded by the tool result budget.", minimum = 200, maximum = 64000 },
 				},
 				required = { "name" },
 			},
 			run = function(args)
-				local text, err = skills.read(args.name, args.limit)
-				if not text then return H.fail(err) end
-				return text
+				local body, skill = skills.readBody(args.name)
+				if body == nil then return H.fail(skill) end
+				return H.readSlice(skill.name .. " [" .. skill.file .. "]", body, args, skills.READ_CAP)
 			end,
 		},
 		{

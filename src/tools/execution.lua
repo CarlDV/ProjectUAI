@@ -4,7 +4,7 @@ return function(env)
 	local util = env.require("runtime/util")
 	local caps = env.require("runtime/caps")
 	local clock = env.require("runtime/clock")
-	local fsx = env.require("runtime/fsx")
+	local W = env.require("tools/workspace")
 	local H = env.require("tools/helpers")
 	local M = { DEFAULT_TIMEOUT = 10, MAX_TIMEOUT = 60 }
 	local active = {}
@@ -163,14 +163,6 @@ return function(env)
 		return result, omitted
 	end
 
-	local function cancel(thread)
-		if thread and type(task.cancel) == "function" then
-			local ok, result = pcall(task.cancel, thread)
-			return ok and result ~= false
-		end
-		return false
-	end
-
 	env.require("runtime/dispose").add(function()
 		for execution in pairs(active) do execution.stop("aborted") end
 	end, "Luau executions")
@@ -185,19 +177,21 @@ return function(env)
 				return nil, "Pass either code or path, not both."
 			end
 			local path = util.trim(args.path)
-			local content, err = fsx.read(path, { scope = "files" })
-			if not content then
-				local paste, pasteErr = fsx.read(path, { scope = "pastes" })
-				if not paste then return nil, "Could not read '" .. path .. "': " .. tostring(err or pasteErr) end
-				content = paste
-			end
+			local content, err = W.read(path)
+			if not content then return nil, "Could not read '" .. path .. "': " .. tostring(err) end
 			if util.trim(content) == "" then return nil, "'" .. path .. "' is empty." end
 			return content
 		end
 		if type(args.code) ~= "string" or util.trim(args.code) == "" then
-			return nil, "Provide code to run inline, or a path to a workspace file."
+			return nil, "Provide inline code, or a path to a workspace file."
 		end
 		return tostring(args.code)
+	end
+
+	function M.checkSource(args)
+		local code, err = sourceFor(args)
+		if not code then return { ok = false, text = err } end
+		return M.check(code)
 	end
 
 	function M.run(args, ctx)
@@ -218,14 +212,29 @@ return function(env)
 		local root, done, returns, failure, stopped
 		local released = false
 		local fullyCancelled = true
-		local children, cancelled = {}, {}
+		local children = {}
+		local cancelled = setmetatable({}, { __mode = "k" })
+		local owned = setmetatable({}, { __mode = "k" })
 		local logs, bytes, truncated = {}, 0, false
 		local execution = {}
+		-- Never close a coroutine that Roblox or the executor may still resume.
+		-- task.cancel can leave an engine/HTTP continuation targeting a dead thread;
+		-- pcall around the cancellation cannot catch that later scheduler failure.
+		-- Our waits and queued callbacks instead observe a cancellation flag.
+		local function cancelManaged(thread)
+			if type(thread) ~= "thread" then error("managed task.cancel expects a thread", 2) end
+			if coroutine.status(thread) == "dead" then return end
+			if not owned[thread] then error("managed task.cancel can only stop this script's tasks", 2) end
+			cancelled[thread] = true
+			children[thread] = nil
+			if thread == coroutine.running() then error(STOP, 0) end
+			if owned[thread] ~= "waiting" and owned[thread] ~= "queued" then fullyCancelled = false end
+		end
 		function execution.stop(reason)
 			stopped = stopped or reason
-			if root and coroutine.status(root) ~= "dead" and not cancel(root) then fullyCancelled = false end
+			if root and coroutine.status(root) ~= "dead" and owned[root] == "running" then fullyCancelled = false end
 			for thread in pairs(children) do
-				if coroutine.status(thread) ~= "dead" and not cancel(thread) then fullyCancelled = false end
+				if coroutine.status(thread) ~= "dead" and owned[thread] == "running" then fullyCancelled = false end
 			end
 		end
 		active[execution] = true
@@ -258,18 +267,19 @@ return function(env)
 		end
 		local function wait(secondsToWait)
 			check()
-			if released then return task.wait(secondsToWait) end
 			local requested = math.max(tonumber(secondsToWait) or 0, 0)
 			local elapsed = 0
+			local current = coroutine.running()
 			repeat
+				if owned[current] then owned[current] = "waiting" end
 				elapsed = elapsed + (task.wait(math.min(math.max(requested - elapsed, 0), 0.1)) or 0)
+				if owned[current] then owned[current] = "running" end
 				check()
 			until elapsed >= requested
 			return elapsed
 		end
 		local ticks, lastYield = 0, started
 		local function checkpoint()
-			if released then check(); return end
 			ticks = ticks + 1
 			if ticks % 128 ~= 0 then return end
 			check()
@@ -280,29 +290,31 @@ return function(env)
 		end
 		local function launch(kind, delay, callback, ...)
 			check()
-			-- A callback the script registered on an engine signal can fire after a
-			-- successful call returned. It is outside this execution's lifetime; do
-			-- not keep collecting it into a result that has already been delivered.
-			if released then
-				if kind == "delay" then return task.delay(delay, callback, ...) end
-				return task[kind](callback, ...)
-			end
 			if type(callback) ~= "function" then error("managed task." .. kind .. " expects a function", 2) end
 			local values = pack(...)
 			local function work()
 				local current = coroutine.running()
+				owned[current] = "running"
 				if stopped or cancelled[current] then children[current] = nil; return end
 				local ok, why = pcall(function()
 					check()
+					if kind == "delay" then wait(delay) end
 					callback(unpack(values, 1, values.n))
 				end)
 				children[current] = nil
-				if not ok and why ~= STOP then failure = display(why) end
+				owned[current] = nil
+				if not ok and why ~= STOP then
+					if released then error(why, 0) end
+					failure = display(why)
+				end
 			end
-			local thread
-			if kind == "delay" then thread = task.delay(delay, work)
-			else thread = task[kind](work) end
-			if coroutine.status(thread) ~= "dead" then children[thread] = true end
+			-- A sliced delay can exit promptly on Stop without closing its thread or
+			-- retaining a cancelled callback until an arbitrarily distant due date.
+			local thread = kind == "spawn" and task.spawn(work) or task.defer(work)
+			if coroutine.status(thread) ~= "dead" and not cancelled[thread] then
+				owned[thread] = owned[thread] or "queued"
+				if not released then children[thread] = true end
+			end
 			return thread
 		end
 		local managed = setmetatable({
@@ -310,15 +322,11 @@ return function(env)
 			spawn = function(callback, ...) return launch("spawn", nil, callback, ...) end,
 			defer = function(callback, ...) return launch("defer", nil, callback, ...) end,
 			delay = function(delay, callback, ...) return launch("delay", delay, callback, ...) end,
-			cancel = function(thread)
-				if released then return task.cancel(thread) end
-				cancelled[thread] = true
-				if not cancel(thread) then fullyCancelled = false end
-				children[thread] = nil
-				if thread == coroutine.running() then error(STOP, 0) end
-			end,
+			cancel = cancelManaged,
 		}, { __index = task })
 		root = task.spawn(function()
+			root = coroutine.running()
+			owned[root] = "running"
 			local result = pack(pcall(function()
 				check()
 				return fn(function(...) capture("", ...) end, function(...) capture("[warn]", ...) end,
@@ -326,6 +334,7 @@ return function(env)
 			end))
 			if result[1] then returns = result
 			elseif result[2] ~= STOP then failure = display(result[2]) end
+			owned[root] = nil
 			done = true
 		end)
 
@@ -362,8 +371,8 @@ return function(env)
 			end
 		end
 		if stopped or not fullyCancelled then
-			output[#output + 1] = fullyCancelled and "Managed Luau tasks were cancelled."
-				or "Cooperative cancellation requested. This host cannot cancel every suspended task; code blocked outside managed waits may still resume. Do not retry the same code."
+			output[#output + 1] = fullyCancelled and "Managed Luau tasks were stopped cooperatively."
+				or "Cooperative cancellation requested. Code blocked outside managed waits may still resume before its next checkpoint. Its thread was left alive so Roblox can finish the pending callback. Do not retry the same code."
 		end
 		if #logs > 0 then output[#output + 1] = "Output:\n" .. table.concat(logs, "\n") end
 		if truncated then output[#output + 1] = "(output truncated to the capture limit)" end

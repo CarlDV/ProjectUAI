@@ -97,6 +97,42 @@ scenario("output preserves whitespace, tables, cycles and nil return positions",
 	check("console untouched", #h.console.out == 0 and #h.console.warnings == 0)
 end)
 
+scenario("saved scripts compile by path without executing or resending source", function()
+	local h, env, registry, run = fixture()
+	local fsx = env.require("runtime/fsx")
+	local source = "_G.checkedFileRan = true; return 42"
+	assert(fsx.write("scripts/check.lua", source, { scope = "files" }))
+	local checked = run("check_luau", { path = "scripts/check.lua" })
+	check("saved file compiles", checked.ok)
+	check("checking a file has no side effects", h.sandbox.checkedFileRan == nil)
+	check("source is not echoed into the result", not contains(checked.text, source))
+	assert(fsx.write("broken.lua", "local =", { scope = "files" }))
+	assert(fsx.write("empty.lua", "  ", { scope = "files" }))
+	for _, path in ipairs({ "broken.lua", "empty.lua", "missing.lua", "../config.json" }) do
+		check("invalid saved script refused: " .. path, not run("check_luau", { path = path }).ok)
+	end
+	check("checker refuses code and path together", not run("check_luau", { path = "scripts/check.lua", code = source }).ok)
+	check("checker requires a source", not run("check_luau", {}).ok)
+	assert(fsx.write("paste.lua", "_G.pasteRuns = (_G.pasteRuns or 0) + 1", { scope = "pastes" }))
+	for index, path in ipairs({ "paste.lua", "pastes/paste.lua", "UAI/pastes/paste.lua" }) do
+		check("saved paste compiles by its displayed path", run("check_luau", { path = path }).ok and h.sandbox.pasteRuns == (index > 1 and index - 1 or nil))
+		check("saved paste runs by its displayed path", run("run_luau", { path = path }).ok and h.sandbox.pasteRuns == index)
+	end
+	assert(fsx.write("protected.lua", source, { scope = "files" }))
+	assert(fsx.write("protected.lua", "_G.wrongPasteRan = true", { scope = "pastes" }))
+	local caps = env.require("runtime/caps")
+	local read = caps.fn.readfile
+	caps.fn.readfile = function(path)
+		if path == "UAI/files/protected.lua" then error("read denied") end
+		return read(path)
+	end
+	for _, name in ipairs({ "check_luau", "run_luau" }) do
+		local result = run(name, { path = "protected.lua" })
+		check("unreadable workspace source never falls back to a different paste", not result.ok and contains(result.text, "read denied"))
+	end
+	check("fallback source was not executed", h.sandbox.wrongPasteRan == nil)
+end)
+
 scenario("loop checkpoints preserve strings, comments and source line numbers", function()
 	local h, env, registry, run = fixture()
 	local result = run("run_luau", { code = "-- while true do end\nlocal a = 'while true do end'\nlocal b = [=[repeat until false]=]\nfor i=1,3 do print(i) end\nreturn a, b" })
@@ -184,15 +220,17 @@ scenario("successful scripts can register callbacks outside the tool lifetime", 
 	check("callback has no expired-guard error", #h.sched.errors == 0)
 end)
 
-scenario("explicit cancellation survives a successful parent on limited hosts", function()
-	for _, mode in ipairs({ "missing", "throws", "refuses" }) do
+scenario("explicit cancellation never closes a native task", function()
+	for _, mode in ipairs({ "normal", "missing", "throws", "refuses" }) do
 		local h, env, registry, run = fixture()
+		local nativeCancel, cancelledNatively = h.sandbox.task.cancel, 0
+		h.sandbox.task.cancel = function(thread) cancelledNatively = cancelledNatively + 1; return nativeCancel(thread) end
 		if mode == "missing" then h.sandbox.task.cancel = nil
 		elseif mode == "throws" then h.sandbox.task.cancel = function() error("not supported") end
-		else h.sandbox.task.cancel = function() return false end end
+		elseif mode == "refuses" then h.sandbox.task.cancel = function() return false end end
 		local result = run("run_luau", { code = "local child=task.spawn(function() task.wait(0.1); _G.cancelledChildRan=true end); task.wait(0.01); task.cancel(child); return 'done'" }, 0.05)
 		check(mode .. ": parent can complete", result.ok and contains(result.text, "done"))
-		check(mode .. ": cooperative fallback is disclosed", contains(result.text, "Cooperative cancellation requested"))
+		check(mode .. ": no native coroutine is closed", cancelledNatively == 0)
 		h.sched.advance(0.2)
 		check(mode .. ": cancelled child stays stopped", h.sandbox.cancelledChildRan == nil)
 		check(mode .. ": cancellation is caught", #h.sched.errors == 0)
@@ -201,10 +239,76 @@ end)
 
 scenario("cancelling the current managed task stops its remaining code", function()
 	local h, env, registry, run = fixture()
+	local nativeCalls = 0
+	h.sandbox.task.cancel = function() nativeCalls = nativeCalls + 1; error("cannot resume dead coroutine") end
 	local result = run("run_luau", { code = "task.spawn(function() task.cancel(coroutine.running()); _G.cancelledSelfRan=true end); return 'done'" })
 	check("parent completes after child cancels itself", result.ok)
 	check("self-cancelled child cannot continue", h.sandbox.cancelledSelfRan == nil)
 	check("self cancellation is caught", #h.sched.errors == 0)
+	check("self cancellation never reaches the native scheduler", nativeCalls == 0)
+	local root = run("run_luau", { code = "task.cancel(coroutine.running()); _G.cancelledRootRan=true" })
+	check("a self-cancelled root settles without later effects", root.ok and h.sandbox.cancelledRootRan == nil and nativeCalls == 0)
+end)
+
+scenario("stopping during an engine wait preserves its native continuation", function()
+	local h, env, registry, run, ctx = fixture()
+	local stopped, nativeCalls, completedWait = false, 0, false
+	ctx.aborted = function() return stopped end
+	local nativeCancel = h.sandbox.task.cancel
+	h.sandbox.task.cancel = function(thread) nativeCalls = nativeCalls + 1; return nativeCancel(thread) end
+	h.sandbox.engineWait = function() h.sched.wait(0.5); completedWait = true end
+	h.sched.delay(0.1, function() stopped = true end)
+	local result = run("run_luau", { code = "engineWait(); task.wait(); _G.afterEngineWait=true" }, 0.3)
+	check("engine wait does not hold up Stop", not result.ok and result.data.status == "aborted")
+	check("a pending external continuation is disclosed", contains(result.text, "before its next checkpoint"))
+	check("Stop does not close an engine-owned waiter", nativeCalls == 0)
+	h.sched.advance(0.4)
+	check("native completion resumes a live coroutine", completedWait and #h.sched.errors == 0)
+	check("the next managed checkpoint stops further work", h.sandbox.afterEngineWait == nil)
+	stopped = false
+	check("subsequent scripts still execute", run("run_luau", { code = "return 42" }).ok)
+end)
+
+scenario("dead handles are harmless and other scripts cannot be cancelled", function()
+	local h, env, registry, run = fixture()
+	local nativeCalls = 0
+	h.sandbox.task.cancel = function() nativeCalls = nativeCalls + 1; error("cannot resume dead coroutine") end
+	local dead = run("run_luau", { code = "local t=task.spawn(function() end); task.cancel(t); task.cancel(t); return 'done'" })
+	check("repeated cancellation of a finished task is harmless", dead.ok and nativeCalls == 0)
+	local externalFinished = false
+	h.sandbox.externalThread = h.sched.spawn(function() h.sched.wait(0.2); externalFinished = true end)
+	local external = run("run_luau", { code = "task.cancel(externalThread)" })
+	check("foreign task cancellation is refused", not external.ok and contains(external.text, "this script's tasks") and nativeCalls == 0)
+	h.sched.advance(0.2)
+	check("other scripts keep running", externalFinished)
+	for _, code in ipairs({ "task.cancel(nil)", "task.cancel({})" }) do
+		check("invalid cancellation handles fail cleanly", not run("run_luau", { code = code }).ok)
+	end
+	check("invalid and dead handles do not poison the scheduler", #h.sched.errors == 0)
+end)
+
+scenario("late callbacks keep managed cancellation after a successful run", function()
+	local h, env, registry, run = fixture()
+	local nativeCalls = 0
+	h.sandbox.task.cancel = function() nativeCalls = nativeCalls + 1 end
+	local result = run("run_luau", { code = "_G.laterCancel=function() local t=task.spawn(function() task.wait(0.1); _G.lateCancelRan=true end); task.cancel(t) end" })
+	check("callback registration completes", result.ok)
+	h.sched.advance(12)
+	h.sched.spawn(h.sandbox.laterCancel)
+	h.sched.advance(0.3)
+	check("late callbacks never revert to unsafe native cancellation", nativeCalls == 0 and h.sandbox.lateCancelRan == nil and #h.sched.errors == 0)
+end)
+
+scenario("stopped long delays drain promptly without native cancellation", function()
+	local h, env, registry, run, ctx = fixture()
+	local stopped, nativeCalls = false, 0
+	ctx.aborted = function() return stopped end
+	h.sandbox.task.cancel = function() nativeCalls = nativeCalls + 1 end
+	h.sched.delay(0.1, function() stopped = true end)
+	local result = run("run_luau", { code = "task.delay(86400, function() _G.tomorrow=true end); task.wait(86400)" }, 0.3)
+	check("long timers settle after Stop", not result.ok and result.data.status == "aborted")
+	h.sched.advance(1) -- let the fixture's debounced settings save settle too
+	check("no orphaned one-day timer remains", h.sched.pending() == 0 and nativeCalls == 0 and h.sandbox.tomorrow == nil)
 end)
 
 scenario("unload cancels execution roots and their delayed tasks", function()
@@ -229,6 +333,40 @@ scenario("JSON repairs do not rewrite code and reject unfinished strings", funct
 	check("fractional integers are not silently rounded", #errors > 0)
 	local _, invalid = schema.validate({ type = "number" }, math.huge)
 	check("non-finite numbers rejected", #invalid > 0)
+end)
+
+scenario("interrupted write arguments never apply a partial edit or script", function()
+	local h, env, registry, run, ctx = fixture()
+	local fsx = env.require("runtime/fsx")
+	local original = "local first=1\nlocal second=1\n"
+	assert(fsx.write("edit.lua", original, { scope = "files" }))
+	local function raw(name, arguments)
+		local result
+		h.sched.spawn(function() result = registry.dispatch({ id = "cut", name = name, arguments = arguments }, ctx) end)
+		h.sched.advance(0.1)
+		return assert(result)
+	end
+	local interrupted = {
+		{ "file_edit_many", '{"path":"edit.lua","edits":[{"old_text":"first=1","new_text":"first=2"},{"old_text":"second=1","new_text":"sec' },
+		{ "file_edit_many", '{"path":"edit.lua","edits":[{"old_text":"first=1","new_text":"first=2"},' },
+		{ "file_edit", '{"path":"edit.lua","old_text":"first=1","new_text":"first=2"' },
+		{ "file_write", '{"path":"edit.lua","content":"return {}' },
+		{ "file_append", '{"path":"edit.lua","content":"-- appended"' },
+		{ "run_luau", '{"code":"_G.partialRan = true"' },
+	}
+	for _, call in ipairs(interrupted) do
+		local result = raw(call[1], call[2])
+		check("incomplete mutation refused: " .. call[1], not result.ok and result.error == "bad arguments")
+		check("every original byte survives", fsx.read("edit.lua", { scope = "files" }) == original)
+	end
+	check("unfinished execution has no side effects", h.sandbox.partialRan == nil)
+	local read = raw("file_read", '{"path":"edit.lua","limit":')
+	check("read-only missing options can still be repaired", read.ok and contains(read.text, "first=1"))
+	local source = 'print("True False None ,} ,]")'
+	local repaired = raw("file_write", '```json\n{"path":"valid.lua","content":' .. h.json.encode(source) .. ',}\n```')
+	check("complete writes retain harmless formatting repair", repaired.ok and fsx.read("valid.lua", { scope = "files" }) == source)
+	local schema = env.require("agent/schema")
+	check("braces inside truncated source cannot become JSON closers", schema.repairJson('{"code":"return {value=42}') == nil)
 end)
 
 scenario("dispatch enforces current tool scope and routes progress by call id", function()
@@ -306,6 +444,35 @@ scenario("failed and stopped turns return the interface to Ready", function()
 	check("Stop resets status", events[#events].kind == "status" and events[#events].text == "Ready")
 end)
 
+scenario("a crashed session cancels only its old turn and can be used again", function()
+	local h, env = fixture()
+	local sessions = env.require("agent/session")
+	local session, other = sessions.create(), sessions.create()
+	local loop = env.require("agent/loop")
+	local oldContext, callback
+	loop.run = function(owner)
+		oldContext = owner.toolContext()
+		error("228866: cannot resume dead coroutine")
+	end
+	check("crashing turn was accepted", session.send("first", function(reply) callback = reply end))
+	h.sched.advance(0.1)
+	check("a crash releases the UI and completion callback", not session.busy and session.status == "Ready" and contains(callback, "cannot resume dead coroutine"))
+	check("old tool workers are cancelled", oldContext.aborted())
+	check("another conversation is unaffected", not other.aborted())
+	local newContext
+	loop.run = function(owner) newContext = owner.toolContext(); return "recovered" end
+	check("a new send remains available", session.send("second"))
+	h.sched.advance(0.1)
+	check("new send cannot revive an old worker", oldContext.aborted() and not newContext.aborted() and not session.busy)
+	local fresh = sessions.create()
+	fresh.send("before clear")
+	local beforeClear = newContext
+	fresh.clear()
+	fresh.send("after clear")
+	check("clearing and reusing a turn number cannot revive a worker", beforeClear.aborted() and not newContext.aborted())
+	check("session crash cleanup raises no scheduler error", #h.sched.errors == 0)
+end)
+
 scenario("file and script slices cover every byte without hidden truncation", function()
 	local h, env, registry, run = fixture()
 	local fsx = env.require("runtime/fsx")
@@ -331,6 +498,47 @@ scenario("file and script slices cover every byte without hidden truncation", fu
 	node.Name, node.Source = "SourceTest", source
 	local script = run("script_source", { path = "Workspace.SourceTest", offset = 21, limit = 200 })
 	check("script source is also resumable", script.ok and script.data.offset <= 21 and script.data.nextOffset > 21)
+end)
+
+scenario("token-limited tool batches recover without running their complete prefix", function()
+	local h, env, registry, run, ctx = fixture()
+	local record = { label = "Fixture", model = "fixture-model" }
+	local providers = env.require("provider/registry")
+	providers.active, providers.chain = function() return record end, function() return { record } end
+	local requests, errors = 0, 0
+	env.require("provider/chat").complete = function(_, request)
+		requests = requests + 1
+		if requests == 1 then
+			return { content = "", reasoning = "", finish = "length", model = record.model, usage = {}, toolCalls = {
+				{ id = "whole", ["function"] = { name = "file_write", arguments = h.json.encode({ path = "partial.lua", content = "return 1" }) } },
+				{ id = "cut", ["function"] = { name = "run_luau", arguments = '{"code":"_G.cutRan = true' } },
+			} }
+		elseif requests == 2 then
+			local toolResults = 0
+			for _, message in ipairs(request.messages) do
+				if message.role == "tool" then
+					toolResults = toolResults + 1
+					check("recovery says no calls ran and requests smaller calls", contains(message.content, "No calls") and contains(message.content, "smaller"))
+				end
+			end
+			check("each interrupted call retains a matching tool result", toolResults == 2)
+			return { content = "", reasoning = "", finish = "tool_calls", model = record.model, usage = {}, toolCalls = {
+				{ id = "recovered", ["function"] = { name = "file_write", arguments = h.json.encode({ path = "finished.lua", content = "return 42" }) } },
+			} }
+		end
+		return { content = "Saved.", reasoning = "", finish = "stop", model = record.model, usage = {}, toolCalls = {} }
+	end
+	local session = { ctx = env.require("agent/context").new(), systemPrompt = "Test", maxTurns = 3,
+		aborted = function() return false end, toolContext = function() return ctx end,
+		emit = function(kind) if kind == "tool:error" then errors = errors + 1 end end }
+	local result
+	h.sched.spawn(function() result = env.require("agent/loop").run(session, "write a script") end)
+	h.sched.advance(1)
+	check("loop resumes and finishes", result == "Saved." and requests == 3)
+	check("token-limited prefix never writes or runs", h.files["UAI/files/partial.lua"] == nil and h.sandbox.cutRan == nil)
+	check("complete retry writes normally", h.files["UAI/files/finished.lua"] == "return 42")
+	check("transcript receives both truncation errors", errors == 2)
+	check("recovery has no asynchronous errors", #h.sched.errors == 0)
 end)
 
 scenario("saved-paste references resolve exactly as shown in chat", function()

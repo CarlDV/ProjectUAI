@@ -184,6 +184,102 @@ scenario("long actionable toasts retain content, bound the stack and pause expir
 	check("all timers and fades finish without errors", #h.errors() == 0)
 end)
 
+local function pointer(h, kind, x, y)
+	return { UserInputType = h.sandbox.Enum.UserInputType[kind],
+		UserInputState = h.sandbox.Enum.UserInputState.Begin,
+		Position = h.dt.Vector3.new(x, y, 0), Changed = require("instance").newSignal("pointer") }
+end
+
+scenario("launcher dragging preserves the grab offset and separates clicks from drags", function()
+	local h, env, root, settings = fixture()
+	local responsive, app = env.require("ui/responsive"), env.require("ui/app")
+	responsive.viewport, responsive.inset = h.dt.Vector2.new(1000, 700), h.dt.Vector2.new(0, 36)
+	root.Size, root.Position = h.dt.UDim2.fromOffset(800, 550), h.dt.UDim2.fromOffset(100, 36)
+	local toggles = 0
+	app.screen, app.toggle = root, function() toggles = toggles + 1 end
+	app.buildLauncher()
+	local button, uis = app.launcher, env.uis
+	local start = button.AbsolutePosition
+	local press = pointer(h, "MouseButton1", start.X + 31, start.Y + 28)
+	button.InputBegan:Fire(press)
+	uis.InputChanged:Fire(pointer(h, "MouseMovement", press.Position.X - 2, press.Position.Y - 2))
+	check("small pointer movement leaves the launcher exactly in place", button.AbsolutePosition.X == start.X and button.AbsolutePosition.Y == start.Y)
+	uis.InputChanged:Fire(pointer(h, "MouseMovement", press.Position.X - 60, press.Position.Y - 45))
+	check("drag follows the mouse without adding the parent or GUI inset", button.AbsolutePosition.X == start.X - 60 and button.AbsolutePosition.Y == start.Y - 45)
+	check("the original grab offset is preserved", press.Position.X - 60 - button.AbsolutePosition.X == 31 and press.Position.Y - 45 - button.AbsolutePosition.Y == 28)
+	press.UserInputState = h.sandbox.Enum.UserInputState.End; press.Changed:Fire()
+	button.Activated:Fire(press)
+	check("drag release does not toggle the window", toggles == 0 and press.Changed:Count() == 0)
+	check("only released placement is saved in parent coordinates", settings["ui.launcher.placed"] and settings["ui.launcher.x"] == button.Position.X.Offset and settings["ui.launcher.y"] == button.Position.Y.Offset)
+	local click = pointer(h, "MouseButton1", button.AbsolutePosition.X + 10, button.AbsolutePosition.Y + 10)
+	button.InputBegan:Fire(click)
+	click.UserInputState = h.sandbox.Enum.UserInputState.End; uis.InputEnded:Fire(click)
+	button.Activated:Fire(click)
+	check("the next ordinary click opens or minimizes once", toggles == 1)
+	button:Destroy()
+	app.buildLauncher()
+	check("rebuilding restores the saved placement without an inset jump", app.launcher.AbsolutePosition.X == start.X - 60 and app.launcher.AbsolutePosition.Y == start.Y - 45)
+	app.launcher:Destroy()
+	h.sched.advance(1)
+	check("launcher gestures have no scheduler or property errors", #h.errors() == 0 and #h.instanceState.typeErrors == 0)
+end)
+
+scenario("launcher owns one pointer and releases every listener on cancellation or rebuild", function()
+	local h, env, root, settings = fixture()
+	local app, responsive = env.require("ui/app"), env.require("ui/responsive")
+	local uis, E = env.uis, h.sandbox.Enum
+	local moves, ends, focus, layouts = uis.InputChanged:Count(), uis.InputEnded:Count(), uis.WindowFocusReleased:Count(), responsive.changed:count()
+	local toggles = 0
+	app.screen, app.toggle = root, function() toggles = toggles + 1 end
+	app.buildLauncher()
+	local button = app.launcher
+	local start = button.Position
+	local owner, other = pointer(h, "Touch", 650, 550), pointer(h, "Touch", 660, 560)
+	button.InputBegan:Fire(owner); button.InputBegan:Fire(other)
+	other.Position = h.dt.Vector3.new(20, 20, 0); uis.InputChanged:Fire(other)
+	uis.InputChanged:Fire(pointer(h, "MouseMovement", 20, 20))
+	check("other fingers and mouse movement cannot hijack a touch drag", button.Position == start)
+	owner.Position = h.dt.Vector3.new(620, 525, 0); uis.InputChanged:Fire(owner)
+	check("the initiating finger controls the drag", button.Position.X.Offset == start.X.Offset - 30 and button.Position.Y.Offset == start.Y.Offset - 25)
+	owner.UserInputState = E.UserInputState.Cancel; owner.Changed:Fire()
+	button.Activated:Fire(owner); button.Activated:Fire(other)
+	check("cancelled and ignored touches never restore the window", toggles == 0 and owner.Changed:Count() == 0)
+	check("a cancelled placement is not persisted", settings["ui.launcher.placed"] == nil)
+	local press = pointer(h, "MouseButton1", 600, 500)
+	button.InputBegan:Fire(press)
+	uis.WindowFocusReleased:Fire()
+	local lostPosition = button.Position
+	uis.InputChanged:Fire(pointer(h, "MouseMovement", 50, 50))
+	button.Activated:Fire(press)
+	check("focus loss ends the gesture and prevents a late activation", button.Position == lostPosition and press.Changed:Count() == 0 and toggles == 0)
+	button.Activated:Fire(pointer(h, "Gamepad1", 0, 0))
+	check("keyboard and gamepad activation is not swallowed by a previous drag", toggles == 1)
+	local last = pointer(h, "Touch", 600, 500)
+	button.InputBegan:Fire(last)
+	button:Destroy()
+	check("destroying the launcher releases its active input", last.Changed:Count() == 0 and app.launcher == nil)
+	for index = 1, 5 do app.buildLauncher(); app.launcher:Destroy() end
+	check("rebuilds leave no extra service or layout listeners", uis.InputChanged:Count() == moves and uis.InputEnded:Count() == ends and uis.WindowFocusReleased:Count() == focus and responsive.changed:count() == layouts)
+	h.sched.advance(1)
+	check("cancelled gestures leave no asynchronous errors", #h.errors() == 0)
+end)
+
+scenario("launcher remains reachable above the keyboard and restores its preferred position", function()
+	local h, env, root, settings, viewport = fixture()
+	local app, responsive, theme = env.require("ui/app"), env.require("ui/responsive"), env.require("ui/theme")
+	settings["ui.launcher.placed"], settings["ui.launcher.x"], settings["ui.launcher.y"] = true, 650, 530
+	app.screen = root; app.buildLauncher()
+	local original = app.launcher.Position
+	viewport(360, 600, true, 300)
+	local bounds, size = responsive.usableRect(root, theme.space.xs), app.launcher.AbsoluteSize
+	check("resized launcher stays inside the usable rectangle", app.launcher.Position.X.Offset >= bounds.x and app.launcher.Position.Y.Offset >= bounds.y
+		and app.launcher.Position.X.Offset + size.X <= bounds.x + bounds.width and app.launcher.Position.Y.Offset + size.Y <= bounds.y + bounds.height)
+	check("keyboard adjustment does not overwrite the saved placement", settings["ui.launcher.x"] == 650 and settings["ui.launcher.y"] == 530)
+	viewport(720, 600, false, 0)
+	check("restoring the viewport restores the preferred position", app.launcher.Position == original)
+	app.launcher:Destroy()
+end)
+
 scenario("notification actions open their conversation and acknowledge only that conversation", function()
 	local h = envMock.new()
 	local handle = assert(h.boot())
@@ -210,6 +306,8 @@ scenario("notification actions open their conversation and acknowledge only that
 	check("reading alpha clears its badge and toast", #app.notifications == 0 and not app.launcherBadge.Visible)
 	sessions.anyEvent:fire(beta, { kind = "error", message = "Try again later" })
 	check("background errors are visible even with the window open", #app.notifications == 1)
+	sessions.anyEvent:fire(beta, { kind = "turn:end", text = "Failed", failed = true })
+	check("failed turn cleanup does not add a success notification", #app.notifications == 1)
 	app.notifications[1].toast.card:FindFirstChild("DismissNotification").Activated:Fire()
 	check("dismissal preserves unread state", #app.notifications == 1)
 	app.openSession(beta.id)

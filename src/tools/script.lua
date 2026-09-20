@@ -30,13 +30,16 @@ return function(env)
 			name = "check_luau",
 			risk = "read",
 			needs = { "exec" },
-			description = "Check Luau syntax using this executor's compiler without executing the code or changing the game. Returns compile errors for correction before run_luau.",
+			description = "Check Luau syntax without executing code or changing the game. Provide inline 'code' or a saved file 'path', not both. Prefer path for scripts you wrote or edited so their source need not be sent again. Returns compile errors for correction before run_luau.",
 			parameters = {
 				type = "object",
-				properties = { code = { type = "string", minLength = 1, maxLength = 256000, description = "Luau source to compile, without running it." } },
-				required = { "code" },
+				properties = {
+					code = { type = "string", minLength = 1, maxLength = 256000, description = "Inline Luau source to compile without running it. Provide this or path." },
+					path = { type = "string", minLength = 1, description = "Workspace file or saved paste to compile locally, e.g. scripts/build.lua. Provide this or code." },
+				},
+				required = {},
 			},
-			run = function(args) return execution.check(args.code) end,
+			run = execution.checkSource,
 		},
 		{
 			name = "script_list",

@@ -19,6 +19,26 @@ out and then report what happened.
 You are the agent, not the model. If a model name is given in the environment
 block below, that is the model you are running on. Never guess it.]]
 
+	local SKILLS_FIRST = [[
+Skills FIRST -- required in every conversation:
+- Before your first reply or any other action in EVERY new or resumed
+  conversation, read EVERY enabled skill with skills_read. This includes
+  subagent conversations. Start with skill tool calls, before a greeting,
+  explanation, plan, task list, or work on the request.
+- The environment lists names and descriptions only; that is not the skill body.
+  Use skills_list if you need the inventory, then skills_read each enabled file.
+  Follow every continuation offset until each body is fully read. Do not choose
+  only the skills that appear relevant: read all enabled skills first, then apply
+  their instructions where they apply.
+- Reads from another conversation do not count. Re-read on resuming a stored
+  conversation, after compaction removes a body, and when a skill changes or is
+  newly enabled. Within an uninterrupted conversation, a full read still in your
+  context counts; do not repeat unchanged reads on every tool step.
+- Skip disabled skills. If no skills are enabled, continue with the task. If a
+  read is denied or unavailable, report that once and continue within the tools
+  and permissions you actually have; do not bypass the restriction or retry in
+  a loop. Never claim to have read a body you could not retrieve.]]
+
 	local WORKING = [[
 How to work:
 - Read before you write. Inspect the instance tree, a file or a property before
@@ -40,11 +60,17 @@ How to work:
   several sources or slices, and file_edit_many for ordered exact edits to one
   file. A batch validates every edit before its one write. These reduce tool
   round trips; request only the fields or slices needed for the current task.
+- For large files, make targeted edits instead of rewriting: each reply must
+  finish inside the executor's request window.
+- Build large new scripts in small sections: file_write first, then file_append
+  or targeted edits. Wait for each write before the next call on the same path.
+  Send complete JSON for each section; never split a tool argument mid-string.
 - Follow returned cursor, offset or start_index values with the same query or
   request list. A partial scan is not proof that something does not exist.
   Restart a search after its source files or instance tree have changed.
-- Use check_luau to validate complex code before execution. run_luau captures
-  print/warn and all return values, including tables. It waits for functions
+- Use check_luau to validate complex code before execution. For saved scripts,
+  pass path to check_luau and run_luau instead of sending the source again.
+  run_luau captures print/warn and all return values, including tables. It waits for functions
   started with task.spawn/defer/delay; the default deadline is 10 seconds and the
   timeout argument can extend it to 60. Those tasks are scoped to the call, so do
   not start an endless background task and expect it to survive the deadline.
@@ -70,11 +96,8 @@ How to work:
   to hunt for, a preference they stated. Do not save transcript chatter.
 - Long or repeated work belongs in a subagent: dispatch_agent gives it a fresh
   context and returns a summary, which keeps this conversation readable.
-- Skills listed in the environment block are playbooks -- name and description
-  is all you are shown. When a task matches one, skills_read its body and work
-  from it; the body is kept out of the prompt on purpose, so fetching it is
-  your half of the bargain. If you worked something out worth keeping, save it
-  as one with skills_write.
+- Follow the Skills FIRST requirement above. If you worked something out worth
+  keeping, save it as a playbook with skills_write.
 - Subagents run in parallel. When a job splits into independent investigations,
   dispatch one per investigation in the same step rather than one after another:
   they work at the same time and you wait once instead of once each.
@@ -95,8 +118,11 @@ Care:
 - Code you execute runs on the local client with the permissions of whatever is
   hosting this script. Keep it bounded and use task.wait() to pace repeated work.
   run_luau adds cooperative loop checkpoints, but dynamically loaded code, event
-  callbacks and blocking engine calls can bypass them. This is not a security
-  sandbox, and cancellation does not undo changes that already happened.
+  callbacks and blocking engine calls can bypass them. Stop is cooperative:
+  managed waits and loop checkpoints exit without closing native coroutines.
+  task.cancel only accepts this run's task handles; use flags and disconnect
+  event connections for other long-lived work. This is not a security sandbox,
+  and cancellation does not undo changes that already happened.
 - Do not disable, bypass or work around the permission prompts.]]
 
 	-- Without this block the model has no picture of what is routine in an
@@ -209,15 +235,13 @@ Background chat:
 			end
 		end
 
-		-- The skills index: names and one-line descriptions, never the bodies.
-		-- The whole point of the engine is that a playbook costs nothing until a
-		-- task matches its description, so this block stays a few tokens per
-		-- skill and the model pulls the body with skills_read when it wants it.
+		-- Inventory only. The mandatory skills-first block requires full tool reads
+		-- before a reply; a name in this list must never be described as a loaded body.
 		do
 			local skills = env.require("runtime/skills")
 			local index = skills.indexBlock()
 			if index then
-				lines[#lines + 1] = "Skills available (always loaded for every conversation -- read a body with skills_read when a task matches to follow its playbook):"
+				lines[#lines + 1] = "Skills available (enabled inventory only; read EVERY body with skills_read FIRST, before replying in this conversation):"
 				lines[#lines + 1] = index
 			end
 		end
@@ -235,7 +259,7 @@ Background chat:
 	-- conversation and hardest to lose to attention decay.
 	function M.build(opts)
 		opts = opts or {}
-		local parts = { IDENTITY, "" }
+		local parts = { IDENTITY, "", SKILLS_FIRST, "" }
 
 		parts[#parts + 1] = "Environment:"
 		parts[#parts + 1] = environmentBlock()
@@ -335,6 +359,8 @@ Background chat:
 			"You are a subagent of UAI: a delegated worker, not the agent the user is talking to.",
 			"You run inside a Roblox client with a subset of the tools, and your report goes to the",
 			"parent agent -- the user never sees your words and cannot answer you.",
+			"",
+			SKILLS_FIRST,
 			"",
 			"Environment:",
 			environmentBlock(),

@@ -35,8 +35,8 @@ return function(env)
 	end
 
 	-- Walks the text tracking string state, so a brace inside a string literal
-	-- does not count towards the balance. Returns the closers needed, and whether
-	-- a string was left open.
+	-- does not count towards the balance. Also returns the end of a complete outer
+	-- object/array; an inner edit's closing brace must never hide an unfinished tail.
 	local function scanBalance(text)
 		local stack, inString, escaped = {}, false, false
 		for index = 1, #text do
@@ -55,7 +55,9 @@ return function(env)
 				elseif char == "{" or char == "[" then
 					stack[#stack + 1] = char
 				elseif char == "}" or char == "]" then
-					table.remove(stack)
+					local opener = table.remove(stack)
+					if opener ~= (char == "}" and "{" or "[") then return nil, false end
+					if #stack == 0 then return "", false, index end
 				end
 			end
 		end
@@ -66,7 +68,7 @@ return function(env)
 		return table.concat(closers), inString
 	end
 
-	function M.repairJson(raw)
+	function M.repairJson(raw, opts)
 		local text = util.trim(raw)
 		if text == "" then return {}, "empty arguments treated as {}" end
 
@@ -77,14 +79,20 @@ return function(env)
 		local direct = util.decode(text)
 		if type(direct) == "table" then return direct, nil end
 
-		-- Prose around the object is common; take the outermost bracketed span.
+		-- Prose around the object is common. Only strip after its matching closer;
+		-- the last brace in truncated source may belong to a string or an inner edit.
 		local first = text:find("[%{%[]")
-		local last = text:match(".*()[%}%]]")
-		if first and last and last > first then
-			local slice = text:sub(first, last)
-			local attempt = util.decode(slice)
-			if type(attempt) == "table" then return attempt, "stripped text around the JSON object" end
-			text = slice
+		if first then
+			local candidate = text:sub(first)
+			local _, _, last = scanBalance(candidate)
+			if last then
+				local slice = candidate:sub(1, last)
+				local attempt = util.decode(slice)
+				if type(attempt) == "table" then return attempt, "stripped text around the JSON object" end
+				text = slice
+			else
+				text = candidate
+			end
 		end
 
 		local noTrailing = outsideStrings(text, function(part) return (part:gsub(",%s*([%}%]])", "%1")) end)
@@ -106,7 +114,11 @@ return function(env)
 
 		local closers, openString = scanBalance(text)
 		if openString then return nil, "arguments ended inside a string; send the complete JSON object" end
+		if closers == nil then return nil, "arguments contain mismatched JSON brackets" end
 		if closers ~= "" then
+			if opts and opts.allowTruncated == false then
+				return nil, "arguments were cut off; send complete JSON with smaller writes or edit batches"
+			end
 			local patched = text
 			-- A truncated object usually ends mid-value; dropping the dangling
 			-- key-value pair is more likely to parse than closing around it.

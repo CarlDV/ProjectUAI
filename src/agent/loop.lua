@@ -303,15 +303,31 @@ return function(env)
 					})
 				end
 
-				session.emit("status", { text = #result.toolCalls == 1
+				session.emit("status", { text = result.finish == "length" and "Requesting smaller tool calls" or #result.toolCalls == 1
 					and ("Running " .. ((result.toolCalls[1]["function"] or {}).name or "tool"))
 					or ("Running " .. util.pluralise(#result.toolCalls, "tool")) })
 
 				-- The transcript sees a result as soon as that call finishes. Keep the
 				-- model's results in original call order after the entire batch settles.
-				local results = registry.runAll(result.toolCalls, session.toolContext(), function(outcome)
-					session.emit(outcome.ok and "tool:result" or "tool:error", outcome)
-				end)
+				local results
+				if result.finish == "length" then
+					-- Even a complete first call may depend on a later one that was cut
+					-- off. Return a result for every id so the next request can recover.
+					results = {}
+					for index, call in ipairs(result.toolCalls) do
+						results[index] = {
+							id = call.id, name = (call["function"] or {}).name or "tool",
+							ok = false, error = "truncated arguments", ms = 0,
+							text = "The provider cut off this tool batch at its token limit. No calls in this batch ran. "
+								.. "Send smaller complete calls; split large scripts into sequential file_write/file_append calls or targeted file_edit edits.",
+						}
+						session.emit("tool:error", results[index])
+					end
+				else
+					results = registry.runAll(result.toolCalls, session.toolContext(), function(outcome)
+						session.emit(outcome.ok and "tool:result" or "tool:error", outcome)
+					end)
+				end
 
 				for index, call in ipairs(result.toolCalls) do
 					local outcome = results[index] or {

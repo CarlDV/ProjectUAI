@@ -26,7 +26,7 @@ local function fixture()
 	end
 	local registry = env.require("agent/registry")
 	registry.loaded = true
-	for _, group in ipairs({ "fs", "instance", "script" }) do
+	for _, group in ipairs({ "fs", "instance", "script", "skills" }) do
 		for _, tool in ipairs(env.require("tools/" .. group)) do tool.group = group; registry.register(tool) end
 	end
 	env.require("runtime/config").set("permissions.mode", "full")
@@ -49,6 +49,122 @@ local function fixture()
 	local function write(path, text) assert(fs.write(path, text, { scope = "files" })) end
 	return h, env, registry, run, ctx, make, write
 end
+
+scenario("every conversation receives skills-first instructions and a readable inventory", function()
+	local h, env = fixture()
+	local skills, prompt = env.require("runtime/skills"), env.require("agent/prompt")
+	assert(skills.save("First", "Standing instructions", "A complete skill body."))
+	assert(skills.save("Disabled", "Do not read", "A disabled body."))
+	skills.setEnabled("Disabled.md", false)
+	for _, text in ipairs({ prompt.build({}), prompt.subagent("Inspect the scene") }) do
+		check("skills-first rule precedes the environment", text:find("Skills FIRST", 1, true) < text:find("Environment:", 1, true))
+		check("new and resumed conversations must read every enabled skill", contains(text, "EVERY new or resumed") and contains(text, "read EVERY enabled skill"))
+		check("reads precede user-facing words", contains(text, "before a greeting"))
+		check("continuations and lost skill context must be reread", contains(text, "every continuation offset") and contains(text, "after compaction"))
+		check("the inventory identifies enabled filenames without disabled bodies", contains(text, "First.md") and not contains(text, "Disabled.md") and not contains(text, "A complete skill body."))
+		check("unavailable skills do not create retry loops", contains(text, "read is denied or unavailable"))
+	end
+end)
+
+scenario("skills_read recovers the full UTF-8 body across result caps", function()
+	local h, env, registry, run = fixture()
+	env.require("runtime/config").set("agent.resultCap", 600)
+	local body = ("Read every instruction: \231\149\140\240\159\153\130.\n"):rep(600)
+	assert(env.require("runtime/fsx").write("long.md", "---\nname: Long\ndescription: Complete playbook.\n---\n" .. body, { scope = "skills" }))
+	local offset, pieces = 1, {}
+	repeat
+		local result = run("skills_read", { name = "long.md", offset = offset, limit = 64000 })
+		check("skill page stays inside the result cap", result.ok and not result.truncated and #result.text <= 600)
+		check("skill page has complete UTF-8", env.require("runtime/util").validUtf8(result.text))
+		pieces[#pieces + 1] = result.text:match("^[^\n]*\n(.*)$")
+		local nextOffset = result.data.nextOffset
+		check("continuations always advance or end", nextOffset == nil or nextOffset > offset)
+		offset = nextOffset
+		assert(#pieces < 100, "skill pagination stalled")
+	until not offset
+	check("all instructions arrive exactly once", table.concat(pieces) == body and #pieces > 1)
+	check("an offset past the body is refused", not run("skills_read", { name = "long.md", offset = #body + 2 }).ok)
+	env.require("runtime/skills").setEnabled("long.md", false)
+	check("disabled skill reads are refused", not run("skills_read", { name = "long.md" }).ok)
+end)
+
+scenario("skill inventories paginate beyond forty and duplicate names resolve by filename", function()
+	local h, env, registry, run = fixture()
+	local fs = env.require("runtime/fsx")
+	for index = 1, 55 do
+		assert(fs.write(string.format("skill-%02d.md", index), "---\nname: Shared\ndescription: A standing playbook.\n---\nBody " .. index, { scope = "skills" }))
+	end
+	env.require("runtime/config").set("agent.resultCap", 600)
+	local pieces, offset = {}, 1
+	repeat
+		local result = run("skills_list", { offset = offset, limit = 64000 })
+		check("inventory pages fit the result budget", result.ok and not result.truncated and #result.text <= 600)
+		pieces[#pieces + 1] = result.text:match("^[^\n]*\n(.*)$")
+		offset = result.data.nextOffset
+		assert(#pieces < 100, "inventory pagination stalled")
+	until not offset
+	local inventory = table.concat(pieces)
+	for index = 1, 55 do check("every enabled file is discoverable", contains(inventory, string.format("skill-%02d.md", index))) end
+	check("duplicate display names can be read by exact filename", contains(run("skills_read", { name = "skill-55.md" }).text, "Body 55"))
+end)
+
+scenario("restricted subagents can read skills without gaining skill mutation tools", function()
+	local h, env, registry, run, ctx = fixture()
+	local subagent = env.require("agent/subagent")
+	local children = {}
+	env.require("agent/loop").run = function(child) children[#children + 1] = child; return "done" end
+	for _, preset in ipairs({ "read", "web", "game", "full" }) do
+		local completed
+		h.sched.spawn(function() completed = subagent.dispatch({ task = "Inspect", preset = preset }) end)
+		h.sched.advance(0.2)
+		check("subagent dispatch completes", completed ~= nil)
+		local child = children[#children]
+		local names = {}
+		for _, definition in ipairs(registry.definitions({ groups = child.toolGroups, exclude = child.toolExclude })) do names[definition["function"].name] = true end
+		check(preset .. " can list and read skills", names.skills_list and names.skills_read)
+		check(preset .. " keeps its mutation scope", (names.skills_write == true) == (preset == "full") and (names.skills_install == true) == (preset == "full") and (names.skills_delete == true) == (preset == "full"))
+		ctx.session = child
+		local result = run("skills_write", { name = preset, description = "test", body = "Only full can save." })
+		check(preset .. " scope is also enforced at dispatch", result.ok == (preset == "full"))
+	end
+	check("subagent checks have no scheduler errors", #h.sched.errors == 0)
+end)
+
+scenario("a subagent failure releases its slot and cannot revive old workers on follow-up", function()
+	local h, env = fixture()
+	local subagent, loop = env.require("agent/subagent"), env.require("agent/loop")
+	local failedContext, freshContext
+	loop.run = function(child) failedContext = child.toolContext(); error("failed child") end
+	local result, err
+	h.sched.spawn(function() result, err = subagent.dispatch({ task = "Inspect", preset = "read" }) end)
+	h.sched.advance(0.2)
+	check("a failed child releases its running slot", result == nil and contains(err, "failed child") and subagent.live == 0)
+	local record = subagent.records[1]
+	check("a failed child is marked aborted", record.session.aborted())
+	loop.run = function(child) freshContext = child.toolContext(); return "recovered" end
+	h.sched.spawn(function() result = subagent.followUp({ id = record.id, task = "Continue" }) end)
+	h.sched.advance(0.2)
+	check("follow-up starts a fresh tool lifetime", result ~= nil and failedContext.aborted() and not freshContext.aborted() and subagent.live == 0)
+	check("subagent recovery has no scheduler errors", #h.errors() == 0)
+end)
+
+scenario("file writes and appends reject oversized payloads before touching disk", function()
+	local h, env, registry, run, ctx, make, write = fixture()
+	local maximum = env.require("tools/workspace").MAX_BYTES
+	local oversized = string.rep("x", maximum + 1)
+	write("existing.txt", "keep")
+	for _, name in ipairs({ "file_write", "file_append" }) do
+		local tool = registry.get(name)
+		check("payload limit is advertised", tool.parameters.properties.content.maxLength == maximum)
+		check("oversized dispatch is rejected", not run(name, { path = "existing.txt", content = oversized }).ok)
+		check("existing content is preserved", h.files["UAI/files/existing.txt"] == "keep")
+		local rejected = tool.run({ path = "oversized.txt", content = oversized })
+		check("runtime also guards callers outside schema validation", rejected.ok == false and contains(rejected.text, "at most 2 MiB") and h.files["UAI/files/oversized.txt"] == nil)
+	end
+	local boundary = string.rep("x", maximum)
+	check("the advertised write boundary is accepted", run("file_write", { path = "boundary.txt", content = boundary }).ok and #h.files["UAI/files/boundary.txt"] == maximum)
+	check("small appends still work", run("file_append", { path = "existing.txt", content = " more" }).ok and h.files["UAI/files/existing.txt"] == "keep more")
+end)
 
 scenario("quoted paths and live instance links resolve exactly", function()
 	local h, env, registry, run, ctx, make = fixture()

@@ -1,4 +1,4 @@
--- Markdown skills: Claude Code / Anthropic-style .md playbooks, on demand.
+-- Markdown skills: Claude Code / Anthropic-style .md playbooks.
 --
 -- A skill is a frontmatter header and a body of instructions. The header is
 -- one line of description; the body can be anything from a rule of thumb to a
@@ -6,12 +6,9 @@
 -- skills/ in the app folder, so a user can drop one in by hand and an agent
 -- can write one with the file functions -- both paths converge here.
 --
--- The one rule the engine enforces on itself: NOTHING is injected into the
--- system prompt. The environment block carries a list of names and one-line
--- descriptions only -- a few tokens each -- and the body is fetched by a tool
--- call when a task actually matches its description. A two-hundred-line GUI
--- playbook costs zero context until the day it is needed, and then it costs
--- exactly one tool call.
+-- The environment carries the enabled inventory, not the bodies. Every
+-- conversation is instructed to read all enabled bodies first, using resumable
+-- tool reads so a long playbook is not silently truncated by the result cap.
 --
 -- Frontmatter is the same shape Claude Code uses, so a repo of existing
 -- playbooks is usable without conversion:
@@ -121,16 +118,19 @@ return function(env)
 		if wanted == "" then return nil end
 		local byFile = wanted:sub(-3) == ".md" and wanted or (wanted .. ".md")
 		local byName = util.trim(tostring(name)):lower()
-		for _, skill in ipairs(M.list()) do
-			if skill.file:lower() == byFile or skill.name:lower() == byName then return skill end
+		local list = M.list()
+		for _, skill in ipairs(list) do
+			if skill.file:lower() == byFile then return skill end
+		end
+		for _, skill in ipairs(list) do
+			if skill.name:lower() == byName then return skill end
 		end
 		return nil
 	end
 
-	-- The body, on demand. This is the one call the whole design exists to
-	-- make cheap: the listing costs a few tokens per skill, this costs the
-	-- skill itself, and only for the skill whose description matched.
-	function M.read(name, limit)
+	-- The complete body. Tool callers apply their own resumable slice; other
+	-- callers may keep using read() for its existing bounded display string.
+	function M.readBody(name)
 		local skill = M.find(name)
 		if not skill then return nil, "no skill named '" .. tostring(name) .. "'" end
 		if not M.isEnabled(skill.file) then
@@ -139,6 +139,12 @@ return function(env)
 		local content, err = fsx.read(skill.file, DIR)
 		if not content then return nil, err end
 		local _, body = parseFrontmatter(content)
+		return body, skill
+	end
+
+	function M.read(name, limit)
+		local body, skill = M.readBody(name)
+		if body == nil then return nil, skill end
 		local text, truncated = util.truncate(body, tonumber(limit) or READ_CAP)
 		return string.format("%s (%d characters%s):\n%s",
 			skill.name, #body, truncated and ", trimmed" or "", text)
@@ -261,9 +267,7 @@ return function(env)
 
 	-- The prompt line --------------------------------------------------------------
 
-	-- Names and one-line descriptions, nothing else. This is the whole cost of
-	-- the engine in a turn that uses no skill, and it is what lets the model
-	-- know a playbook exists without paying for it.
+	-- Include filenames so even duplicate display names can be read unambiguously.
 	function M.indexBlock()
 		if not fsx.enabled then return nil end
 		local list = M.list()
@@ -271,7 +275,7 @@ return function(env)
 		for _, skill in ipairs(list) do
 			if skill.enabled then
 				local description = skill.description ~= "" and skill.description or "no description"
-				lines[#lines + 1] = "- " .. skill.name .. ": " .. util.ellipsis(description, 100)
+				lines[#lines + 1] = "- " .. skill.name .. " [" .. skill.file .. "]: " .. util.ellipsis(description, 100)
 			end
 		end
 		if #lines == 0 then return nil end

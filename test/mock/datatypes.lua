@@ -356,6 +356,7 @@ local KNOWN = {
 	TextChatMessageStatus = "Success Sending TextFilterFailed Floodchecked",
 	ThumbnailSize = "Size48x48 Size100x100 Size150x150 Size420x420",
 	ThumbnailType = "HeadShot AvatarBust AvatarThumbnail",
+	ScaleType = "Stretch Slice Tile Fit Crop",
 	TeleportMethod = "TeleportToSpawnByName TeleportToPlaceInstance",
 	DevTouchMovementMode = "UserChoice Thumbstick DPad Thumbpad",
 	CameraType = "Custom Scriptable Follow Attach Fixed Track Watch",

@@ -15,6 +15,7 @@ return function(env)
 	local icons = env.require("ui/icons")
 	local overlay = env.require("ui/overlay")
 	local P = env.require("ui/primitives")
+	local profileUI = env.require("ui/profile")
 	local C = env.require("ui/controls")
 	local sessions = env.require("agent/session")
 	local subagent = env.require("agent/subagent")
@@ -548,68 +549,64 @@ return function(env)
 
 		P.divider(sidebar, { color = theme.color.borderSubtle, layoutOrder = 6 })
 
-		-- The pinned profile row. The subtitle is the provider actually in use, which is
-		-- what the reference client puts there and what someone looking at this wants to
-		-- know -- it was a literal "Gateway" before, true only by coincidence.
-		local profileName = "you"
-		local okName, display = pcall(function() return env.plr and env.plr.DisplayName end)
-		if okName and type(display) == "string" and util.trim(display) ~= "" then
-			profileName = display
-		elseif env.plr and type(env.plr.Name) == "string" and env.plr.Name ~= "" then
-			profileName = env.plr.Name
-		end
-
-		local profile
+		-- A distinct identity control, with room for a headshot and two readable lines.
+		local identity = profileUI.identity()
+		local identityHeight = theme.text.heading.height + theme.text.caption.height + theme.space.hair
+		local profile, profileMenu, chevron
 		profile = P.rowButton(sidebar, {
 			name = "ProfileBar",
-			height = math.max(theme.size.bar, theme.text.label.height + theme.text.caption.height + theme.space.sm),
-			bg = theme.color.sidebar,
+			height = math.max(theme.size.profileAvatar, identityHeight) + theme.space.sm * 2,
+			bg = theme.color.surface,
+			radius = theme.radius.lg,
+			stroke = true,
+			gap = theme.space.md,
 			padding = { x = ROW_INSET },
 			layoutOrder = 7,
 			onClick = function()
-				host.showProfileMenu(profile.instance)
+				if profileMenu and not profileMenu.closed then profileMenu.close(); return end
+				profileMenu = host.showProfileMenu(profile.instance, function()
+					if not profile.instance.Parent then return end
+					profile.setSelected(false)
+					chevron.Rotation = 0
+				end)
+				if profileMenu and not profileMenu.closed then
+					profile.setSelected(true)
+					chevron.Rotation = 180
+				end
 			end,
 		})
-		profile.icon("brand", 1, nil, ROW_ICON)
+		profileUI.avatar(profile.row, identity, theme.size.profileAvatar, 1)
 		local profileText = P.column(profile.row, {
 			name = "ProfileIdentity",
-			size = UDim2.new(0, 0, 0, 0),
-			auto = "Y",
+			size = UDim2.new(0, 0, 0, identityHeight),
 			flex = "Fill",
 			gap = theme.space.hair,
 			layoutOrder = 2,
 		})
 		P.text(profileText, {
 			name = "ProfileName",
-			text = profileName,
-			role = "label",
-			line = theme.line.tight,
+			text = identity.name,
+			role = "heading",
+			size = UDim2.new(1, 0, 0, theme.text.heading.height),
 			color = theme.color.text,
 			truncate = true,
 			layoutOrder = 1,
 		})
 		local profileDetail = P.text(profileText, {
 			name = "ProfileProvider",
-			text = "",
+			text = profileUI.providerLabel(),
 			role = "caption",
-			line = theme.line.tight,
+			size = UDim2.new(1, 0, 0, theme.text.caption.height),
 			color = theme.color.textTertiary,
 			truncate = true,
 			layoutOrder = 2,
 		})
-		local chevronSlot = P.frame(profile.row, {
+		chevron = P.frame(profile.row, {
+			name = "ProfileChevron",
 			size = UDim2.fromOffset(ROW_ICON, ROW_ICON),
 			layoutOrder = 3,
 		})
-		icons.chevron(chevronSlot, ROW_ICON, theme.color.textTertiary, "up")
-
-		local function describeProvider()
-			local record = providers.active()
-			if not record then return "No provider connected" end
-			local model = util.trim(tostring(record.model or ""))
-			if model == "" then return record.label end
-			return record.label
-		end
+		icons.chevron(chevron, ROW_ICON, theme.color.textTertiary, "up")
 
 		-- What the list currently shows, as a string.
 		--
@@ -650,7 +647,7 @@ return function(env)
 		end
 
 		function handle.refresh()
-			profileDetail.Text = describeProvider()
+			profileDetail.Text = profileUI.providerLabel()
 			for id, entry in pairs(modes) do
 				local selected = host.panel == id
 				entry.button.setSelected(selected)
@@ -672,7 +669,7 @@ return function(env)
 		end)
 		local unsubscribeProviders = providers.changed:connect(function()
 			if not sidebar.Parent then return end
-			profileDetail.Text = describeProvider()
+			profileDetail.Text = profileUI.providerLabel()
 		end)
 		local unsubscribePlace = place.changed:connect(function()
 			if not sidebar.Parent then return end

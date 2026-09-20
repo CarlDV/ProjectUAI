@@ -70,8 +70,8 @@ return function(env)
 			risk = "read",
 			timeout = 120,
 			description = "List Infinite Yield commands, optionally filtered by a keyword or limited to "
-				.. "one plugin's commands. Each line is the name, its aliases, and the plugin it came "
-				.. "from (core commands show none). Use it to find the exact spelling before iy_cmd.",
+				.. "one plugin's commands. Shows names, aliases, plugin origin, and argument signatures "
+				.. "and descriptions when IY exposes them. Use it before iy_cmd to check syntax.",
 			parameters = {
 				type = "object",
 				properties = {
@@ -91,6 +91,19 @@ return function(env)
 				local needle = util.trim(tostring(args.filter or "")):lower()
 				local pluginNeedle = util.trim(tostring(args.plugin or "")):lower()
 				local shown = H.limit(args.limit, LIST_CAP, 300)
+				local descriptions = {}
+				for _, entry in ipairs(iy.descriptions() or {}) do
+					if type(entry) == "table" and type(entry.NAME) == "string" and type(entry.DESC) == "string" then
+						-- A slash inside [argument hints] does not introduce an alias.
+						local names = entry.NAME:gsub("%b[]", "")
+						for part in names:gmatch("[^/]+") do
+							local token = util.trim(part):match("^(%S+)")
+							if token and not descriptions[token:lower()] then
+								descriptions[token:lower()] = { signature = entry.NAME, desc = entry.DESC }
+							end
+						end
+					end
+				end
 
 				local lines, matched, plugins = {}, 0, {}
 				for _, cmd in ipairs(cmds) do
@@ -125,6 +138,18 @@ return function(env)
 										plugins[cmd.PLUGIN] = true
 									end
 								end
+								local description = descriptions[nameLower]
+								if not description and type(cmd.ALIAS) == "table" then
+									for _, alias in ipairs(cmd.ALIAS) do
+										if type(alias) == "string" and descriptions[alias:lower()] then
+											description = descriptions[alias:lower()]
+											break
+										end
+									end
+								end
+								if description then
+									label = label .. " | " .. description.signature .. " - " .. util.ellipsis(description.desc:gsub("%s+", " "), 120)
+								end
 								lines[#lines + 1] = label
 							end
 						end
@@ -140,22 +165,55 @@ return function(env)
 			end,
 		},
 		{
+			name = "iy_players",
+			risk = "read",
+			timeout = 120,
+			description = "Resolve an IY selector to concrete names in the live server (read-only). Keywords: "
+				.. "all, others, me, random, #<n>, %<team>, allies, enemies, team, nonteam, friends, nonfriends, guests, "
+				.. "bacons, age<n>, nearest, farthest, group<id>, alive, dead, rad<n>, cursor, npcs. "
+				.. "Supports + include/- exclude, comma-separated lists, and @name for username-only prefix matching. "
+				.. "Uses the running IY's selector behavior; resolve targets before iy_cmd.",
+			parameters = { type = "object", properties = {
+				selector = { type = "string", minLength = 1, maxLength = 1000, description = "IY selector, e.g. all, others, rad50, PlayerName." },
+				limit = { type = "integer", minimum = 1, maximum = 200, description = "Maximum names shown; default 50." },
+			}, required = { "selector" } },
+			run = function(args, ctx)
+				if type(args.selector) ~= "string" or util.trim(args.selector) == "" then return H.fail("selector must not be empty") end
+				local ok, err = iy.ensure()
+				if not ok then return H.fail(err) end
+				if ctx and ctx.aborted and ctx.aborted() then return H.fail("cancelled before resolving players") end
+				local selector = util.trim(args.selector)
+				local names, reason = iy.resolvePlayers(selector)
+				if not names then return H.fail(reason) end
+				local text = string.format("Selector '%s' matched no players right now.", selector)
+				if #names > 0 then
+					text = string.format("Selector '%s' matched %d player(s):\n", selector, #names) .. H.list(names, H.limit(args.limit, 50, 200))
+				end
+				return { text = text, data = { names = names, count = #names } }
+			end,
+		},
+		{
 			name = "iy_control",
 			risk = "write",
 			timeout = 120,
-			description = "Inspect and configure Infinite Yield's native saved events, keybinds and settings. "
+			description = "Inspect and configure Infinite Yield's saved events, keybinds, aliases, waypoints and settings. "
 				.. "Inspect first for current 1-based binding indexes, event fields and defaults. Supports OnExecute, OnSpawn, OnDied, "
 				.. "OnDamage, OnKilled, OnJoin, OnLeave and OnChatted. Event commands can use $1/$2 arguments; native IY ignores "
-				.. "commands containing 'plugin'. Edits refresh IY's editor and request its normal save. Use iy_cmd for commands, "
-				.. "aliases and waypoints; use iy_plugin_write for custom plugins or custom event definitions. stop_loops sends breakloops.",
+				.. "commands containing 'plugin'. Edits refresh IY's editor and request its normal save. Waypoints default to the current place. "
+				.. "Use iy_cmd to execute commands, iy_plugin_write for plugins/custom events. stop_loops sends breakloops.",
 			parameters = {
 				type = "object",
 				properties = {
-					action = { type = "string", enum = { "inspect", "configure", "event_add", "event_update", "event_remove", "event_clear", "event_fire", "keybind_add", "keybind_remove", "stop_loops" } },
-					section = { type = "string", enum = { "all", "events", "keybinds", "settings" }, description = "What to inspect. Default all." },
+					action = { type = "string", enum = { "inspect", "configure", "event_add", "event_update", "event_remove", "event_clear", "event_fire", "keybind_add", "keybind_remove", "alias_add", "alias_remove", "alias_clear", "waypoint_add", "waypoint_remove", "waypoint_clear", "stop_loops" } },
+					section = { type = "string", enum = { "all", "events", "keybinds", "settings", "aliases", "waypoints" }, description = "What to inspect. Default all." },
 					event = { type = "string", description = "Native event name; required for event actions, optional inspect filter." },
 					index = { type = "integer", minimum = 1, description = "Current 1-based binding index from inspect, for update/remove." },
-					command = { type = "string", minLength = 1, maxLength = 4000, description = "IY command; required when adding an event or keybind." },
+					command = { type = "string", minLength = 1, maxLength = 4000, description = "IY command for events/keybinds; alias_add uses its first token as the target command name." },
+					alias = { type = "string", minLength = 1, maxLength = 50, description = "Single alias name for alias_add/alias_remove." },
+					name = { type = "string", minLength = 1, maxLength = 100, description = "Waypoint name for waypoint_add/waypoint_remove." },
+					position = { type = "object", properties = { x = { type = "number" }, y = { type = "number" }, z = { type = "number" } }, required = { "x", "y", "z" }, description = "waypoint_add coordinates; omit for your current root position. Coordinates are floored." },
+					all_places = { type = "boolean", description = "waypoint_clear only: also clear saved waypoints in other places. Default false." },
+					persist = { type = "boolean", description = "Request IY's normal save; default true. false is session-only, except command-backed settings require saving." },
 					delay = { type = "number", minimum = 0, maximum = 3600, description = "Event command delay in seconds, default 0." },
 					conditions = { type = "object", properties = {
 						player = { type = "string", description = "me, all, or an IY player selector. Victim for OnKilled." },
@@ -175,6 +233,8 @@ return function(env)
 						chat_logs = { type = "boolean" },
 						join_logs = { type = "boolean" },
 						esp_transparency = { type = "number", minimum = 0, maximum = 1 },
+						gui_scale = { type = "number", minimum = 0.4, maximum = 2, description = "Dispatch IY's guiscale command; applies asynchronously and saves through IY." },
+						logs_webhook = { type = "string", maxLength = 500, description = "Chat log webhook HTTP(S) URL, or empty to disable. IY's command applies asynchronously and saves." },
 					} },
 					offset = { type = "integer", minimum = 1, description = "Inspect continuation offset." },
 					limit = { type = "integer", minimum = 1, maximum = 50, description = "Inspect page size; default 25." },

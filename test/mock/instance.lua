@@ -369,6 +369,7 @@ function M.build(dt)
 		if isA(className, "TextLabel") or isA(className, "TextButton") or isA(className, "TextBox") then
 			for key, value in pairs(TEXT_DEFAULTS) do out[key] = value end
 		end
+		if className == "ImageLabel" or className == "ImageButton" then out.IsLoaded = false end
 		if className == "TextBox" then
 			out.ClearTextOnFocus = true
 			out.MultiLine = false

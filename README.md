@@ -126,7 +126,7 @@ counts, and durations, and stop when their conversation is cleared or removed, c
 is disabled, or the client unloads.
 
 **Infinite Yield control and plugin authoring.** `iy_control` inspects and changes
-IY's native event bindings, keybinds, command prefix, and supported settings. It
+IY's native event bindings, keybinds, aliases, waypoints, command prefix, and supported settings. It
 supports `OnExecute`, `OnSpawn`, `OnDied`, `OnDamage`, `OnKilled`, `OnJoin`,
 `OnLeave`, and `OnChatted`, including player/message/health filters, delays, and
 `$1`/`$2` command arguments. Changes refresh IY's editor and request its normal
@@ -136,6 +136,26 @@ repeat prefixes; event bindings and individual commands' own loops are managed
 separately. The adapter follows the upstream
 [event editor and plugin loader](https://github.com/EdgeIY/infiniteyield/blob/master/source),
 reviewed September 20, 2026.
+
+`iy_cmds` includes argument signatures and short descriptions when the running IY
+exposes them. `iy_players` resolves selectors such as `others`, `rad50`, and
+`all-me` to live names before a targeting command. It uses IY's own selector
+engine, including comma-separated lists and `@name` username-only prefix matching.
+Its text is bounded by `limit`; structured results retain the complete name list.
+
+Use `alias_add`, `alias_remove`, or `alias_clear` to manage aliases. An alias
+targets a command name, including an existing command alias; arguments are not
+stored in it. `waypoint_add` accepts `{x,y,z}` coordinates or uses your character's
+current root position, flooring each coordinate to match IY. `waypoint_remove`
+and `waypoint_clear` affect the current place; `waypoint_clear` with
+`all_places=true` also clears saved waypoints in other places. Inspect
+`section="aliases"` or `section="waypoints"` and follow `nextOffset` for more.
+Edits preserve the live table references used by IY's GUI and request its save.
+
+`configure` also supports `gui_scale` (0.4–2) and `logs_webhook` (an HTTP(S) URL,
+or an empty string to disable). These dispatch IY's own commands asynchronously;
+inspect settings to confirm the resulting values. Those commands save through
+IY, so they reject `persist=false`; other native edits support session-only changes.
 
 `iy_plugin_read` without a filename returns a multi-command template. Pass a
 filename to read an existing plugin, then use `iy_plugin_write` to create or
@@ -153,6 +173,22 @@ For example, `iy_control` can bind `speed 40` to your next spawn:
 
 ```json
 {"action":"event_add","event":"OnSpawn","command":"speed 40","conditions":{"player":"me"},"delay":0.5}
+```
+
+Resolve nearby players with `iy_players`:
+
+```json
+{"selector":"rad50-me","limit":20}
+```
+
+Create an alias or a waypoint with `iy_control`:
+
+```json
+{"action":"alias_add","alias":"quick","command":"speed"}
+```
+
+```json
+{"action":"waypoint_add","name":"Home","position":{"x":100,"y":20,"z":-50}}
 ```
 
 **Task and notification layout.** Task markers share their text's line box at each
@@ -468,19 +504,47 @@ where providers put reasoning text and per-request usage. `net/ws.lua` does real
 token streaming for a gateway that speaks a small WebSocket envelope, when the
 executor exposes `WebSocket.connect`.
 
-`check_luau` checks syntax without executing code. `run_luau` captures print/warn,
-tables, and multiple return values, and inserts cooperative checkpoints in loop
+Some executors stop HTTP requests after roughly 30–60 seconds even when given a
+longer timeout. To keep replies within that window, buffered HTTP uses
+`agent.executorReplyCeiling` (8,192 tokens by default), without changing the saved
+`agent.maxTokens` setting. A configured, enabled WebSocket stream and the enabled
+web relay bypass this default ceiling; an HTTP fallback from a failed socket is
+capped again. Explicit per-request token values and provider body overrides also
+bypass the default. Model limits and previously learned caps still apply when
+building the request.
+
+Tune it with `getgenv().UAI.config.set("agent.executorReplyCeiling", 16384)`;
+use `0` to disable this default clamp. A request that returns nothing after
+20–130 seconds can be retried once with a smaller reply and reduced reasoning
+effort when available. Only a valid completion saves the working reply ceiling
+on that provider record for the current model. Minimal requests and cancelled
+requests are not retried this way. Large prompts can still spend the request
+window uploading and prefilling; `agent.contextTokens` remains 1,000,000 by
+default and can be lowered when short replies also time out.
+
+`check_luau` checks syntax without executing code. Both it and `run_luau` accept
+either inline `code` or a saved file `path`. Use `check_luau` with
+`{"path":"scripts/build.lua"}` to validate a script you edited, then run it by
+the same path. Its source stays on the client instead of being generated and sent again. Saved-paste
+references resolve the same way as `file_read`.
+
+`run_luau` captures print/warn, tables, and multiple return values, and inserts
+cooperative checkpoints in loop
 bodies without changing strings or comments. Its `timeout` argument accepts 1–60
 seconds and defaults to 10. It waits for functions started through its
 `task.spawn`, `task.defer`, and `task.delay` wrappers; errors, Stop, deadlines, and
-unload cancel those managed tasks. An endless spawned task therefore ends at the
+unload stop those managed tasks cooperatively. An endless spawned task therefore ends at the
 deadline rather than continuing silently after the tool returns.
 
 This is not a security sandbox. Dynamically compiled code, blocking engine calls,
 and callbacks registered on engine signals can bypass these controls. Later work
-in a persistent engine callback is outside a successfully completed call. Hosts
-without usable `task.cancel` fall back to cooperative cancellation and report the
-remaining uncertainty. Changes already made are not rolled back.
+in a persistent engine callback is outside a successfully completed call. UAI leaves
+native coroutines alive so pending Roblox/executor callbacks cannot resume a thread
+it closed. Managed waits and delayed callbacks check cancellation flags, including
+after a successful parent returns; `task.cancel` accepts only this script's task
+handles. Work suspended outside managed waits can still resume before its next
+checkpoint, and the result reports that uncertainty. Changes already made are not
+rolled back.
 
 `file_read` and `script_source` return contiguous slices and a continuation
 `offset` when more remains. Offsets count bytes and preserve UTF-8 boundaries.
@@ -488,8 +552,25 @@ After reading a workspace file, use `file_edit` with exact `old_text` and `new_t
 to change it. The default requires a unique match; `replace_all=true` replaces all
 non-overlapping matches. Empty replacement text deletes the match. The tool refuses
 a file that changed while the edit was being prepared.
+Prefer `file_edit` or `file_edit_many` for targeted changes to large files.
+`file_write` is for new files or replacing most of a file; it and `file_append`
+reject content over 2 MiB per call before writing.
+Build large new scripts in small sections, waiting for each write before the next
+append or edit to that file. Each section must be a complete tool call. Interrupted
+write arguments are rejected instead of repairing them into a partial edit. If a
+provider reports that its tool batch hit the token limit, none of those calls run;
+the model receives results asking it to retry with smaller, complete calls.
 
 See [CHANGELOG.md](CHANGELOG.md) or **What's New** for the latest release notes.
+
+## Skills
+
+The main and subagent prompts require reading every enabled skill before the first
+reply or other work in each new or resumed conversation. Skill bodies are read
+through `skills_read`; the inventory alone does not count. Long bodies and
+`skills_list` results have byte-offset continuations that fit the tool result
+budget. Restricted subagents can read skills without gaining skill-writing tools.
+Disabled skills are skipped, and unavailable or denied reads are reported once.
 
 ## Unloading
 

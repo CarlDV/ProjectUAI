@@ -17,8 +17,14 @@ return function(env)
 
 	local M = {}
 
+	local function usesWebSocket(record, request)
+		local stream = request.stream
+		if stream == nil then stream = record.stream ~= false and config.get("agent.stream", true) end
+		return stream and caps.ws and util.trim(record.wsUrl) ~= ""
+	end
+
 	-- The executor's own transport wall, answered with a smaller ask. Some executors
-	-- hard-cap every HTTP request at sixty seconds and ignore the Timeout option
+	-- hard-cap every HTTP request at thirty or sixty seconds and ignore Timeout
 	-- entirely, so no config value lifts that wall. What can change is the ask: a
 	-- model that thinks for ninety seconds finishes inside sixty when asked to think
 	-- less. One notch of effort down and the reply ceiling halved, and only when the
@@ -272,6 +278,7 @@ return function(env)
 
 		for key, value in pairs(record.params or {}) do body[key] = value end
 		for key, value in pairs(request.extra or {}) do body[key] = value end
+		M.limitExecutorReply(record, request, body, usesWebSocket(record, request))
 		return body
 	end
 
@@ -428,6 +435,23 @@ return function(env)
 		return wanted
 	end
 
+	-- SSE over executor HTTP is still a buffered body. Bound its default reply,
+	-- while retaining explicit token overrides and transports that stream/poll.
+	-- Also called after a failed socket so its HTTP fallback gets the same bound.
+	function M.limitExecutorReply(record, request, body, socket)
+		if socket or (config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web") then return end
+		local params, extra = record.params or {}, request.extra or {}
+		if request.maxTokens ~= nil or params.max_tokens ~= nil or params.max_completion_tokens ~= nil
+			or extra.max_tokens ~= nil or extra.max_completion_tokens ~= nil then return end
+		local ceiling = tonumber(config.get("agent.executorReplyCeiling", 8192)) or 8192
+		if ceiling ~= ceiling or ceiling == math.huge or ceiling == -math.huge then ceiling = 8192 end
+		if ceiling <= 0 then return end
+		ceiling = math.max(1, math.floor(ceiling))
+		local field = body.max_completion_tokens ~= nil and "max_completion_tokens" or "max_tokens"
+		local wanted = tonumber(body[field])
+		if not wanted or wanted <= 0 or wanted > ceiling then body[field] = ceiling end
+	end
+
 	-- The effort level to send, or nil for none. Both adapters ask this and differ
 	-- only in how the answer is spelled on the wire.
 	--
@@ -445,9 +469,16 @@ return function(env)
 		return traits.nearestEffort(record and record.model, wanted)
 	end
 
-	-- Stores what a refusal named, against the model it came from. Both adapters call
-	-- this; the record persists, so the lesson outlives the session.
+	-- Stores a refusal's limit or a successful smaller reply after a transport wall.
+	-- Both adapters call this; the record persists, so the lesson outlives a session.
 	function M.rememberMaxTokens(record, tokens)
+		tokens = tonumber(tokens)
+		if not tokens or tokens ~= tokens or tokens <= 0 or tokens == math.huge then return end
+		local previous = record.maxTokensCap
+		local previousTokens = type(previous) == "table" and tonumber(previous.tokens)
+		if previousTokens and previous.model == record.model and previousTokens > 0 then
+			tokens = math.min(tokens, previousTokens)
+		end
 		record.maxTokensCap = { model = record.model, tokens = tokens }
 		registry.save(record, { force = true })
 	end
@@ -787,6 +818,7 @@ return function(env)
 		local headers = rebuildHeaders()
 
 		local started = clock.ms()
+		local lastRequestMs = 0
 		local attemptsAllowed = request.attempts or config.get("agent.retries", 3)
 		local rotationsLeft = math.max(#pool - 1, 0)
 		-- With a pool, a 429 belongs to the rotation above, not to the transport's
@@ -815,9 +847,12 @@ return function(env)
 				if streamBody then
 					return { ok = true, status = 200, body = streamBody, via = "websocket", ms = clock.since(started) }
 				end
+				if wsErr == "aborted" then return nil, "aborted" end
 				log.warn("provider", "websocket stream failed, falling back to http", wsErr)
 			end
-			return http.send({
+			M.limitExecutorReply(record, request, payload)
+			local requestStarted = clock.ms()
+			local res, err = http.send({
 				relay = web,
 				sessionId = request.sessionId,
 				url = url,
@@ -834,13 +869,16 @@ return function(env)
 				-- until it finishes thinking, so this has to outlast the think.
 				timeout = requestTimeout(request),
 			})
+			lastRequestMs = clock.since(requestStarted)
+			if request.aborted and request.aborted() then return nil, "aborted" end
+			return res, err
 		end
 
 		local function fireWithRotation(payload)
 			local res, err = fire(payload)
 			while res and not res.ok and quotaRefusal(res) and rotationsLeft > 0 do
 				rotationsLeft = rotationsLeft - 1
-			local benched = currentKey or pool[1]
+				local benched = currentKey or pool[1]
 				registry.cooldownKey(record, benched)
 				currentKey = registry.nextKey(record)
 				for index, key in ipairs(pool) do
@@ -889,19 +927,20 @@ return function(env)
 		-- the error text, and no config value can lift that wall because the option
 		-- was never honoured. Retry once with a smaller ask -- less thinking, half the
 		-- reply ceiling -- so the model finishes inside the wall instead of dying at
-		-- it. Only when the first attempt produced nothing at all, only within a
-		-- minute of the cap, and only when the smaller ask is actually smaller: a
+		-- it. Only when an HTTP request produced nothing after 20-130 seconds,
+		-- and only when the smaller ask is actually smaller: a
 		-- deadline on an already-minimal body would re-send the same prompt to the
 		-- same wall, and that is the one outcome this must not do.
-		local wallMs = clock.since(started)
-		if not res and err and err ~= "aborted" and wallMs >= 55000 and wallMs <= 70000 then
+		local recoveredTokens
+		if not res and err and err ~= "aborted" and lastRequestMs >= 20000 and lastRequestMs <= 130000 then
 			local lowered, note = smallerAsk(body)
 			if lowered and util.encode(lowered) ~= util.encode(body) then
 				log.info("provider", record.label .. ": hit the transport wall, retrying smaller (" .. note .. ")")
 				if request.onRetry then
-				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 0 })
-			end
+					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 0 })
+				end
 				res, err = fireWithRotation(lowered)
+				if res and res.ok then recoveredTokens = lowered.max_tokens or lowered.max_completion_tokens end
 			end
 		end
 
@@ -944,6 +983,11 @@ return function(env)
 			return nil, message, res
 		end
 
+		-- A 200 with an error, malformed JSON or an empty completion did not recover.
+		if recoveredTokens then
+			M.rememberMaxTokens(record, recoveredTokens)
+			log.info("provider", record.label .. ": smaller request succeeded; remembered max_tokens " .. tostring(recoveredTokens))
+		end
 		parsed.ms = clock.since(started)
 		parsed.provider = record.id
 		parsed.providerLabel = record.label

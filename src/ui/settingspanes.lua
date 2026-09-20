@@ -1356,10 +1356,10 @@ return function(env)
 		-- written by the agent, or installed from GitHub. The toggle is the one
 		-- bit of state kept, and it is stored per filename.
 		local skillsCard = build.section("Playbooks",
-			"Markdown skills under skills/. Nothing is injected into the system prompt: the "
-			.. "agent sees each name and description, and reads the body on demand when a "
-			.. "task matches. Drop a .md file in by hand, or ask the agent to install one "
-			.. "from GitHub.")
+			"The agent is instructed to read every enabled skill before replying in each "
+			.. "new or resumed conversation, including subagents. Drop a .md playbook into "
+			.. "skills/, or ask the agent to install one from GitHub. Turn off a skill to "
+			.. "exclude it from those reads.")
 		local skillsEngine = env.require("runtime/skills")
 
 		local skillsList = P.column(skillsCard, {

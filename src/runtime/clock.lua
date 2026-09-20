@@ -254,8 +254,10 @@ return function(env)
 
 	-- Runs fn on its own thread and stops waiting after `seconds`.
 	--
-	-- The timeout cannot kill the thread -- Luau has no way to -- so a runaway
-	-- body keeps running in the background and the caller is told so. Elapsed time
+	-- Deliberately leave the worker alive: an engine or executor call may still
+	-- own a continuation for it. Closing it can cause "cannot resume dead coroutine"
+	-- when that operation completes. Callers stop managed work cooperatively and
+	-- report when other work may still be running. Elapsed time
 	-- comes from task.wait's own delta rather than a clock read per frame, and the
 	-- first check happens before any yield: task.spawn runs inline until the first
 	-- yield, so code that never yields is already finished and must not be billed

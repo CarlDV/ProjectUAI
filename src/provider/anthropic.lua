@@ -37,7 +37,7 @@ return function(env)
 	end
 
 	-- The executor's transport wall, answered with a smaller ask. Same reasoning as
-	-- the chat adapter: some executors hard-cap every HTTP request at sixty seconds
+	-- the chat adapter: executors may hard-cap HTTP at thirty or sixty seconds
 	-- and ignore the Timeout option entirely, so no config value lifts that wall. A
 	-- model that thinks for ninety seconds finishes inside sixty when asked to think
 	-- less. The effort lives in `output_config.effort` on this wire; the reply ceiling
@@ -52,7 +52,8 @@ return function(env)
 			if level == tostring(body.output_config and body.output_config.effort or "") then current = index break end
 		end
 		if current > 1 then
-			lowered.output_config = { effort = order[current - 1] }
+			lowered.output_config = util.copy(body.output_config)
+			lowered.output_config.effort = order[current - 1]
 			changes[#changes + 1] = "effort " .. order[current - 1]
 		end
 
@@ -242,6 +243,8 @@ return function(env)
 
 		for key, value in pairs(record.params or {}) do body[key] = value end
 		for key, value in pairs(request.extra or {}) do body[key] = value end
+		-- This adapter has no WebSocket path; SSE here still arrives over HTTP.
+		openai.limitExecutorReply(record, request, body)
 		return body
 	end
 
@@ -493,13 +496,15 @@ return function(env)
 		local headers = rebuildHeaders()
 
 		local started = clock.ms()
+		local lastRequestMs = 0
 		local rotationsLeft = math.max(#pool - 1, 0)
 		-- Same as the chat adapter: with a pool, a 429 is rotation's to answer, not
 		-- the transport's to sleep on.
 		local skip429 = (#pool > 1) and { [429] = true } or nil
 
 		local function fire(payload)
-			return http.send({
+			local requestStarted = clock.ms()
+			local res, err = http.send({
 				relay = config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web",
 				sessionId = request.sessionId,
 				url = M.endpoint(record),
@@ -516,6 +521,9 @@ return function(env)
 				-- until it answers, so the wall has to outlast the think.
 				timeout = requestTimeout(request),
 			})
+			lastRequestMs = clock.since(requestStarted)
+			if request.aborted and request.aborted() then return nil, "aborted" end
+			return res, err
 		end
 
 		local function fireWithRotation(payload)
@@ -565,10 +573,10 @@ return function(env)
 
 		-- The executor's transport wall: no body, no headers, an executor raise for
 		-- the error text. Same one smaller-ask retry as the chat adapter, so a model
-		-- that thinks for ninety seconds finishes inside sixty. Only within a minute
-		-- of the cap, and only when the smaller ask is actually smaller.
-		local wallMs = clock.since(started)
-		if not res and err and err ~= "aborted" and wallMs >= 55000 and wallMs <= 70000 then
+		-- can finish inside the wall. Only after 20-130 seconds without a response,
+		-- and only when the smaller ask is actually smaller.
+		local recoveredTokens
+		if not res and err and err ~= "aborted" and lastRequestMs >= 20000 and lastRequestMs <= 130000 then
 			local lowered, note = smallerAsk(body)
 			if lowered and util.encode(lowered) ~= util.encode(body) then
 				log.info("provider", record.label .. ": hit the transport wall, retrying smaller (" .. note .. ")")
@@ -576,6 +584,7 @@ return function(env)
 					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 0 })
 				end
 				res, err = fireWithRotation(lowered)
+				if res and res.ok then recoveredTokens = lowered.max_tokens end
 			end
 		end
 
@@ -624,6 +633,10 @@ return function(env)
 			return nil, message, res
 		end
 
+		if recoveredTokens then
+			openai.rememberMaxTokens(record, recoveredTokens)
+			log.info("provider", record.label .. ": smaller request succeeded; remembered max_tokens " .. tostring(recoveredTokens))
+		end
 		parsed.ms = clock.since(started)
 		parsed.provider = record.id
 		parsed.providerLabel = record.label

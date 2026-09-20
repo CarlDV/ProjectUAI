@@ -302,6 +302,8 @@ return function(env)
 		launcher = 44,
 		scrollbar = 4,
 		avatar = 26,
+		profileAvatar = 40,
+		profileAvatarLarge = 48,
 		-- The switch. `switchWide` is the width, kept as a token because it was a
 		-- hardcoded 38 that four panels each reserved a hand-summed 46 for -- every one
 		-- of which would have gone wrong the moment either number moved. Those rows now

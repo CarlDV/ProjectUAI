@@ -136,6 +136,72 @@ settings["ui.density"], settings["ui.fontScale"] = nil, nil
 responsive.touch, responsive.console = false, false
 theme.rebuild()
 
+-- Headshots must initiate loading without blocking UI construction. Exercise
+-- delayed readiness, failures, and closing a view while the native API yields.
+env.plr = h.localPlayer
+local profile = env.require("ui/profile")
+local thumbnailApi, preloadApi = h.services.Players.GetUserThumbnailAsync, h.services.ContentProvider.PreloadAsync
+local thumbnailCalls, preloadCalls = 0, 0
+local resolvedImage = "rbxassetid://123456789"
+h.services.Players.GetUserThumbnailAsync = function(_, userId, kind, size)
+	thumbnailCalls = thumbnailCalls + 1
+	check("avatar requests the local player's headshot", userId == h.localPlayer.UserId and kind == E.ThumbnailType.HeadShot and size == E.ThumbnailSize.Size150x150)
+	if thumbnailCalls == 1 then return "", false end
+	return resolvedImage, true
+end
+h.services.ContentProvider.PreloadAsync = function(_, images)
+	preloadCalls = preloadCalls + 1
+	check("avatar is renderable while loading", images[1].ImageTransparency == 0)
+	if images[1].Image == resolvedImage then images[1].IsLoaded = true end
+end
+local avatar = profile.avatar(root, profile.identity(), theme.size.profileAvatar)
+check("avatar construction does not wait for thumbnail requests", thumbnailCalls == 0 and avatar:FindFirstChild("AvatarInitial").Visible)
+h.sched.advance(0.1)
+check("pending thumbnails keep the initial", thumbnailCalls == 1 and avatar:FindFirstChild("AvatarInitial").Visible)
+h.sched.advance(1.1)
+check("ready thumbnails replace the initial after preload", avatar:FindFirstChild("AvatarImage").Image == resolvedImage and not avatar:FindFirstChild("AvatarInitial").Visible)
+h.sched.advance(4)
+check("successful avatars stop retrying", thumbnailCalls == 2 and preloadCalls == 2)
+avatar:Destroy()
+
+thumbnailCalls = 0
+h.services.Players.GetUserThumbnailAsync = function() thumbnailCalls = thumbnailCalls + 1; error("thumbnail unavailable") end
+h.services.ContentProvider.PreloadAsync = function() error("image fetch failed") end
+local failedAvatar = profile.avatar(root, profile.identity(), theme.size.profileAvatar)
+h.sched.advance(4)
+check("failed thumbnail requests stay bounded and retain the initial", thumbnailCalls == 3 and failedAvatar:FindFirstChild("AvatarInitial").Visible)
+failedAvatar:Destroy()
+
+local finishedFetch, latePreload = false, false
+local nativeCancel, avatarCancellations = h.sandbox.task.cancel, 0
+h.sandbox.task.cancel = function(thread) avatarCancellations = avatarCancellations + 1; return nativeCancel(thread) end
+h.services.Players.GetUserThumbnailAsync = function() h.sched.wait(1); finishedFetch = true; return resolvedImage, true end
+h.services.ContentProvider.PreloadAsync = function() latePreload = true end
+local closedAvatar = profile.avatar(root, profile.identity(), theme.size.profileAvatarLarge)
+h.sched.advance(0.1)
+closedAvatar:Destroy()
+h.sched.advance(2)
+check("closing an avatar lets the native request finish and discards its result", finishedFetch and not latePreload and avatarCancellations == 0)
+
+local finishedPreload = false
+h.services.Players.GetUserThumbnailAsync = function() return resolvedImage, true end
+h.services.ContentProvider.PreloadAsync = function() h.sched.wait(1); finishedPreload = true end
+local preloadingAvatar = profile.avatar(root, profile.identity(), theme.size.profileAvatar)
+h.sched.advance(0.1)
+preloadingAvatar:Destroy()
+h.sched.advance(2)
+check("destroying an avatar during preload leaves its continuation alive", finishedPreload and avatarCancellations == 0 and #h.sched.errors == 0)
+h.sandbox.task.cancel = nativeCancel
+
+local originalName, originalId = env.plr.DisplayName, env.plr.UserId
+env.plr.DisplayName, env.plr.UserId = "界面", 0
+local invalidIdentity = profile.identity()
+local invalidAvatar = profile.avatar(root, invalidIdentity, theme.size.profileAvatar)
+check("invalid user IDs retain a complete Unicode initial", invalidIdentity.initial == "界" and not invalidAvatar:FindFirstChild("AvatarImage"))
+invalidAvatar:Destroy()
+env.plr.DisplayName, env.plr.UserId = originalName, originalId
+h.services.Players.GetUserThumbnailAsync, h.services.ContentProvider.PreloadAsync = thumbnailApi, preloadApi
+
 local facts, factValue = controls.keyValue(root, { key = "A detailed property name", value = "A value that should remain readable", keyWidth = 140 })
 local factLayout = facts:FindFirstChildOfClass("UIListLayout")
 local factKey

@@ -23,6 +23,41 @@ return function(env)
 
 	local ENTRIES = {
 		{
+			version = "1.5.0",
+			date = "September 20, 2026",
+			title = "IY controls and executor timeout recovery",
+			highlights = "Resolve player selectors, manage aliases and waypoints, and discover command syntax. Buffered requests use a smaller default reply ceiling and remember successful timeout recovery.",
+			sections = {
+				{ category = "added", items = {
+					"iy_players resolves IY selectors to live player names before targeting commands, with a bounded listing and complete structured results.",
+					"iy_control manages native events, keybinds, aliases, waypoints, settings and repeat loops. Alias and waypoint inspection supports pagination; waypoint deletion and clearing default to the current place, with all_places=true to clear every place.",
+					"gui_scale and logs_webhook settings use IY's native commands, with asynchronous dispatch and saving reported explicitly.",
+					"iy_plugin_read and iy_plugin_write support custom plugins with shared globals, multiple commands, aliases, syntax checks, returned-table validation and live reloads.",
+				} },
+				{ category = "improved", items = {
+					"The desktop profile control shows your Roblox headshot beside a clearer name and provider hierarchy. Its menu adds a matching identity header, a live provider summary, roomier actions and visible hover and open states, with an initial fallback while avatars load.",
+					"iy_cmds includes native argument signatures and short descriptions alongside names, aliases and plugin origins, with a fallback for older IY versions.",
+					"Buffered HTTP uses an 8,192-token default reply ceiling through agent.executorReplyCeiling, without changing agent.maxTokens. Configured WebSocket streams, the enabled web relay and explicit token overrides bypass this default; 0 disables it.",
+					"Both provider adapters can recover after 20–130 seconds without a response by retrying a smaller reply and reducing reasoning effort when available. A valid completion saves the working ceiling for that provider and model.",
+					"The agent favors targeted file_edit and file_edit_many changes to keep replies within executor request windows.",
+					"check_luau accepts saved scripts by path, matching run_luau and saved-paste reads. Large scripts use small sequential writes and checks/runs by path to avoid sending source repeatedly.",
+					"Main and subagent prompts require reading every enabled skill first in every new or resumed conversation. Skill bodies and inventories paginate, and restricted subagents gain skill reads without mutation tools.",
+				} },
+				{ category = "fixed", items = {
+					"Alias and waypoint edits validate inputs, refresh IY's GUI and clear tables in place. Coordinate waypoints use validated, floored values instead of the buggy upstream command; deletion preserves other places' waypoints.",
+					"Failed sockets use the safer ceiling on HTTP fallback. Cancellations and already-minimal requests skip recovery retries; malformed or empty replies do not teach a token cap.",
+					"file_write and file_append reject content over 2 MiB per call before writing, preserving existing files.",
+					"Interrupted write arguments cannot become partial edits or scripts. Token-limited tool batches run no calls and request smaller complete calls.",
+					"Profile headshots resolve and preload with bounded retries and stay renderable while loading. Closing a view discards late results while its native requests finish on live coroutines.",
+					"Managed script stopping uses cancellation flags instead of closing native coroutines, removing cancellation paths that can leave Roblox callbacks targeting dead threads. Self-cancellation, finished handles, long delays and later callbacks use the same guards; external engine waits retain an explicit limitation.",
+					"Failed turns release their busy state and invalidate old tool contexts. A new main or subagent turn cannot revive a failed or stopped worker.",
+					"The minimize/restore launcher preserves the grab offset, waits for a drag threshold and tracks one pointer without opening after a drag. Focus loss and rebuild clean up listeners; keyboard and viewport changes preserve preferred placement.",
+					"Task markers and notification content align across text sizes and input modes. Task disclosure choices persist, long plans stay bounded, and skipped tasks do not count as completed.",
+					"Notifications show conversation titles and Open chat actions, preserve other unread conversations, fit the viewport and stop the busy pulse when work finishes.",
+				} },
+			},
+		},
+		{
 			version = "1.4.0",
 			date = "September 19, 2026",
 			title = "Batch tools and a refreshed public showcase",

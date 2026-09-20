@@ -117,6 +117,26 @@ return function(env)
 		return nil
 	end
 
+	-- Human-readable signatures, separate from the executable registry. Read the
+	-- live environment so later plugin additions and replacement tables are seen.
+	function M.descriptions()
+		local list = M.value("CMDs")
+		if type(list) == "table" then return list end
+		return nil
+	end
+
+	function M.resolvePlayers(selector)
+		local fn = M.value("getPlayer")
+		if type(fn) ~= "function" then return nil, "this IY does not expose getPlayer" end
+		local ok, names = pcall(fn, selector, env.plr)
+		if not ok then return nil, tostring(names) end
+		if type(names) ~= "table" then return nil, "getPlayer returned no list" end
+		for _, name in ipairs(names) do
+			if type(name) ~= "string" then return nil, "getPlayer returned an invalid player name" end
+		end
+		return names
+	end
+
 	function M.isLoaded()
 		return type(M.execFn()) == "function"
 	end

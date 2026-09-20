@@ -925,7 +925,8 @@ return function(env)
 	-- Anchored menu ----------------------------------------------------------
 
 	-- Opens below the target, or above it when there is not enough room. Options are
-	-- { label, value, detail, selected, tone }.
+	-- { label, value, detail, selected, tone }. A custom header supplies both its
+	-- height and render callback so the reserved space matches its contents.
 	function M.menu(props)
 		props = props or {}
 		if not ensure() then return nil end
@@ -968,7 +969,7 @@ return function(env)
 		end
 		local content = theme.text.small.height
 		if hasDetail then content = content + theme.text.caption.height end
-		local rowHeight = math.max(theme.size.row, responsive.minTarget(), content + theme.space.xs)
+		local rowHeight = math.max(props.rowHeight or theme.size.row, responsive.minTarget(), content + theme.space.xs)
 
 		-- Measured rather than counted: a divider is one pixel and a header is its own
 		-- height, and treating both as a full row made the profile menu tall enough to
@@ -979,13 +980,13 @@ return function(env)
 			if option.divider then
 				bodyHeight = bodyHeight + 1 + theme.space.hair
 			elseif option.isHeader then
-				bodyHeight = bodyHeight + headerHeight + theme.space.hair
+				bodyHeight = bodyHeight + (option.height or headerHeight) + theme.space.hair
 			else
 				bodyHeight = bodyHeight + rowHeight + theme.space.hair
 			end
 		end
 		if #(props.options or {}) > 0 then bodyHeight = bodyHeight - theme.space.hair end
-		bodyHeight = math.min(bodyHeight, theme.size.menuMax)
+		bodyHeight = math.min(bodyHeight, props.maxHeight or theme.size.menuMax)
 		local preferredWidth, preferredHeight = math.ceil(width), bodyHeight
 
 		local card = P.frame(scrim, {
@@ -1086,6 +1087,13 @@ return function(env)
 					layoutOrder = index,
 				})
 				div.Size = UDim2.new(1, 0, 0, 1)
+			elseif option.isHeader and option.render then
+				local head = P.frame(list.instance, {
+					name = "MenuHeader",
+					size = UDim2.new(1, 0, 0, option.height or headerHeight),
+					layoutOrder = index,
+				})
+				option.render(head)
 			elseif option.isHeader then
 				-- The height the menu already reserved for it, sixty lines up. This was a
 				-- literal 36 against 46 pixels of content, so every menu with a header --
@@ -1093,7 +1101,7 @@ return function(env)
 				-- into the first option below it, while the menu as a whole still reserved
 				-- the correct 48 and left the difference floating at the bottom.
 				local headRow = P.column(list.instance, {
-					size = UDim2.new(1, 0, 0, headerHeight),
+					size = UDim2.new(1, 0, 0, option.height or headerHeight),
 					padding = { x = theme.space.sm, top = theme.space.xs },
 					gap = 0,
 					layoutOrder = index,

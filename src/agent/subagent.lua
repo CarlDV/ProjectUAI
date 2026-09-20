@@ -23,9 +23,9 @@ return function(env)
 	-- usually to go and find out, and a delegated write is hard for the user to
 	-- attribute afterwards.
 	M.PRESETS = {
-		read = { instance = true, world = true, players = true, perf = true, meta = true, web = true, net = true, fs = true },
-		web = { web = true, net = true },
-		game = { instance = true, world = true, players = true, gui = true, remotes = true, meta = true },
+		read = { instance = true, world = true, players = true, perf = true, meta = true, web = true, net = true, fs = true, skills = true },
+		web = { web = true, net = true, skills = true },
+		game = { instance = true, world = true, players = true, gui = true, remotes = true, meta = true, skills = true },
 		full = nil,
 	}
 
@@ -417,6 +417,8 @@ return function(env)
 		end
 
 		child.abortFlag = false
+		child.turns = child.turns + 1
+		child.toolEpoch = {}
 		child.unlimited = unlimited
 		child.budgetSeconds = budget
 		if opts.turns then child.maxTurns = opts.turns end
@@ -443,11 +445,12 @@ return function(env)
 		-- anywhere inside cannot leak a slot and permanently narrow the ceiling.
 		local started = clock.ms()
 		M.live = M.live + 1
-		local ok, reply = pcall(env.require("agent/loop").run, child, text)
+		local ok, reply = pcall(function() return env.require("agent/loop").run(child, text) end)
 		M.live = math.max(M.live - 1, 0)
 
 		local elapsed = clock.since(started)
 		if not ok then
+			child.abortFlag = true
 			log.warn("subagent", "failed", reply)
 			local note = "the subagent failed: " .. util.ellipsis(tostring(reply), 200)
 			record.status = "failed"
@@ -531,6 +534,12 @@ return function(env)
 			turns = turns,
 		})
 
+		local excluded = { ask_user = true }
+		if record.preset ~= "full" then
+			-- Every preset must be able to read skills first. This does not grant a
+			-- restricted worker permission to change the user's standing playbooks.
+			excluded.skills_write, excluded.skills_install, excluded.skills_delete = true, true, true
+		end
 		local child = session.create({
 			title = "subagent",
 			depth = depth,
@@ -541,7 +550,7 @@ return function(env)
 			-- catalogue entirely rather than described-and-refused. The brief also
 			-- says so, because a model that knows it cannot ask writes a complete
 			-- report instead of stopping at a question.
-			toolExclude = { ask_user = true },
+			toolExclude = excluded,
 			-- Streaming is left to the provider and the Ask-for-streams setting, the
 			-- same as the main conversation. It used to be refused here, on the reading
 			-- that a child with no interface has nothing to stream into -- but no Roblox

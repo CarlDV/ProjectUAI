@@ -152,6 +152,7 @@ return function(env)
 			createdAt = clock.ms(),
 			updatedAt = clock.ms(),
 			turns = 0,
+			toolEpoch = {},
 			abortFlag = false,
 			log = {},
 			-- The plan for this conversation's job. agent/state owns the shape of it;
@@ -181,6 +182,10 @@ return function(env)
 		end
 
 		function session.toolContext()
+			-- A later send clears abortFlag. Old tool workers must not come back to
+			-- life when that happens after a stopped or failed turn.
+			local epoch = session.toolEpoch
+			local cancelled = false
 			return {
 				env = env,
 				session = session,
@@ -191,7 +196,10 @@ return function(env)
 				progress = function(text)
 					session.emit("tool:progress", { text = tostring(text) })
 				end,
-				aborted = session.aborted,
+				aborted = function()
+					cancelled = cancelled or session.toolEpoch ~= epoch or session.aborted()
+					return cancelled
+				end,
 			}
 		end
 
@@ -227,6 +235,7 @@ return function(env)
 			session.busy = true
 			session.abortFlag = false
 			session.turns = session.turns + 1
+			session.toolEpoch = {}
 			if session.title == "New chat" and not session.named then
 				session.title = util.ellipsis(clean, 42)
 			end
@@ -236,8 +245,10 @@ return function(env)
 			M.listChanged:fire()
 
 			task.spawn(function()
-				local loop = env.require("agent/loop")
-				local ok, reply = pcall(loop.run, session, clean)
+				local ok, reply = pcall(function()
+					return env.require("agent/loop").run(session, clean)
+				end)
+				if not ok then session.abortFlag = true end
 				session.busy = false
 				-- Only this conversation's prompts. It used to clear every pending
 				-- request in the client, so one conversation finishing a turn silently
@@ -250,8 +261,9 @@ return function(env)
 				if not ok then
 					log.error("session", "loop crashed", reply)
 					session.emit("error", { message = "Internal error: " .. tostring(reply), fatal = true })
-					session.emit("status", { text = "Ready" })
 					reply = "Something went wrong inside the agent: " .. tostring(reply)
+					session.emit("turn:end", { text = reply, failed = true })
+					session.emit("status", { text = "Ready" })
 				end
 				M.persist(session)
 				M.listChanged:fire()
@@ -275,6 +287,7 @@ return function(env)
 			session.ctx.clear()
 			session.log = {}
 			session.turns = 0
+			session.toolEpoch = {}
 			session.title = "New chat"
 			-- The plan goes with the conversation it belonged to.
 			state.clearTodos(session)

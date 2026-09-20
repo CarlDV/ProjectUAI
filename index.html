@@ -56,7 +56,7 @@
     <section class="hero container" aria-labelledby="heroTitle">
       <div class="hero-copy">
         <a class="release-link" href="https://github.com/CarlDV/ProjectUAI/blob/main/CHANGELOG.md">
-          <span class="release-version">v<!-- site:version:start -->1.4.0<!-- site:version:end --></span>
+          <span class="release-version">v<!-- site:version:start -->1.5.0<!-- site:version:end --></span>
           Five new tools. Fewer round trips. <span aria-hidden="true">↗</span>
         </a>
         <p class="eyebrow">An agent at home in your game</p>
@@ -95,7 +95,7 @@
 
     <div class="container">
       <dl class="capability-strip" aria-label="Current release capabilities">
-        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->99<!-- site:tool-count:end --></dd></div>
+        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->100<!-- site:tool-count:end --></dd></div>
         <div><dt>Tool groups</dt><dd><!-- site:group-count:start -->19<!-- site:group-count:end --></dd></div>
         <div><dt>Files per batch read</dt><dd>12</dd></div>
         <div><dt>Edits in one write</dt><dd>20</dd></div>
@@ -196,10 +196,10 @@
         </div>
         <div class="catalog-toolbar" id="toolFilters" role="search" aria-label="Search the tool catalog" hidden>
           <div class="search-field"><label for="toolSearch">Find a tool</label><input type="search" id="toolSearch" placeholder="Try files, raycast, or Luau" autocomplete="off" spellcheck="false" aria-controls="toolCatalog"></div>
-          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (12)</option><option value="script">Code (4)</option><option value="fs">Files (9)</option><option value="agentself">Agent (10)</option><option value="character">Character (4)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (9)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="remotes">Remotes (5)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
+          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (12)</option><option value="script">Code (4)</option><option value="fs">Files (9)</option><option value="agentself">Agent (10)</option><option value="character">Character (4)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (10)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="remotes">Remotes (5)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
           <button class="button button-outline clear-filters" type="button" id="clearFilters" disabled>Clear filters</button>
         </div>
-        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->99<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->19<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.4.0<!-- site:version:end --></span></div>
+        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->100<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->19<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.5.0<!-- site:version:end --></span></div>
         <noscript><p class="catalog-help">Open a category to browse its tools. Enable JavaScript to search and filter.</p></noscript>
         <div id="toolCatalog" class="tool-catalog">
           <!-- site:catalog:start -->
@@ -261,11 +261,11 @@
             <ul class="tool-list">
               <li class="tool-row" data-tool-name="check_luau">
                 <div class="tool-row-heading"><code>check_luau</code><span class="risk risk-read">Read</span></div>
-                <p>Check Luau syntax using this executor&#39;s compiler without executing the code or changing the game. Returns compile errors for correction before run_luau.</p><span class="tool-needs">Requires exec</span>
+                <p>Check Luau syntax without executing code or changing the game. Provide inline &#39;code&#39; or a saved file &#39;path&#39;, not both. Prefer path for scripts you wrote or edited so their source need not be sent again. Returns compile errors for correction before run_luau.</p><span class="tool-needs">Requires exec</span>
               </li>
               <li class="tool-row" data-tool-name="run_luau">
                 <div class="tool-row-heading"><code>run_luau</code><span class="risk risk-danger">High impact</span></div>
-                <p>Run bounded Luau on the local client. Captures print/warn, tables and all return values; waits for functions started with task.spawn/defer/delay. Stop or the deadline cancels managed tasks. Loop checkpoints yield automatically. Prefer a specific tool when one exists. This is not a security sandbox; dynamically loaded code and engine calls can bypass cooperative guards.</p><span class="tool-needs">Requires exec</span>
+                <p>Run bounded Luau on the local client. Provide inline source in &#39;code&#39;, or &#39;path&#39; to run a workspace file directly without reading it back first. Captures print/warn, tables and all return values; waits for functions started with task.spawn/defer/delay. Stop or the deadline cancels managed tasks. Loop checkpoints yield automatically. Prefer a specific tool when one exists. This is not a security sandbox; dynamically loaded code and engine calls can bypass cooperative guards.</p><span class="tool-needs">Requires exec</span>
               </li>
               <li class="tool-row" data-tool-name="script_list">
                 <div class="tool-row-heading"><code>script_list</code><span class="risk risk-read">Read</span></div>
@@ -282,7 +282,7 @@
             <ul class="tool-list">
               <li class="tool-row" data-tool-name="file_append">
                 <div class="tool-row-heading"><code>file_append</code><span class="risk risk-write">Write</span></div>
-                <p>Append to a file in your workspace, creating it if needed.</p><span class="tool-needs">Requires fs</span>
+                <p>Append up to 2 MiB to a workspace file, creating it if needed. Prefer small additions.</p><span class="tool-needs">Requires fs</span>
               </li>
               <li class="tool-row" data-tool-name="file_delete">
                 <div class="tool-row-heading"><code>file_delete</code><span class="risk risk-danger">High impact</span></div>
@@ -314,7 +314,7 @@
               </li>
               <li class="tool-row" data-tool-name="file_write">
                 <div class="tool-row-heading"><code>file_write</code><span class="risk risk-write">Write</span></div>
-                <p>Write a file in your workspace (files/), replacing it if it exists. Parent folders are created.</p><span class="tool-needs">Requires fs</span>
+                <p>Create a workspace file or replace most of its content (up to 2 MiB per call). Parent folders are created. For existing files, prefer file_edit or file_edit_many for targeted changes. Build large new scripts in small sections with sequential file_write then file_append calls.</p><span class="tool-needs">Requires fs</span>
               </li>
             </ul>
           </details>
@@ -456,7 +456,7 @@
             </ul>
           </details>
           <details class="tool-group" data-group="iy">
-            <summary><span class="tool-group-label">Infinite Yield</span><span class="tool-group-count">9 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
+            <summary><span class="tool-group-label">Infinite Yield</span><span class="tool-group-count">10 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
             <ul class="tool-list">
               <li class="tool-row" data-tool-name="iy_cmd">
                 <div class="tool-row-heading"><code>iy_cmd</code><span class="risk risk-write">Write</span></div>
@@ -464,11 +464,15 @@
               </li>
               <li class="tool-row" data-tool-name="iy_cmds">
                 <div class="tool-row-heading"><code>iy_cmds</code><span class="risk risk-read">Read</span></div>
-                <p>List Infinite Yield commands, optionally filtered by a keyword or limited to one plugin&#39;s commands. Each line is the name, its aliases, and the plugin it came from (core commands show none). Use it to find the exact spelling before iy_cmd.</p>
+                <p>List Infinite Yield commands, optionally filtered by a keyword or limited to one plugin&#39;s commands. Shows names, aliases, plugin origin, and argument signatures and descriptions when IY exposes them. Use it before iy_cmd to check syntax.</p>
               </li>
               <li class="tool-row" data-tool-name="iy_control">
                 <div class="tool-row-heading"><code>iy_control</code><span class="risk risk-write">Write</span></div>
-                <p>Inspect and configure Infinite Yield&#39;s native saved events, keybinds and settings. Inspect first for current 1-based binding indexes, event fields and defaults. Supports OnExecute, OnSpawn, OnDied, OnDamage, OnKilled, OnJoin, OnLeave and OnChatted. Event commands can use $1/$2 arguments; native IY ignores commands containing &#39;plugin&#39;. Edits refresh IY&#39;s editor and request its normal save. Use iy_cmd for commands, aliases and waypoints; use iy_plugin_write for custom plugins or custom event definitions. stop_loops sends breakloops.</p>
+                <p>Inspect and configure Infinite Yield&#39;s saved events, keybinds, aliases, waypoints and settings. Inspect first for current 1-based binding indexes, event fields and defaults. Supports OnExecute, OnSpawn, OnDied, OnDamage, OnKilled, OnJoin, OnLeave and OnChatted. Event commands can use $1/$2 arguments; native IY ignores commands containing &#39;plugin&#39;. Edits refresh IY&#39;s editor and request its normal save. Waypoints default to the current place. Use iy_cmd to execute commands, iy_plugin_write for plugins/custom events. stop_loops sends breakloops.</p>
+              </li>
+              <li class="tool-row" data-tool-name="iy_players">
+                <div class="tool-row-heading"><code>iy_players</code><span class="risk risk-read">Read</span></div>
+                <p>Resolve an IY selector to concrete names in the live server (read-only). Keywords: all, others, me, random, #&lt;n&gt;, %&lt;team&gt;, allies, enemies, team, nonteam, friends, nonfriends, guests, bacons, age&lt;n&gt;, nearest, farthest, group&lt;id&gt;, alive, dead, rad&lt;n&gt;, cursor, npcs. Supports + include/- exclude, comma-separated lists, and @name for username-only prefix matching. Uses the running IY&#39;s selector behavior; resolve targets before iy_cmd.</p>
               </li>
               <li class="tool-row" data-tool-name="iy_plugin_install">
                 <div class="tool-row-heading"><code>iy_plugin_install</code><span class="risk risk-write">Write</span></div>
@@ -614,11 +618,11 @@
               </li>
               <li class="tool-row" data-tool-name="skills_list">
                 <div class="tool-row-heading"><code>skills_list</code><span class="risk risk-read">Read</span></div>
-                <p>List the installed markdown skills (playbooks) with their one-line descriptions and whether each is enabled. The same list appears in the environment block each turn; use this when you want the full set including switched-off ones.</p><span class="tool-needs">Requires fs</span>
+                <p>List the installed markdown skills (playbooks) with their one-line descriptions and whether each is enabled. The same list appears in the environment block each turn; use this to refresh the inventory, including switched-off ones. Follow continuation offsets to see every entry.</p><span class="tool-needs">Requires fs</span>
               </li>
               <li class="tool-row" data-tool-name="skills_read">
                 <div class="tool-row-heading"><code>skills_read</code><span class="risk risk-read">Read</span></div>
-                <p>Read the full body of a skill -- the playbook itself. Call this when a task matches a skill&#39;s description in the environment block; the body is never sent otherwise, which is what keeps the system prompt lean.</p><span class="tool-needs">Requires fs</span>
+                <p>Read a skill&#39;s body. REQUIRED FIRST in every conversation, before replying or other actions: read EVERY enabled skill, including in subagent conversations. Follow continuation offsets until each body is fully read; descriptions are not bodies.</p><span class="tool-needs">Requires fs</span>
               </li>
               <li class="tool-row" data-tool-name="skills_write">
                 <div class="tool-row-heading"><code>skills_write</code><span class="risk risk-write">Write</span></div>
@@ -743,7 +747,7 @@
     <div class="container footer-inner">
       <div><a class="brand" href="#top"><img src="webassets/icon.svg" width="28" height="28" alt=""><span>Project <strong>UAI</strong></span></a><p>Built for the things you want to make.</p></div>
       <nav aria-label="Project resources"><a href="https://github.com/CarlDV/ProjectUAI">Source</a><a href="https://github.com/CarlDV/ProjectUAI/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/CarlDV/ProjectUAI/blob/main/LICENSE">MIT License</a><a href="#top">Back to top ↑</a></nav>
-      <span class="footer-version">v<!-- site:version:start -->1.4.0<!-- site:version:end --> · CarlDV</span>
+      <span class="footer-version">v<!-- site:version:start -->1.5.0<!-- site:version:end --> · CarlDV</span>
     </div>
   </footer>
   <div class="copy-status" id="copyStatus" role="status" aria-live="polite" aria-atomic="true"></div>

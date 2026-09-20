@@ -160,6 +160,20 @@ local function chatRequests(harness)
 	return out
 end
 
+local function providerCall(harness, adapter, record, request, seconds)
+	request = request or {}
+	request.messages = request.messages or { { role = "user", content = "hello" } }
+	request.attempts = request.attempts or 1
+	local result, err, response, done
+	harness.sched.spawn(function()
+		result, err, response = adapter.complete(record, request)
+		done = true
+	end)
+	harness.sched.advance(seconds or 0.25)
+	assert(done, "provider call did not finish: " .. tostring(harness.errors()[1] and harness.errors()[1].message))
+	return result, err, response
+end
+
 print("uai scenarios")
 print(("="):rep(72))
 
@@ -615,7 +629,7 @@ scenario("transient failures are retried and real refusals are not", function()
 		live.errors()[1] and live.errors()[1].traceback or nil)
 end)
 
-scenario("a request that dies on a deadline is not paid for twice", function()
+scenario("a minimal request that dies on a deadline is not paid for twice", function()
 	-- The gateway accepts the request and bills the whole prompt; the transport gives
 	-- up a minute later with no status and no headers of its own. Read as a bodyless
 	-- refusal worth another go, one turn became three identical billed requests.
@@ -628,6 +642,8 @@ scenario("a request that dies on a deadline is not paid for twice", function()
 		end,
 	})
 
+	handle.config.set("agent.executorReplyCeiling", 2000)
+	handle.config.set("agent.effort", "off")
 	local session = handle.sessions.current()
 	session.send("hello")
 	harness.settle(180)
@@ -1269,9 +1285,13 @@ scenario("file tools stay inside the agent folder", function()
 	session.send("hello")
 	harness.settle(4)
 	handle.sessions.persist(session)
-	local listed = tools.dispatch({ id = "4", ["function"] = {
+	local stale = tools.dispatch({ id = "stale", ["function"] = {
 		name = "file_list", arguments = json.encode({}),
 	} }, context)
+	falsy("a previous turn's tool context cannot run new work", stale.ok)
+	local listed = tools.dispatch({ id = "4", ["function"] = {
+		name = "file_list", arguments = json.encode({}),
+	} }, session.toolContext())
 	falsy("the workspace does not list the client's config", tostring(listed.text):find("config.json", 1, true) ~= nil)
 	falsy("nor its conversations", tostring(listed.text):find("sessions/", 1, true) ~= nil)
 	contains("but does list what was written", tostring(listed.text), "notes/plan.txt")
@@ -2648,6 +2668,7 @@ scenario("a Claude request omits what Claude rejects and asks for a depth", func
 	})
 	handle.config.set("permissions.mode", "full")
 	handle.config.set("agent.maxTokens", 999999)
+	handle.config.set("agent.executorReplyCeiling", 0)
 	handle.config.set("agent.effort", "high")
 
 	handle.sessions.current().send("hello")
@@ -2714,6 +2735,7 @@ scenario("an over-large reply ceiling is lowered to what the model allows", func
 		end,
 	})
 	liveHandle.config.set("agent.maxTokens", 64000)
+	liveHandle.config.set("agent.executorReplyCeiling", 0)
 	local session = liveHandle.sessions.current()
 	session.send("hello")
 	live.settle(20)
@@ -2773,6 +2795,7 @@ scenario("an over-large reply ceiling is lowered to what the model allows", func
 	local saved, problems = nativeHandle.providers.save(record)
 	truthy("the native preset saves", saved, table.concat(problems or {}, ", "))
 	nativeHandle.config.set("agent.maxTokens", 96000)
+	nativeHandle.config.set("agent.executorReplyCeiling", 0)
 	native.settle(1)
 
 	local nativeSession = nativeHandle.sessions.current()
@@ -2786,6 +2809,166 @@ scenario("an over-large reply ceiling is lowered to what the model allows", func
 	check("which is remembered too", (nativeHandle.providers.active().maxTokensCap or {}).tokens, 64000)
 	check("no thread errors on the native path", #native.errors(), 0,
 		native.errors()[1] and native.errors()[1].traceback or nil)
+end)
+
+scenario("executor reply ceilings follow the actual transport and preserve explicit overrides", function()
+	for _, api in ipairs({ "openai", "anthropic" }) do
+		local sent = {}
+		local response = api == "openai" and chatBody({ content = "ok" }) or messagesBody({ text = "ok" })
+		local harness, handle = bootWith({ preset = api == "anthropic" and "anthropic-messages" or "custom", stream = true,
+			handler = function(entry)
+				if not entry.body then return { StatusCode = 404, Body = "{}" } end
+				sent[#sent + 1] = json.decode(entry.body)
+				return { StatusCode = 200, Body = response }
+			end,
+		})
+		local adapter = handle.env.require("provider/" .. api)
+		local record = handle.providers.active()
+		local caps = handle.env.require("runtime/caps")
+		caps.ws = true
+		handle.config.set("agent.effort", "off")
+		truthy(api .. " default call succeeds", providerCall(harness, adapter, record))
+		check(api .. " buffered SSE is clamped even on a socket-capable host", sent[#sent].max_tokens, 8192)
+		check(api .. " stored reply ceiling is unchanged", handle.config.get("agent.maxTokens"), 128000)
+		check(api .. " context default is unchanged", handle.config.get("agent.contextTokens"), 1000000)
+		providerCall(harness, adapter, record, { maxTokens = 32768 })
+		check(api .. " explicit request token override is retained", sent[#sent].max_tokens, 32768)
+		record.params = { max_tokens = 49152 }
+		providerCall(harness, adapter, record)
+		check(api .. " explicit provider body override is retained", sent[#sent].max_tokens, 49152)
+		record.params = {}
+		providerCall(harness, adapter, record, { extra = { max_tokens = 24576 } })
+		check(api .. " explicit extra token override is retained", sent[#sent].max_tokens, 24576)
+		handle.config.set("agent.executorReplyCeiling", 6000)
+		providerCall(harness, adapter, record)
+		check(api .. " executor ceiling is tunable", sent[#sent].max_tokens, 6000)
+		handle.config.set("agent.maxTokens", 2000)
+		providerCall(harness, adapter, record)
+		check(api .. " lower requested ceilings are not raised", sent[#sent].max_tokens, 2000)
+		handle.config.set("agent.maxTokens", 128000)
+		handle.config.set("agent.executorReplyCeiling", 0)
+		providerCall(harness, adapter, record)
+		check(api .. " zero disables the default transport ceiling", sent[#sent].max_tokens, 128000)
+		handle.config.set("agent.executorReplyCeiling", 8192)
+		record.wsUrl = "wss://harness.test/stream"
+		if api == "openai" then
+			local socketBody
+			handle.env.require("net/ws").stream = function(spec) socketBody = json.decode(json.encode(spec.body)); return response end
+			local result = providerCall(harness, adapter, record)
+			check("configured WebSocket streaming retains the full ceiling", socketBody and socketBody.max_tokens, 128000)
+			check("the socket path was actually used", result and result.via, "websocket")
+			handle.env.require("net/ws").stream = function() return nil, "socket unavailable" end
+			providerCall(harness, adapter, record)
+			check("HTTP fallback from a failed socket gets the safe ceiling", sent[#sent].max_tokens, 8192)
+			record.stream = false
+			providerCall(harness, adapter, record)
+			check("a socket URL does not exempt nonstreaming HTTP", sent[#sent].max_tokens, 8192)
+		else
+			providerCall(harness, adapter, record)
+			check("Messages API HTTP is bounded despite an unused socket URL", sent[#sent].max_tokens, 8192)
+		end
+		handle.config.set("bridge.enabled", true, { quiet = true })
+		handle.config.set("bridge.runtime", "web", { quiet = true })
+		local relayed
+		handle.env.require("net/http").send = function(spec)
+			relayed = spec
+			return { ok = true, status = 200, body = response }
+		end
+		providerCall(harness, adapter, record)
+		check(api .. " web relay keeps the full ceiling", json.decode(relayed.body).max_tokens, 128000)
+		truthy(api .. " the request uses the web relay", relayed.relay)
+		check(api .. " no thread errors", #harness.errors(), 0)
+	end
+end)
+
+scenario("transport wall retry learns a working ceiling for both provider APIs", function()
+	for _, api in ipairs({ "openai", "anthropic" }) do
+		for _, delay in ipairs({ 30, 60 }) do
+			local sent, retries = {}, 0
+			local response = api == "openai" and chatBody({ content = "Recovered" }) or messagesBody({ text = "Recovered" })
+			local harness, handle = bootWith({ preset = api == "anthropic" and "anthropic-messages" or "custom",
+				handler = function(entry)
+					if not entry.body then return { StatusCode = 404, Body = "{}" } end
+					sent[#sent + 1] = json.decode(entry.body)
+					if #sent == 1 then return { StatusCode = 403, Body = "", headerless = true, delay = delay } end
+					return { StatusCode = 200, Body = response }
+				end,
+			})
+			local adapter, record = handle.env.require("provider/" .. api), handle.providers.active()
+			handle.config.set("agent.effort", "off")
+			local tokenField = api == "openai" and delay == 60 and "max_completion_tokens" or "max_tokens"
+			if tokenField == "max_completion_tokens" then record.repairs = { "max_completion_tokens" } end
+			local request = { onRetry = function() retries = retries + 1 end }
+			if api == "anthropic" then request.extra = { output_config = { effort = "max", format = { type = "json_schema" } } } end
+			local result = providerCall(harness, adapter, record, request, delay + 1)
+			local label = api .. " " .. delay .. "s"
+			check(label .. " retries once", #sent, 2)
+			check(label .. " starts with the executor ceiling", sent[1] and sent[1][tokenField], 8192)
+			check(label .. " retries with fewer output tokens", sent[2] and sent[2][tokenField], 4096)
+			check(label .. " retry is reported", retries, 1)
+			check(label .. " completion recovers", result and result.content, "Recovered")
+			local cap = handle.providers.active().maxTokensCap
+			check(label .. " working ceiling is remembered", cap and cap.tokens, 4096)
+			check(label .. " cap belongs to the current model", cap and cap.model, record.model)
+			handle.config.saveNow()
+			local saved = json.decode(harness.files["UAI/config.json"])
+			check(label .. " learned cap is saved to disk", saved.providers.list[1].maxTokensCap.tokens, 4096)
+			providerCall(harness, adapter, handle.providers.active())
+			check(label .. " next request starts at the learned cap", sent[3] and sent[3][tokenField], 4096)
+			if api == "anthropic" then
+				check("smaller effort preserves other output_config fields", sent[2].output_config.format.type, "json_schema")
+				check("smaller effort does not mutate the original override", request.extra.output_config.effort, "max")
+			end
+			handle.providers.setModel(record.id, "harness-model-wide")
+			providerCall(harness, adapter, handle.providers.active())
+			check(label .. " changing model releases the learned cap", sent[4] and sent[4][tokenField], 8192)
+			check(label .. " no thread errors", #harness.errors(), 0)
+		end
+	end
+end)
+
+scenario("transport wall retry does not learn from failures or repeat minimal requests", function()
+	for _, api in ipairs({ "openai", "anthropic" }) do
+		for _, case in ipairs({
+			{ label = "invalid JSON after retry", delay = 30, body = "not JSON", requests = 2 },
+			{ label = "empty completion after retry", delay = 30, body = "{}", requests = 2 },
+			{ label = "second transport wall", delay = 30, secondWall = true, requests = 2 },
+			{ label = "minimal request", delay = 30, maxTokens = 2000, requests = 1 },
+			{ label = "quick transport error", delay = 1, requests = 1 },
+			{ label = "outside recovery window", delay = 131, requests = 1 },
+		}) do
+			local sent = 0
+			local harness, handle = bootWith({ preset = api == "anthropic" and "anthropic-messages" or "custom",
+				handler = function(entry)
+					if not entry.body then return { StatusCode = 404, Body = "{}" } end
+					sent = sent + 1
+					if sent == 1 or case.secondWall then return { StatusCode = 403, Body = "", headerless = true, delay = case.delay } end
+					return { StatusCode = 200, Body = case.body or "{}" }
+				end,
+			})
+			handle.config.set("agent.effort", "off")
+			local adapter, record = handle.env.require("provider/" .. api), handle.providers.active()
+			local result = providerCall(harness, adapter, record, { maxTokens = case.maxTokens }, case.delay * 2 + 1)
+			falsy(api .. " " .. case.label .. " is a failure", result)
+			check(api .. " " .. case.label .. " stays bounded", sent, case.requests)
+			falsy(api .. " " .. case.label .. " does not learn a cap", handle.providers.active().maxTokensCap)
+			check(api .. " " .. case.label .. " has no thread errors", #harness.errors(), 0)
+		end
+		local harness, handle = bootWith({ preset = api == "anthropic" and "anthropic-messages" or "custom" })
+		local calls, retries, stopped = 0, 0, false
+		handle.env.require("net/http").send = function()
+			calls = calls + 1
+			harness.sched.wait(30)
+			stopped = true
+			return nil, "executor deadline"
+		end
+		local result = providerCall(harness, handle.env.require("provider/" .. api), handle.providers.active(), {
+			onRetry = function() retries = retries + 1 end, aborted = function() return stopped end,
+		}, 31)
+		falsy(api .. " cancelled transport is not recovered", result)
+		check(api .. " cancellation is never retried", calls, 1)
+		check(api .. " cancellation produces no retry notification", retries, 0)
+	end
 end)
 
 scenario("the token sliders span three orders of magnitude", function()

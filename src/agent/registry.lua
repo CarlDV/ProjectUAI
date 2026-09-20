@@ -282,7 +282,11 @@ return function(env)
 			return result
 		end
 
-		local args, repairNote = schema.repairJson(fn.arguments or call.arguments or "{}")
+		-- Completing an interrupted write can silently drop edits or options. Keep
+		-- harmless formatting repairs, but never invent the end of a mutation.
+		local args, repairNote = schema.repairJson(fn.arguments or call.arguments or "{}", {
+			allowTruncated = tool.risk == "read",
+		})
 		if args == nil then
 			result.text = string.format("Could not read the arguments for %s: %s. Send valid JSON.",
 				name, tostring(repairNote))

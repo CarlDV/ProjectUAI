@@ -89,6 +89,8 @@ return function(env)
 			-- from a hung client. It exists so the slider can be lowered for a quick model
 			-- without losing the day the heavy one needs.
 			requestUnlimited = true,
+			-- Large contexts increase upload and prefill time under executor HTTP
+			-- deadlines; lower this budget when even short replies time out.
 			contextTokens = 1000000,
 			keepTurns = 14,
 			compaction = true,
@@ -109,6 +111,10 @@ return function(env)
 			forceReasoning = {},
 			forceContext = {},
 			maxTokens = 128000,
+			-- Effective reply ceiling for buffered executor HTTP. Streaming transports
+			-- and explicit per-request/provider token overrides retain their ceilings.
+			-- This does not change maxTokens; set 0 to disable the transport clamp.
+			executorReplyCeiling = 8192,
 			-- Characters, not tokens, and it is the last word on how much of a tool
 			-- result reaches the model. Eight thousand rather than four so that the
 			-- tools' own defaults -- a six thousand character file read, a five thousand

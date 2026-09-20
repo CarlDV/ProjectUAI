@@ -74,6 +74,18 @@ it; `ui/*` must not require `agent/*` except through `agent/session`.
 * Retries: 408/409/429/5xx and transport errors, exponential backoff with
   jitter, `Retry-After` honoured, capped attempts, then the next provider in the
   fallback chain.
+* An HTTP call that returns no response after 20–130 seconds permits one provider
+  retry with a smaller token ceiling and, when possible, one less reasoning-effort
+  level. Unchanged minimal requests and cancellations are not retried. A parsed,
+  usable completion is required before saving the working ceiling in
+  `record.maxTokensCap = { model, tokens }`; failed or empty responses teach no cap.
+  Both the OpenAI and Anthropic adapters use this recovery.
+* Buffered HTTP applies `agent.executorReplyCeiling` (default 8192). Only an actual
+  configured WebSocket path or enabled web relay bypasses this default clamp;
+  socket capability alone and ordinary SSE do not. A failed socket's HTTP fallback
+  is clamped. The Anthropic adapter currently uses HTTP or the web relay, so an
+  unused `wsUrl` does not exempt it. Explicit request token values and token fields
+  in provider/request body overrides bypass the default clamp.
 * Secrets are redacted in the request log; only the last four characters of a
   key are displayed in diagnostic views, and the Providers panel never renders the
   key itself. Full configuration export is an explicit private transfer: it includes
@@ -122,6 +134,14 @@ endpoint's answer, because deciding which of its ids are chat models would be a
 guess. An endpoint with no `/models` route is a normal case: the Providers editor
 takes a typed id, and saving requires one.
 
+Generation settings live in `runtime/config` and are persisted in `UAI/config.json`:
+
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| `agent.maxTokens` | 128000 | Saved reply limit; model limits and learned per-model caps apply when constructing requests. |
+| `agent.executorReplyCeiling` | 8192 | Additional default bound for buffered HTTP only; positive values tune it and 0 disables it. Does not rewrite `agent.maxTokens`. |
+| `agent.contextTokens` | 1000000 | Context budget before compaction. Larger contexts spend more of an executor's request window on upload and prefill. |
+
 ## 5. Tool contract
 
 ```lua
@@ -148,14 +168,83 @@ filters before execution, including after a pending approval resolves.
 (configurable to 1–60 seconds), cooperative loop checkpoints, bounded output, and
 capture of multiple returns. Functions scheduled through its task wrappers share
 the deadline and complete before the result is delivered. Stop, failure, timeout,
-and unload cancel managed tasks, using `task.cancel` where available and honest
-cooperative fallback reporting otherwise. Dynamically loaded code, native engine
-calls, and persistent engine-signal callbacks are outside this guarantee.
+and unload stop managed tasks cooperatively without native `task.cancel`. Pending
+Roblox/executor continuations retain live coroutines instead of targeting closed
+ones. Managed delays use cancellable wait slices; explicit cancellation accepts
+only this execution's task handles, treats finished handles as a no-op, and exits
+self-cancelling tasks inside their protected wrapper. Work suspended outside
+managed waits may still resume before its next checkpoint, which is disclosed.
+Dynamically loaded code, native engine calls, and persistent engine-signal
+callbacks are outside this guarantee. Failed turns invalidate their tool contexts;
+starting another main or subagent turn cannot revive old workers.
 
-`check_luau` only compiles. `file_edit` requires an exact unique match unless
-replace-all is explicit, permits empty replacement text, and refuses stale file
+`check_luau` only compiles. Both `check_luau` and `run_luau` accept either inline
+`code` or a saved `path`, using the same workspace/paste resolution as `file_read`.
+This keeps saved source out of repeated model output. `file_edit` requires an exact
+unique match unless replace-all is explicit, permits empty replacement text, and refuses stale file
 contents. `file_read` and `script_source` use contiguous UTF-8 slices with 1-based
 byte offsets and continuation cursors; each slice fits the registry's result budget.
+`file_write` and `file_append` advertise and enforce a 2 MiB content limit per call
+before disk access. The prompt and tool descriptions direct edits of existing
+large files to `file_edit`/`file_edit_many`; full writes create files or replace
+most of their contents. Large new scripts use small sequential writes/appends,
+then syntax checks and execution by path. JSON repair preserves the complete outer
+object and rejects unclosed strings. Mutating tools also reject missing closers
+instead of dropping unfinished edits/options. A token-limited tool batch produces
+an error result for every call without executing any, allowing the model to send
+smaller complete calls on its next step.
+
+Main and subagent prompts require reading every enabled skill before replying or
+performing other work in each new or resumed conversation. The environment supplies
+names, filenames and descriptions; `skills_read` supplies the body. Both skill
+bodies and `skills_list` paginate through UTF-8-safe byte offsets within the result
+budget. Restricted subagent presets include the skills group and explicitly exclude
+its write/install/delete tools. Disabled skills remain unreadable; denied or
+unavailable reads do not require retries. Changed skills and bodies lost through
+compaction must be read again.
+
+Infinite Yield tools read the running engine's environment, for both an ambient
+IY and a captured internal load. `iy_cmds` joins the executable command registry
+with IY's `CMDs` signature/description list by name or alias, retaining the first
+description for a token and limiting descriptions to 120 bytes. Older engines
+without `CMDs` retain name/alias/plugin output. Filtering and result limits remain
+available.
+
+`iy_players` is a read tool with no extra host capability requirement. It delegates
+`selector` to IY's `getPlayer(selector, localPlayer)` and returns `{ names, count }`
+alongside text limited to 50 names by default (maximum 200). Empty matches and
+unavailable resolvers are explicit. Supported selector syntax follows the live
+IY, including `all`, `others`, `me`, `random`, `#<n>`, `%<team>`, `allies`, `enemies`,
+`team`, `nonteam`, `friends`, `nonfriends`, `guests`, `bacons`, `age<n>`, `nearest`,
+`farthest`, `group<id>`, `alive`, `dead`, `rad<n>`, `cursor`, `npcs`, `+`/`-`, and
+comma-separated lists. In the reviewed upstream version, `@name` matches username
+prefixes without considering display names.
+
+`iy_control` retains write permission for its combined inspect/edit surface.
+Inspection sections are `all`, `events`, `keybinds`, `settings`, `aliases`, and
+`waypoints`. Alias and waypoint sections expose 1-based indexes, `items`, `total`,
+and `nextOffset`; malformed entries are labeled and still advance pagination.
+Waypoint inspection includes coordinates, the place ID and the all-place count
+when available.
+
+The existing event/keybind actions and `stop_loops` are joined by:
+
+- `alias_add`, `alias_remove`, `alias_clear`: validate command names and aliases,
+  update both `aliases` and `customAlias`, refresh the native editor, and request
+  IY's save. Adds use the first command token and reject unknown commands, duplicate
+  aliases, native command collisions, whitespace and IY command delimiters.
+- `waypoint_add`, `waypoint_remove`, `waypoint_clear`: validate names and finite
+  coordinates, floor explicit or current-root coordinates, and update `WayPoints`
+  plus `AllWaypoints`. Removal is case-insensitive and scoped to the current place,
+  including legacy entries without a place ID. Clear defaults to the current place;
+  `all_places=true` explicitly clears all saved places. Tables are cleared in place
+  so native GUI references remain live. The buggy upstream coordinate command is
+  not used.
+- `configure` additionally accepts `gui_scale` (0.4–2) and `logs_webhook` (HTTP(S)
+  URL or empty to disable). These use `guiscale` and `chatlogswebhook`, report
+  asynchronous dispatch, and require saving because the native commands save
+  themselves. `persist=false` remains available for direct native edits; mode
+  changes alone continue to work without loading IY.
 
 Batch tools use the existing `instance` and `fs` groups and the same permission
 and capability checks as individual operations. Array schemas enforce `minItems`
@@ -402,6 +491,21 @@ when `GuiService:IsTenFootInterface()`. Minimum touch target is 44px on a touch
 device, 28px with a pointer, 48px on a console. Navigation is reachable in every
 mode: the sidebar in `window`, the app menu in the header everywhere else.
 
+Profile avatars start with a readable initial behind a renderable image. A deferred
+worker resolves a ready headshot through `Players:GetUserThumbnailAsync` and calls
+`ContentProvider:PreloadAsync`, retrying up to three times. It checks `IsLoaded`
+after preloading as well as on property changes. Destroying the avatar invalidates
+its results without cancelling a coroutine inside a native thumbnail or preload
+request. The request finishes naturally and no longer updates the destroyed view;
+failed loads retain the initial without blocking UI construction.
+
+The minimize/restore launcher uses parent-relative offsets and a fixed anchor,
+preserving the pointer's grab offset after its 6px drag threshold. Only the
+initiating mouse/touch controls a gesture. Dragged, cancelled and ignored inputs
+cannot activate the button; focus loss, destruction and rebuild release gesture,
+service and layout listeners. Placement is saved on drag release, clamped within
+the usable viewport, and restored after temporary keyboard or viewport changes.
+
 The Code panel was a shared multi-tab Luau editor whose state lived in a store module
 (`ui/panels/code_store`) so the `coding` tool group could operate on the same tabs the
 user saw. The design and tool contract were verified end to end, but the rendering was
@@ -416,6 +520,7 @@ of what to fix in `archive/README.md`.
 luajit tools/bundle.lua      # src/ -> dist/uai.lua, the single loadable file
 luajit test/check.lua        # lint, parse and link every module
 luajit test/run.lua          # load dist/uai.lua against the mock client, run scenarios
+luajit test/iy_control.lua   # IY selectors, native configuration and plugin contracts
 luajit test/tool_workflows.lua # batch tools, pagination, scopes, cancellation
 node tools/build_site.js      # actual tool catalog and root/docs site copies
 node tools/build_site.js --check

@@ -25,6 +25,7 @@ return function(env)
 		join_logs = { global = "jLogsEnabled", kind = "boolean" },
 		esp_transparency = { global = "espTransparency", kind = "number", min = 0, max = 1 },
 	}
+	local COMMAND_SETTINGS = { gui_scale = "guiscale", logs_webhook = "chatlogswebhook" }
 	local function finite(value)
 		return type(value) == "number" and value == value and value > -math.huge and value < math.huge
 	end
@@ -48,6 +49,36 @@ return function(env)
 	end
 	local function changed(args, detail, warning)
 		return { action = args.action, result = detail, persistence = persist(args.persist), warning = warning }
+	end
+	local function findCommand(name)
+		for _, entry in ipairs(iy.cmdsTable() or {}) do
+			if type(entry) == "table" and type(entry.NAME) == "string" then
+				if entry.NAME:lower() == name then return entry end
+				if type(entry.ALIAS) == "table" then
+					for _, alias in ipairs(entry.ALIAS) do
+						if type(alias) == "string" and alias:lower() == name then return entry end
+					end
+				end
+			end
+		end
+	end
+	local function named(value, label, maximum)
+		if type(value) ~= "string" then return nil, label .. " must be a string" end
+		value = util.trim(value)
+		if value == "" or #value > maximum or value:find("%c") then
+			return nil, label .. " must contain 1-" .. maximum .. " bytes without control characters"
+		end
+		return value
+	end
+	local function clearTable(list)
+		for key in pairs(list) do list[key] = nil end
+	end
+	local function removeWhere(list, matches)
+		local removed = 0
+		for index = #list, 1, -1 do
+			if matches(list[index]) then table.remove(list, index); removed = removed + 1 end
+		end
+		return removed
 	end
 
 	function M.command(value)
@@ -113,8 +144,8 @@ return function(env)
 	local function inspect(args)
 		local out = { mode = iy.getMode() }
 		local section = args.section or "all"
-		if section ~= "all" and section ~= "events" and section ~= "keybinds" and section ~= "settings" then
-			return nil, "section must be all, events, keybinds, or settings"
+		if section ~= "all" and section ~= "events" and section ~= "keybinds" and section ~= "settings" and section ~= "aliases" and section ~= "waypoints" then
+			return nil, "section must be all, events, keybinds, settings, aliases, or waypoints"
 		end
 		local limit = math.max(1, math.min(50, math.floor(tonumber(args.limit) or 25)))
 		local offset = math.max(1, math.floor(tonumber(args.offset) or 1))
@@ -152,9 +183,42 @@ return function(env)
 				out.keybinds = { items = items, total = #binds, nextOffset = offset + #items <= #binds and offset + #items or nil }
 			else out.keybinds = { unavailable = "IY's keybind table is not exposed" } end
 		end
+		if section == "all" or section == "aliases" then
+			local aliases = iy.value("aliases")
+			if type(aliases) == "table" then
+				local items = {}
+				for index = offset, math.min(#aliases, offset + limit - 1) do
+					local entry, item = aliases[index], { index = index }
+					if type(entry) == "table" and type(entry.CMD) == "string" and type(entry.ALIAS) == "string" then
+						item.command, item.alias = entry.CMD, entry.ALIAS
+					else item.malformed = "expected CMD and ALIAS strings" end
+					items[#items + 1] = item
+				end
+				out.aliases = { items = items, total = #aliases, nextOffset = offset + #items <= #aliases and offset + #items or nil }
+			else out.aliases = { unavailable = "IY's alias table is not exposed" } end
+		end
+		if section == "all" or section == "waypoints" then
+			local waypoints, all = iy.value("WayPoints"), iy.value("AllWaypoints")
+			if type(waypoints) == "table" then
+				local items = {}
+				for index = offset, math.min(#waypoints, offset + limit - 1) do
+					local entry, item = waypoints[index], { index = index }
+					local coord = type(entry) == "table" and entry.COORD
+					if type(entry) == "table" and type(entry.NAME) == "string" and type(coord) == "table" and finite(coord[1]) and finite(coord[2]) and finite(coord[3]) then
+						item.name, item.x, item.y, item.z = entry.NAME, coord[1], coord[2], coord[3]
+					else item.malformed = "expected NAME and three finite COORD numbers" end
+					items[#items + 1] = item
+				end
+				out.waypoints = { items = items, total = #waypoints, placeId = iy.value("PlaceId"),
+					allPlacesTotal = type(all) == "table" and #all or nil,
+					nextOffset = offset + #items <= #waypoints and offset + #items or nil }
+			else out.waypoints = { unavailable = "IY's waypoint table is not exposed" } end
+		end
 		if section == "all" or section == "settings" then
 			out.settings = {}
 			for key, spec in pairs(SETTINGS) do out.settings[key] = iy.value(spec.global) end
+			out.settings.gui_scale = iy.value("guiScale")
+			out.settings.logs_webhook = iy.value("logsWebhook") or ""
 			out.saving = iy.value("nosaves") == false and type(iy.value("updatesaves")) == "function"
 		end
 		return out
@@ -166,6 +230,13 @@ return function(env)
 			local spec = SETTINGS[key]
 			if key == "mode" then
 				if value ~= "off" and value ~= "hidden" and value ~= "visible" then return nil, "invalid IY mode" end
+			elseif COMMAND_SETTINGS[key] then
+				if args.persist == false then return nil, key .. " uses an IY command that saves automatically; omit persist=false" end
+				if key == "gui_scale" then
+					if not finite(value) or value < 0.4 or value > 2 then return nil, "gui_scale must be between 0.4 and 2" end
+				elseif type(value) ~= "string" or #value > 500 or (value ~= "" and (not value:match("^https?://[^/%s?#]+") or value:find("[%s%c\\]"))) then
+					return nil, "logs_webhook must be an HTTP(S) URL without whitespace or backslashes, or empty to disable"
+				end
 			elseif not spec then return nil, "unknown IY setting: " .. tostring(key)
 			elseif type(value) ~= spec.kind then return nil, key .. " must be " .. spec.kind
 			elseif spec.kind == "number" and (not finite(value) or value < spec.min or value > spec.max) then
@@ -185,12 +256,28 @@ return function(env)
 		if not ok then return nil, err end
 		if cancelled(ctx) then return nil, "cancelled before changing IY" end
 		for key in pairs(args.settings) do
-			if key ~= "mode" and type(iy.value(SETTINGS[key].global)) ~= SETTINGS[key].kind then
+			if COMMAND_SETTINGS[key] then
+				if not findCommand(COMMAND_SETTINGS[key]) then return nil, "this IY does not expose command " .. COMMAND_SETTINGS[key] end
+			elseif key ~= "mode" and type(iy.value(SETTINGS[key].global)) ~= SETTINGS[key].kind then
 				return nil, "this IY does not expose setting " .. key
 			end
 		end
+		local dispatched = {}
+		for _, key in ipairs({ "gui_scale", "logs_webhook" }) do
+			local value = args.settings[key]
+			if value ~= nil then
+				local command = COMMAND_SETTINGS[key] .. (value == "" and "" or (" " .. tostring(value)))
+				local accepted, reason = iy.exec(command)
+				if not accepted then
+					return nil, "could not dispatch " .. key .. ": " .. tostring(reason)
+						.. (#dispatched > 0 and "; earlier commands were accepted and may still apply" or "")
+				end
+				dispatched[#dispatched + 1] = command
+			end
+		end
 		for key, value in pairs(args.settings) do
-			if key == "mode" then iy.setMode(value) else iy.assign(SETTINGS[key].global, value) end
+			if key == "mode" then iy.setMode(value)
+			elseif not COMMAND_SETTINGS[key] then iy.assign(SETTINGS[key].global, value) end
 		end
 		-- Keep IY's own visible controls in sync with the live values.
 		local function property(name, key, value)
@@ -204,7 +291,9 @@ return function(env)
 		if args.settings.keep_open ~= nil then property("On", "BackgroundTransparency", args.settings.keep_open and 0 or 1) end
 		if args.settings.chat_logs ~= nil then property("Toggle", "Text", args.settings.chat_logs and "Enabled" or "Disabled") end
 		if args.settings.join_logs ~= nil then property("Toggle_2", "Text", args.settings.join_logs and "Enabled" or "Disabled") end
-		return changed(args, args.settings)
+		local result = changed(args, args.settings, #dispatched > 0 and "IY applies the dispatched commands asynchronously and requests its own saves; inspect settings to confirm." or nil)
+		if #dispatched > 0 then result.dispatched = dispatched end
+		return result
 	end
 
 	function M.run(args, ctx)
@@ -300,6 +389,99 @@ return function(env)
 				binds[index] = { COMMAND = command, KEY = key, ISKEYUP = args.on_release == true, TOGGLE = toggle }
 			end
 			return changed(args, { index = index, count = #binds }, refresh(iy.value("refreshbinds")))
+		end
+		if args.action == "alias_add" or args.action == "alias_remove" or args.action == "alias_clear" then
+			local aliases, custom = iy.value("aliases"), iy.value("customAlias")
+			if type(aliases) ~= "table" or type(custom) ~= "table" then return nil, "IY's alias tables are unavailable" end
+			local alias, command
+			if args.action == "alias_clear" then
+				clearTable(custom)
+				clearTable(aliases)
+			else
+				alias, err = named(args.alias, "alias", 50)
+				if not alias then return nil, err end
+				alias = alias:lower()
+				if args.action == "alias_add" then
+					local prefix = iy.value("prefix")
+					if alias:find("[%s\\%^]") or alias:find("^[;!]") or (type(prefix) == "string" and prefix ~= "" and alias:sub(1, #prefix) == prefix:lower()) then
+						return nil, "alias must be one command token without an IY prefix, history/repeat marker, or command separator"
+					end
+					if custom[alias] ~= nil then return nil, "alias '" .. alias .. "' already exists" end
+					for _, entry in ipairs(aliases) do
+						if type(entry) == "table" and type(entry.ALIAS) == "string" and entry.ALIAS:lower() == alias then return nil, "alias '" .. alias .. "' already exists" end
+					end
+					if findCommand(alias) then return nil, "alias '" .. alias .. "' conflicts with an IY command" end
+					command, err = M.command(args.command)
+					if not command then return nil, err end
+					command = command:match("^(%S+)"):lower()
+					local entry = findCommand(command)
+					if not entry then return nil, "no IY command named '" .. command .. "' to alias" end
+					custom[alias] = entry
+					aliases[#aliases + 1] = { CMD = command, ALIAS = alias }
+				else
+					if custom[alias] == nil then return nil, "no such alias: " .. alias end
+					custom[alias] = nil
+					removeWhere(aliases, function(entry) return type(entry) == "table" and type(entry.ALIAS) == "string" and entry.ALIAS:lower() == alias end)
+				end
+			end
+			return changed(args, { alias = alias, command = command, count = #aliases }, refresh(iy.value("refreshaliases")))
+		end
+		if args.action == "waypoint_add" or args.action == "waypoint_remove" or args.action == "waypoint_clear" then
+			local waypoints, all = iy.value("WayPoints"), iy.value("AllWaypoints")
+			if type(waypoints) ~= "table" then return nil, "IY's waypoint table is unavailable" end
+			local placeId = iy.value("PlaceId")
+			if not finite(placeId) then placeId = 0 end
+			local function inPlace(entry)
+				return type(entry) == "table" and (entry.GAME == nil or entry.GAME == placeId)
+			end
+			local name
+			if args.action ~= "waypoint_clear" then
+				name, err = named(args.name, "name", 100)
+				if not name then return nil, err end
+			end
+			local removed, savedRemoved
+			if args.action == "waypoint_add" then
+				-- IY's GUI inserts the name into loadpos/delete command strings.
+				if name:find("\\", 1, true) then return nil, "waypoint names must not contain IY's backslash command separator" end
+				local x, y, z
+				if args.position ~= nil then
+					if type(args.position) ~= "table" then return nil, "position must contain finite x, y, z numbers" end
+					x, y, z = args.position.x, args.position.y, args.position.z
+					if not finite(x) or not finite(y) or not finite(z) then return nil, "position must contain finite x, y, z numbers" end
+				else
+					local found
+					found, x, y, z = pcall(function()
+						local getRoot = iy.value("getRoot")
+						if type(getRoot) ~= "function" then return end
+						local root = getRoot(env.plr and env.plr.Character)
+						local position = root and root.Position
+						if position then return position.X, position.Y, position.Z end
+					end)
+					if not found or not finite(x) or not finite(y) or not finite(z) then return nil, "no position given and your character has no root part" end
+				end
+				if cancelled(ctx) then return nil, "cancelled before changing IY" end
+				local entry = { NAME = name, COORD = { math.floor(x), math.floor(y), math.floor(z) }, GAME = placeId }
+				waypoints[#waypoints + 1] = entry
+				if type(all) == "table" and all ~= waypoints then all[#all + 1] = util.deepCopy(entry) end
+			elseif args.action == "waypoint_remove" then
+				local function matches(entry)
+					return type(entry) == "table" and type(entry.NAME) == "string" and entry.NAME:lower() == name:lower()
+				end
+				removed = removeWhere(waypoints, matches)
+				if type(all) == "table" and all ~= waypoints then
+					savedRemoved = removeWhere(all, function(entry) return inPlace(entry) and matches(entry) end)
+				end
+				if removed + (savedRemoved or 0) == 0 then return nil, "no waypoint named '" .. name .. "' in this place" end
+			else
+				removed = #waypoints
+				clearTable(waypoints)
+				if type(all) == "table" and all ~= waypoints then
+					if args.all_places == true then savedRemoved = #all; clearTable(all)
+					else savedRemoved = removeWhere(all, inPlace) end
+				end
+			end
+			return changed(args, { name = name, count = #waypoints, placeId = placeId, removed = removed, savedRemoved = savedRemoved,
+				all_places = args.action == "waypoint_clear" and args.all_places == true or nil }, refresh(iy.value("refreshwaypoints")))
 		end
 		return nil, "unknown IY control action"
 	end

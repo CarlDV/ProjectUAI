@@ -207,6 +207,9 @@ return function(env)
 		local function notificationFor(session, event)
 			local kind = event.kind
 			if kind == "turn:end" then
+				-- Failed turns already emitted an error; do not follow it with a
+				-- second notification calling the failed work a successful reply.
+				if event.failed then return end
 				local reply = util.trim(tostring(event.text or ""))
 				local short = util.ellipsis(env.require("ui/markdown").plain(reply ~= "" and reply or "Task finished."), 160)
 				note("turn", short, "good", session)
@@ -257,7 +260,7 @@ return function(env)
 		button.BackgroundColor3 = theme.color.surfaceRaised
 		button.BorderSizePixel = 0
 		button.Size = UDim2.fromOffset(diameter, diameter)
-		button.AnchorPoint = Vector2.new(1, 1)
+		button.AnchorPoint = Vector2.new(0, 0)
 		button.ZIndex = theme.z.header
 		button.Selectable = true
 		-- A rounded tile rather than a circle, with the mark in it: the same shape an
@@ -266,12 +269,24 @@ return function(env)
 		P.corner(button, theme.radius.lg)
 		local outline = P.stroke(button, theme.color.border)
 
+		local preferred
 		if config.get("ui.launcher.placed", false) then
-			button.Position = UDim2.new(0, config.get("ui.launcher.x", 0), 0, config.get("ui.launcher.y", 0))
-			button.AnchorPoint = Vector2.new(0, 0)
-		else
-			button.Position = UDim2.new(1, -theme.space.lg, 1, -(theme.space.lg + responsive.bottomInset))
+			preferred = Vector2.new(config.get("ui.launcher.x", 0), config.get("ui.launcher.y", 0))
 		end
+		local function positionAt(x, y)
+			local bounds = responsive.usableRect(M.screen, theme.space.xs)
+			button.Position = UDim2.fromOffset(
+				math.floor(util.clamp(x, bounds.x, math.max(bounds.x, bounds.x + bounds.width - diameter))),
+				math.floor(util.clamp(y, bounds.y, math.max(bounds.y, bounds.y + bounds.height - diameter))))
+		end
+		local function layout()
+			diameter = math.max(theme.size.launcher, responsive.minTarget())
+			button.Size = UDim2.fromOffset(diameter, diameter)
+			local bounds = responsive.usableRect(M.screen, theme.space.lg)
+			positionAt(preferred and preferred.X or bounds.x + bounds.width - diameter,
+				preferred and preferred.Y or bounds.y + bounds.height - diameter)
+		end
+		layout()
 
 		icons.brand(button, theme.size.iconLarge)
 
@@ -309,55 +324,113 @@ return function(env)
 		})
 		badge.Visible = false
 
-		-- The orb both drags and clicks, and Roblox fires Activated on release even
-		-- after a drag, so a moved orb must not also open the window.
-		local dragging, moved, origin, startPosition = false, false, nil, nil
+		-- Keep the original grab offset in parent coordinates throughout a gesture.
+		-- AbsolutePosition includes the ScreenGui inset; copying it into Position
+		-- and changing anchors on the first move made the launcher jump.
+		local alive, hovered = true, false
+		local gesture, dragConnection
+		local blockedInputs = setmetatable({}, { __mode = "k" })
+		local suppressActivation = false
+		local fillTween, outlineTween
+		local releases = {}
+		local function feedback()
+			if not alive then return end
+			if fillTween then fillTween:Cancel() end
+			if outlineTween then outlineTween:Cancel() end
+			fillTween = env.tween:Create(button, theme.tween("hover"), {
+				BackgroundColor3 = gesture and theme.color.accentSurface
+					or (hovered and theme.color.surfaceHover or theme.color.surfaceRaised),
+			})
+			outlineTween = env.tween:Create(outline, theme.tween("hover"), {
+				Color = gesture and theme.color.accent or (hovered and theme.color.accentBorder or theme.color.border),
+			})
+			fillTween:Play()
+			outlineTween:Play()
+		end
+		local function finish(cancelled)
+			if not gesture then return end
+			if gesture.moved or cancelled then
+				suppressActivation, blockedInputs[gesture.input] = true, true
+			end
+			if gesture.moved and not cancelled then
+				preferred = Vector2.new(button.Position.X.Offset, button.Position.Y.Offset)
+				config.set("ui.launcher.x", preferred.X, { quiet = true })
+				config.set("ui.launcher.y", preferred.Y, { quiet = true })
+				config.set("ui.launcher.placed", true, { quiet = true })
+			end
+			gesture = nil
+			if dragConnection then dragConnection:Disconnect(); dragConnection = nil end
+			feedback()
+		end
 		button.InputBegan:Connect(function(input)
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseButton1 and kind ~= Enum.UserInputType.Touch then return end
-			dragging, moved = true, false
-			origin = input.Position
-			startPosition = button.AbsolutePosition
-			local connection
-			connection = input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-					if connection then connection:Disconnect() end
-					if moved then
-						config.set("ui.launcher.x", math.floor(button.Position.X.Offset), { quiet = true })
-						config.set("ui.launcher.y", math.floor(button.Position.Y.Offset), { quiet = true })
-						config.set("ui.launcher.placed", true, { quiet = true })
-					end
+			if not alive then return end
+			if gesture then blockedInputs[input] = true; return end
+			suppressActivation = false
+			gesture = { input = input, origin = input.Position, position = button.Position, moved = false }
+			dragConnection = input.Changed:Connect(function()
+				local state = input.UserInputState
+				if state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+					finish(state == Enum.UserInputState.Cancel)
 				end
 			end)
+			feedback()
 		end)
 
-		dispose.connection(env.uis.InputChanged:Connect(function(input)
-			if not dragging then return end
+		releases[#releases + 1] = dispose.connection(env.uis.InputChanged:Connect(function(input)
+			if not alive or not gesture then return end
 			local kind = input.UserInputType
-			if kind ~= Enum.UserInputType.MouseMovement and kind ~= Enum.UserInputType.Touch then return end
-			local delta = input.Position - origin
-			if math.abs(delta.X) > DRAG_SLOP or math.abs(delta.Y) > DRAG_SLOP then moved = true end
-			local viewport = responsive.viewport
-			button.AnchorPoint = Vector2.new(0, 0)
-			button.Position = UDim2.fromOffset(
-				math.floor(util.clamp(startPosition.X + delta.X, 0, viewport.X - diameter)),
-				math.floor(util.clamp(startPosition.Y + delta.Y, responsive.inset.Y, viewport.Y - diameter)))
-		end))
+			if gesture.input.UserInputType == Enum.UserInputType.Touch then
+				if input ~= gesture.input then return end
+			elseif kind ~= Enum.UserInputType.MouseMovement then return end
+			local delta = input.Position - gesture.origin
+			if delta.X * delta.X + delta.Y * delta.Y > DRAG_SLOP * DRAG_SLOP then gesture.moved = true end
+			if not gesture.moved then return end
+			suppressActivation, blockedInputs[gesture.input] = true, true
+			positionAt(gesture.position.X.Offset + delta.X, gesture.position.Y.Offset + delta.Y)
+		end), "launcher.move")
+		releases[#releases + 1] = dispose.connection(env.uis.InputEnded:Connect(function(input)
+			if gesture and input == gesture.input then finish(input.UserInputState == Enum.UserInputState.Cancel) end
+		end), "launcher.release")
+		releases[#releases + 1] = dispose.connection(env.uis.WindowFocusReleased:Connect(function()
+			hovered = false
+			finish(true)
+			feedback()
+		end), "launcher.focus")
+		releases[#releases + 1] = responsive.changed:connect(function()
+			if not alive then return end
+			finish(true)
+			layout()
+		end)
 
 		button.MouseEnter:Connect(function()
-			env.tween:Create(outline, theme.tween("hover"), { Color = theme.color.accentBorder }):Play()
+			hovered = true
+			feedback()
 		end)
 		button.MouseLeave:Connect(function()
-			env.tween:Create(outline, theme.tween("hover"), { Color = theme.color.border }):Play()
+			hovered = false
+			feedback()
 		end)
-		button.Activated:Connect(function()
-			if moved then
-				moved = false
-				return
-			end
+		button.Activated:Connect(function(input)
+			if not alive then return end
+			if gesture and gesture.moved then return end
+			if (input and blockedInputs[input]) or (input == nil and suppressActivation) then return end
+			if gesture and input and input ~= gesture.input then return end
 			M.toggle()
 		end)
+		local release = dispose.add(function()
+			alive = false
+			finish(true)
+			for _, stop in ipairs(releases) do stop() end
+			if fillTween then fillTween:Cancel() end
+			if outlineTween then outlineTween:Cancel() end
+			if M.launcher == button then
+				if M.launcherTween then M.launcherTween:Cancel(); M.launcherTween = nil end
+				M.launcher, M.launcherPulse, M.launcherBadge, M.launcherBadgeCount = nil, nil, nil, nil
+			end
+		end, "launcher")
+		button.Destroying:Connect(release)
 
 		M.launcher = button
 		M.launcherPulse = pulse
@@ -1056,26 +1129,19 @@ return function(env)
 		})
 	end
 
-	function M.showProfileMenu(target)
-		local name = "you"
-		local okName, display = pcall(function() return env.plr and env.plr.DisplayName end)
-		if okName and type(display) == "string" and util.trim(display) ~= "" then
-			name = display
-		elseif env.plr and type(env.plr.Name) == "string" and env.plr.Name ~= "" then
-			name = env.plr.Name
-		end
-		local record = providers.active()
-		-- Unload is a full client feature, not a desktop one: a phone has no sidebar
-		-- and therefore no profile row, so without it here the only way off the
-		-- screen on mobile was to close the window and leave everything running.
-		overlay.menu({
+	function M.showProfileMenu(target, onClose)
+		local menu = overlay.menu({
 			target = target,
 			width = theme.size.menuWide,
+			rowHeight = theme.size.controlLarge,
+			-- This short menu fits its contents on desktop; the overlay still clamps
+			-- it to usable screen space and scrolls when the viewport is smaller.
+			maxHeight = math.huge,
+			onClose = onClose,
 			options = {
-				{ isHeader = true, title = name, subtitle = record and record.label or "no provider" },
-				{ divider = true },
+				env.require("ui/profile").menuHeader(),
 				{ label = "Settings", value = "settings", icon = "gear", shortcut = "Ctrl ," },
-				{ label = "Inference configuration", value = "providers", icon = "sliders" },
+				{ label = "Providers & models", value = "providers", icon = "sliders" },
 				{ divider = true },
 				{ label = env.require("ui/changelog").menuLabel(), value = "changelog", icon = "spark" },
 				{ label = "About this build", value = "about", icon = "book" },
@@ -1112,6 +1178,9 @@ return function(env)
 				end
 			end,
 		})
+		-- A slightly quieter card lets the standard hover surface remain visible.
+		if menu then menu.card.BackgroundColor3 = theme.color.surfaceRaised end
+		return menu
 	end
 
 	-- What this build actually is. Read rather than written: the version, the identity

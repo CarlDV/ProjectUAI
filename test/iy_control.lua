@@ -32,6 +32,20 @@ Players = game:GetService("Players")
 prefix, StayOpen, KeepInfYield, logsEnabled, jLogsEnabled, espTransparency = ";", false, true, false, false, 0.3
 nosaves, binds, PluginsTable, toggleOn, dispatches, saveCalls, refreshCalls = false, {}, {}, {}, {}, 0, 0
 cmds = { { NAME = "example", ALIAS = {}, FUNC = function() end }, { NAME = "speed", ALIAS = {}, FUNC = function() end } }
+cmds[2].ALIAS = { "ws" }
+cmds[3] = { NAME = "guiscale", ALIAS = {}, FUNC = function() end }
+cmds[4] = { NAME = "chatlogswebhook", ALIAS = { "logswebhook" }, FUNC = function() end }
+CMDs = { { NAME = "speed / ws [num]", DESC = "Set walk speed" }, { NAME = "example / ex", DESC = "Example command" } }
+aliases, customAlias, WayPoints, AllWaypoints, PlaceId, guiScale = {}, {}, {}, {}, 123, 1
+function getPlayer(selector, speaker)
+	lastSelector, lastSpeaker = selector, speaker
+	if selector == "all" then return { speaker.Name, "Guest", "Visitor" } end
+	if selector == "me" then return { speaker.Name } end
+	return {}
+end
+function getRoot(character) return character and character:FindFirstChild("HumanoidRootPart") end
+function refreshaliases() refreshCalls = refreshCalls + 1 end
+function refreshwaypoints() refreshCalls = refreshCalls + 1 end
 local eventCommands = { OnExecute = {}, OnSpawn = {}, OnDied = {}, OnDamage = {}, OnKilled = {}, OnJoin = {}, OnLeave = {}, OnChatted = {}, CustomPluginEvent = {} }
 eventEditor = {
 	SaveData = function() return HttpService:JSONEncode(eventCommands) end,
@@ -64,7 +78,7 @@ function execCmd(command, speaker, history)
 end
 function updatesaves()
 	saveCalls = saveCalls + 1
-	writefile("IY_FE.iy", HttpService:JSONEncode({ prefix = prefix, binds = binds, eventBinds = eventEditor.SaveData(), untouched = "keep" }))
+	writefile("IY_FE.iy", HttpService:JSONEncode({ prefix = prefix, binds = binds, aliases = aliases, WayPoints = AllWaypoints, eventBinds = eventEditor.SaveData(), untouched = "keep" }))
 end
 function refreshbinds() refreshCalls = refreshCalls + 1 end
 function loadfile(name) return assert(loadstring(readfile(name))) end
@@ -114,6 +128,138 @@ end
 	end
 	return h, env, registry, run, ctx
 end
+
+scenario("command discovery exposes live signatures and descriptions with an older-IY fallback", function()
+	local h, env, registry, run = fixture()
+	local result = run("iy_cmds", { filter = "WS" })
+	check("alias search includes the signature and description", result.ok and has(result.text, "speed / ws [num]") and has(result.text, "Set walk speed"))
+	h.sandbox.CMDs = { false, { NAME = "WS [amount]", DESC = "Alias-only description" }, { NAME = "ws [other]", DESC = "Duplicate loses" } }
+	result = run("iy_cmds", { filter = "speed" })
+	check("replacement tables and aliases resolve with first mapping winning", result.ok and has(result.text, "Alias-only description") and not has(result.text, "Duplicate loses"))
+	h.sandbox.CMDs = { { NAME = "speed [on/off] / ws [num]", DESC = string.rep("d", 200) } }
+	result = run("iy_cmds", { filter = "speed" })
+	check("descriptions are bounded", result.ok and has(result.text, "speed [on/off] / ws [num]") and not has(result.text, string.rep("d", 121)))
+	h.sandbox.CMDs = nil
+	result = run("iy_cmds", { filter = "speed" })
+	check("missing descriptions preserve the original output", result.ok and result.text == "1 of 4 commands matched\n1. speed (alias: ws)")
+end)
+
+scenario("player selectors use IY's live resolver and expose bounded readable results", function()
+	local h, env, registry, run = fixture()
+	local tool = registry.get("iy_players")
+	check("selector resolution is read-only without host requirements", tool.risk == "read" and tool.needs == nil)
+	for _, keyword in ipairs({ "all", "others", "me", "random", "#<n>", "%<team>", "allies", "enemies", "team", "nonteam", "friends", "nonfriends", "guests", "bacons", "age<n>", "nearest", "farthest", "group<id>", "alive", "dead", "rad<n>", "cursor", "npcs", "@name" }) do
+		check("selector documented: " .. keyword, has(tool.description, keyword))
+	end
+	local all = run("iy_players", { selector = " all ", limit = 1 })
+	check("all names remain in structured data", all.ok and all.data.count == 3 and all.data.names[2] == "Guest" and all.data.names[3] == "Visitor")
+	check("text honours the limit", has(all.text, "2 more") and not has(all.text, "Guest"))
+	check("resolver receives the local speaker and trimmed selector", h.sandbox.lastSpeaker == h.localPlayer and h.sandbox.lastSelector == "all")
+	local me = run("iy_players", { selector = "me" })
+	check("me resolves through IY", me.ok and me.data.names[1] == h.localPlayer.Name)
+	local none = run("iy_players", { selector = "unknown" })
+	check("empty matches are explicit and structured", none.ok and none.data.count == 0 and has(none.text, "matched no players right now"))
+	check("blank selectors are rejected", not run("iy_players", { selector = " " }).ok)
+	h.sandbox.getPlayer = function() error("selector failed") end
+	check("resolver errors are reported", has(run("iy_players", { selector = "all" }).text, "selector failed"))
+	h.sandbox.getPlayer = function() return { {} } end
+	check("malformed lists fail cleanly", not run("iy_players", { selector = "all" }).ok)
+	h.sandbox.getPlayer = nil
+	check("older IY without a resolver fails clearly", has(run("iy_players", { selector = "all" }).text, "does not expose getPlayer"))
+end)
+
+scenario("alias management updates native tables, persists and clears in place", function()
+	local h, env, registry, run = fixture()
+	local aliases, custom = h.sandbox.aliases, h.sandbox.customAlias
+	local first = run("iy_control", { action = "alias_add", alias = " Quick ", command = "WS 80" })
+	check("command aliases resolve to the native entry", first.ok and custom.quick == h.sandbox.cmds[2] and aliases[1].CMD == "ws" and aliases[1].ALIAS == "quick")
+	check("edit refreshes and requests a native save", h.sandbox.refreshCalls == 1 and h.sandbox.saveCalls == 1 and h.json.decode(h.files["IY_FE.iy"]).aliases[1].ALIAS == "quick")
+	for _, args in ipairs({
+		{ action = "alias_add", alias = "unknown", command = "missing" },
+		{ action = "alias_add", alias = "QUICK", command = "example" },
+		{ action = "alias_add", alias = "speed", command = "example" },
+		{ action = "alias_add", alias = "two words", command = "speed" },
+		{ action = "alias_add", alias = "a\\speed", command = "speed" },
+		{ action = "alias_add", alias = "2^speed", command = "speed" },
+		{ action = "alias_add", alias = "!quick", command = "speed" },
+		{ action = "alias_remove", alias = "missing" },
+	}) do
+		check("invalid alias operation is rejected", not run("iy_control", args).ok)
+		check("invalid alias operation has no side effects", #aliases == 1 and custom.quick == h.sandbox.cmds[2] and h.sandbox.refreshCalls == 1 and h.sandbox.saveCalls == 1)
+	end
+	check("session-only alias works", run("iy_control", { action = "alias_add", alias = "slow", command = "speed", persist = false }).ok and h.sandbox.saveCalls == 1)
+	local page = run("iy_control", { action = "inspect", section = "aliases", limit = 1 })
+	check("alias inspection is paginated", page.ok and page.data.aliases.total == 2 and page.data.aliases.nextOffset == 2 and page.data.aliases.items[1].alias == "quick")
+	page = run("iy_control", { action = "inspect", section = "aliases", limit = 1, offset = page.data.aliases.nextOffset })
+	check("alias continuation preserves indexes", page.ok and page.data.aliases.items[1].index == 2 and page.data.aliases.items[1].command == "speed" and page.data.aliases.nextOffset == nil)
+	check("remove is case insensitive", run("iy_control", { action = "alias_remove", alias = "QUICK" }).ok and custom.quick == nil and #aliases == 1)
+	check("clear empties both tables in place", run("iy_control", { action = "alias_clear" }).ok and h.sandbox.aliases == aliases and h.sandbox.customAlias == custom and next(aliases) == nil and next(custom) == nil)
+	h.sandbox.aliases, h.sandbox.customAlias = { false }, {}
+	check("malformed aliases do not crash inspection", run("iy_control", { action = "inspect", section = "aliases" }).data.aliases.items[1].malformed ~= nil)
+	h.sandbox.aliases = nil
+	check("missing alias tables are reported", run("iy_control", { action = "inspect", section = "aliases" }).data.aliases.unavailable ~= nil and not run("iy_control", { action = "alias_clear" }).ok)
+end)
+
+scenario("waypoints use validated coordinates and preserve other places unless explicitly cleared", function()
+	local h, env, registry, run = fixture()
+	local waypoints, all = h.sandbox.WayPoints, h.sandbox.AllWaypoints
+	local first = run("iy_control", { action = "waypoint_add", name = " Home ", position = { x = 1.9, y = -2.1, z = 3.8 } })
+	check("explicit coordinates are floored and scoped", first.ok and waypoints[1].NAME == "Home" and waypoints[1].COORD[1] == 1 and waypoints[1].COORD[2] == -3 and waypoints[1].COORD[3] == 3 and waypoints[1].GAME == 123)
+	check("saved coordinates are equivalent independent entries", #all == 1 and all[1] ~= waypoints[1] and all[1].COORD ~= waypoints[1].COORD and all[1].COORD[2] == -3 and h.json.decode(h.files["IY_FE.iy"]).WayPoints[1].GAME == 123)
+	h.sandbox.getRoot = function(character)
+		check("current-position lookup receives the character", character == h.localPlayer.Character)
+		return { Position = { X = 10.9, Y = 20.3, Z = -30.1 } }
+	end
+	check("implicit coordinates use the root", run("iy_control", { action = "waypoint_add", name = "Spawn" }).ok and waypoints[2].COORD[1] == 10 and waypoints[2].COORD[3] == -31)
+	local page = run("iy_control", { action = "inspect", section = "waypoints", limit = 1 })
+	check("waypoint inspection includes coordinates and continuation", page.ok and page.data.waypoints.items[1].x == 1 and page.data.waypoints.total == 2 and page.data.waypoints.allPlacesTotal == 2 and page.data.waypoints.nextOffset == 2)
+	page = run("iy_control", { action = "inspect", section = "waypoints", limit = 1, offset = 2 })
+	check("waypoint continuation is stable", page.data.waypoints.items[1].index == 2 and page.data.waypoints.items[1].name == "Spawn" and page.data.waypoints.nextOffset == nil)
+	local other = { NAME = "Home", COORD = { 9, 9, 9 }, GAME = 456 }
+	all[#all + 1] = other
+	check("removing by name preserves another place's namesake", run("iy_control", { action = "waypoint_remove", name = "HOME" }).ok and #waypoints == 1 and #all == 2 and all[2] == other)
+	local saveCalls, refreshCalls = h.sandbox.saveCalls, h.sandbox.refreshCalls
+	for _, args in ipairs({
+		{ action = "waypoint_add", name = " " },
+		{ action = "waypoint_add", name = "Home\\speed 100", position = { x = 1, y = 2, z = 3 } },
+		{ action = "waypoint_add", name = "Bad", position = { x = 1, y = 2 } },
+		{ action = "waypoint_add", name = "Bad", position = { x = "x", y = 2, z = 3 } },
+		{ action = "waypoint_remove", name = "unknown" },
+	}) do check("malformed waypoints fail without mutation", not run("iy_control", args).ok and #waypoints == 1 and #all == 2) end
+	local control = env.require("runtime/iy_control")
+	for _, value in ipairs({ math.huge, -math.huge, 0 / 0 }) do
+		check("nonfinite coordinates are rejected before mutation", control.run({ action = "waypoint_add", name = "Bad", position = { x = value, y = 0, z = 0 } }) == nil and #waypoints == 1)
+	end
+	h.sandbox.getRoot = function() error("no character") end
+	check("missing root is reported", has(run("iy_control", { action = "waypoint_add", name = "Bad" }).text, "no root part"))
+	check("failed operations did not save or refresh", h.sandbox.saveCalls == saveCalls and h.sandbox.refreshCalls == refreshCalls)
+	check("default clear is scoped and in place", run("iy_control", { action = "waypoint_clear" }).ok and h.sandbox.WayPoints == waypoints and #waypoints == 0 and h.sandbox.AllWaypoints == all and #all == 1 and all[1] == other)
+	check("explicit all-place clear empties in place", run("iy_control", { action = "waypoint_clear", all_places = true }).ok and h.sandbox.AllWaypoints == all and next(all) == nil)
+	h.sandbox.WayPoints, h.sandbox.AllWaypoints = { false, { NAME = "Broken", COORD = {} } }, nil
+	page = run("iy_control", { action = "inspect", limit = 1 })
+	check("all includes aliases and malformed waypoints without stalling pagination", page.ok and page.data.aliases and page.data.waypoints.items[1].malformed and page.data.waypoints.nextOffset == 2)
+	h.sandbox.WayPoints = nil
+	check("missing waypoints are reported", run("iy_control", { action = "inspect", section = "waypoints" }).data.waypoints.unavailable ~= nil)
+end)
+
+scenario("command-backed settings validate before mutation and report asynchronous dispatch", function()
+	local h, env, registry, run = fixture()
+	local set = run("iy_control", { action = "configure", settings = { gui_scale = 1.5, logs_webhook = "https://example.com/logs" } })
+	check("settings dispatch the native commands", set.ok and h.sandbox.dispatches[1].command == "guiscale 1.5" and h.sandbox.dispatches[2].command == "chatlogswebhook https://example.com/logs")
+	check("async dispatch is explicit", has(set.data.warning, "asynchronously") and #set.data.dispatched == 2)
+	check("an empty webhook disables it without another argument", run("iy_control", { action = "configure", settings = { logs_webhook = "" } }).ok and h.sandbox.dispatches[3].command == "chatlogswebhook")
+	for _, settings in ipairs({ { gui_scale = 3 }, { logs_webhook = "file:///tmp/logs" }, { logs_webhook = "https://" }, { logs_webhook = "https://example.com\\speed 100" }, { logs_webhook = "https://example.com\n" } }) do
+		settings.prefix = "!"
+		check("invalid mixed settings never partially apply", not run("iy_control", { action = "configure", settings = settings }).ok and h.sandbox.prefix == ";" and #h.sandbox.dispatches == 3)
+	end
+	check("native saving is not mislabeled as session-only", not run("iy_control", { action = "configure", settings = { gui_scale = 1 }, persist = false }).ok)
+	h.sandbox.guiScale, h.sandbox.logsWebhook = 1.5, "https://example.com/logs"
+	local inspect = run("iy_control", { action = "inspect", section = "settings" })
+	check("inspection reads the eventual live settings", inspect.ok and inspect.data.settings.gui_scale == 1.5 and inspect.data.settings.logs_webhook == "https://example.com/logs")
+	h.sandbox.execCmd = function() error("dispatcher failed") end
+	local failedSet = run("iy_control", { action = "configure", settings = { prefix = "!", gui_scale = 1 } })
+	check("immediate dispatch failures are not reported as success", not failedSet.ok and has(failedSet.text, "dispatcher failed") and h.sandbox.prefix == ";")
+end)
 
 scenario("native event bindings preserve other events, serialize, update, fire and remove", function()
 	local h, env, registry, run = fixture()
@@ -219,7 +365,7 @@ scenario("plugin creation supports globals, multiple commands, aliases and live 
 	check("source reading paginates", read.ok and read.data.nextOffset == 101 and has(read.text, "SharedPluginRuns"))
 	check("template uses the requested multi-command format", has(run("iy_plugin_read", {}).text, "return Plugin"))
 	local update = run("iy_plugin_write", { plugin = "demo.iy", source = PLUGIN:gsub("Increment", "Increment again"), overwrite = true })
-	check("reload replaces rather than duplicates commands", update.ok and #h.sandbox.cmds == 4 and #h.sandbox.PluginsTable == 1 and h.sandbox.SharedPluginRuns == 2)
+	check("reload replaces rather than duplicates commands", update.ok and #h.sandbox.cmds == 6 and #h.sandbox.PluginsTable == 1 and h.sandbox.SharedPluginRuns == 2)
 	check("loadfile override never leaks", h.sandbox.loadfile == loader)
 	check("saved source still loads as a normal IY plugin", h.sandbox.loadfile("demo.iy")().PluginName == "ExamplePlugin")
 	check("no asynchronous plugin errors", #h.errors() == 0)
@@ -268,6 +414,8 @@ scenario("internal loading is shared and plugins inherit the captured IY environ
 	local source = [[
 execCmd = function() end
 cmds = {}
+CMDs = { { NAME = "speed [num]", DESC = "Internal description" } }
+getPlayer = function(selector, speaker) return { speaker.Name } end
 prefix = ";"
 PARENT = Instance.new("ScreenGui")
 privateHelper = 42
@@ -282,6 +430,10 @@ wait(0.4)
 	h.sched.advance(1.2)
 	check("parallel callers share a completed load", requests == 1 and first == true and second == true and iy.source == "internal")
 	check("captured globals remain private", iy.value("privateHelper") == 42 and h.sandbox.privateHelper == nil)
+	check("descriptions and selectors work inside the captured environment", iy.descriptions()[1].DESC == "Internal description" and iy.resolvePlayers("me")[1] == h.localPlayer.Name)
+	iy.environment().CMDs = nil
+	h.sandbox.CMDs = nil
+	check("removed internal descriptions do not use a stale capture", iy.descriptions() == nil)
 	h.files["scoped.iy"] = "pluginGlobal = privateHelper + 1; return { value = pluginGlobal }"
 	local plugin = iy.environment().loadfile("scoped.iy")()
 	check("plugin top-level globals share IY helpers", plugin.value == 43 and iy.value("pluginGlobal") == 43 and h.sandbox.pluginGlobal == nil)
