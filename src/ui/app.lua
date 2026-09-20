@@ -351,7 +351,7 @@ return function(env)
 			if not gesture then return end
 			if gesture.moved or cancelled then
 				suppressActivation = true
-				if gesture.input then blockedInputs[gesture.input] = true end
+				if cancelled and gesture.input then blockedInputs[gesture.input] = true end
 			end
 			if gesture.moved and not cancelled then
 				preferred = Vector2.new(button.Position.X.Offset, button.Position.Y.Offset)
@@ -367,7 +367,11 @@ return function(env)
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseButton1 and kind ~= Enum.UserInputType.Touch then return end
 			if not alive then return end
-			if gesture then blockedInputs[input] = true; return end
+			if gesture then
+				blockedInputs[input] = true
+				return
+			end
+			blockedInputs[input] = nil
 			suppressActivation = false
 			gesture = { input = input, origin = input.Position, position = button.Position, moved = false }
 			dragConnection = input.Changed:Connect(function()
@@ -384,7 +388,7 @@ return function(env)
 			if input == gesture.input then return true end
 			local kind = input.UserInputType
 			local gkind = gesture.input and gesture.input.UserInputType
-			return kind == gkind and kind == Enum.UserInputType.MouseButton1
+			return kind == gkind and (kind == Enum.UserInputType.MouseButton1 or kind == Enum.UserInputType.Touch)
 		end
 
 		releases[#releases + 1] = dispose.connection(env.uis.InputChanged:Connect(function(input)
@@ -397,7 +401,6 @@ return function(env)
 			if delta.X * delta.X + delta.Y * delta.Y > DRAG_SLOP * DRAG_SLOP then gesture.moved = true end
 			if not gesture.moved then return end
 			suppressActivation = true
-			if gesture.input then blockedInputs[gesture.input] = true end
 			positionAt(gesture.position.X.Offset + delta.X, gesture.position.Y.Offset + delta.Y)
 		end), "launcher.move")
 		releases[#releases + 1] = dispose.connection(env.uis.InputEnded:Connect(function(input)
@@ -428,7 +431,11 @@ return function(env)
 			if not alive then return end
 			if gesture and gesture.moved then return end
 			local isPointer = (not input) or (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch)
-			if (input and blockedInputs[input]) or (isPointer and suppressActivation) then return end
+			if (input and blockedInputs[input]) or (isPointer and suppressActivation) then
+				suppressActivation = false
+				if input then blockedInputs[input] = nil end
+				return
+			end
 			if gesture and not gesture.moved then
 				finish(false)
 			end
