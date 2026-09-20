@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Align task markers and notification content across text sizes and input modes. Preserve task disclosure choices, cap long plans, and exclude skipped tasks from completion progress.
+- Add conversation titles and Open chat actions to notifications. Preserve other unread conversations, keep notification stacks within the available viewport, and stop the busy pulse when work finishes.
+- Add `iy_control` for native IY events, keybinds, settings, and repeat-loop control. Read live IY state and request saves through its own APIs.
+- Add `iy_plugin_read` and `iy_plugin_write` for custom plugins with shared globals, multiple commands, aliases, syntax checks, returned-table validation, and live reloads.
+
 ## 1.4.0 — September 19, 2026
 
 ### Added

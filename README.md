@@ -125,6 +125,44 @@ Active jobs also have a Stop all control in chat. Loops have configurable interv
 counts, and durations, and stop when their conversation is cleared or removed, chat
 is disabled, or the client unloads.
 
+**Infinite Yield control and plugin authoring.** `iy_control` inspects and changes
+IY's native event bindings, keybinds, command prefix, and supported settings. It
+supports `OnExecute`, `OnSpawn`, `OnDied`, `OnDamage`, `OnKilled`, `OnJoin`,
+`OnLeave`, and `OnChatted`, including player/message/health filters, delays, and
+`$1`/`$2` command arguments. Changes refresh IY's editor and request its normal
+save; results say when only live session state is available. Inspect first for
+current binding indexes. `stop_loops` sends IY's `breakloops` command, which stops
+repeat prefixes; event bindings and individual commands' own loops are managed
+separately. The adapter follows the upstream
+[event editor and plugin loader](https://github.com/EdgeIY/infiniteyield/blob/master/source),
+reviewed September 20, 2026.
+
+`iy_plugin_read` without a filename returns a multi-command template. Pass a
+filename to read an existing plugin, then use `iy_plugin_write` to create or
+update it. Source can declare globals or shared locals above `local Plugin`,
+and returns the normal IY table with `PluginName`, `PluginDescription`, and
+`Commands`. Every command has `ListName`, `Description`, `Aliases`, and
+`Function(args, speaker)`. The writer checks syntax before saving, executes setup
+once when loading, validates the returned table before replacing commands, and
+reports their actual registered names, including IY's collision suffixes.
+`load=false` saves without executing; replacing a file requires `overwrite=true`.
+Plugin source and commands appear in the tool transcript. Plugin-owned connections
+and loops should have their own cleanup command so reloads do not duplicate them.
+
+For example, `iy_control` can bind `speed 40` to your next spawn:
+
+```json
+{"action":"event_add","event":"OnSpawn","command":"speed 40","conditions":{"player":"me"},"delay":0.5}
+```
+
+**Task and notification layout.** Task markers share their text's line box at each
+font scale, long plans scroll within a bounded area, and disclosure choices stay
+with their conversation. Skipped steps are reported separately from completion.
+Notifications have a clear outcome, conversation title, and an **Open chat**
+action. Opening a conversation acknowledges its own notifications; other unread
+conversations keep their badge. Long notifications scroll, hover/focus pauses
+expiry, and the stack fits the available screen and keyboard space.
+
 **Independent in-game chatbot.** `chat_bot` listens to new player messages and
 answers with the selected AI provider/model using its own short conversation memory.
 Set `instructions` for its personality, `prefix` (default `[AGENT]`), and optionally
@@ -250,6 +288,8 @@ luajit test/panel_layout_regressions.lua
 luajit test/model_picker.lua
 luajit test/chat_loops.lua
 luajit test/chat_bot.lua
+luajit test/iy_control.lua
+luajit test/todo_notifications.lua
 ```
 
 `test/run.lua` loads `dist/uai.lua` -- the actual artifact -- into a mocked

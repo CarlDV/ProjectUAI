@@ -19,12 +19,35 @@ return function(env)
 
 	local M = { toasts = {}, open = {} }
 
-	local function toastCapacity()
-		local height = math.max(theme.size.avatar, theme.size.controlSmall,
-			responsive.minTarget(), theme.text.small.height) + theme.space.md * 2
-		local room = responsive.usableRect(M.layer, theme.space.lg).height
-		return math.max(1, math.min(TOAST_LIMIT,
-			math.floor((room + theme.space.sm) / (height + theme.space.sm))))
+	local layingOutToasts = false
+	local function layoutToasts()
+		if layingOutToasts or not M.toastColumn or not M.toastColumn.Parent then return end
+		layingOutToasts = true
+		local narrow = responsive.isNarrow()
+		local bounds = responsive.usableRect(M.layer, narrow and theme.space.md or theme.space.lg)
+		local width = math.max(1, math.min(theme.size.modal, bounds.width))
+		M.toastColumn.Size = UDim2.new(0, width, 0, 0)
+		M.toastColumn.AnchorPoint = narrow and Vector2.new(0.5, 0) or Vector2.new(1, 0)
+		M.toastColumn.Position = UDim2.fromOffset(math.floor(bounds.x + bounds.width * (narrow and 0.5 or 1)), bounds.y)
+		local minimum = 0
+		for _, entry in ipairs(M.toasts) do
+			entry.measure(width)
+			minimum = minimum + entry.minimum
+		end
+		-- Count the actual title, message and action heights. Three tall actionable
+		-- notices cannot share the budget of three one-line status messages.
+		while #M.toasts > TOAST_LIMIT or (#M.toasts > 1 and minimum + (#M.toasts - 1) * theme.space.sm > bounds.height) do
+			local oldest = M.toasts[1]
+			minimum = minimum - oldest.minimum
+			oldest.close(true)
+		end
+		local spare = math.max(0, bounds.height - minimum - math.max(0, #M.toasts - 1) * theme.space.sm)
+		for index, entry in ipairs(M.toasts) do
+			local extra = math.min(math.max(0, entry.wanted - entry.minimum), math.floor(spare / (#M.toasts - index + 1)))
+			spare = spare - extra
+			entry.layout(math.max(0, math.min(bounds.height, entry.minimum + extra)), width)
+		end
+		layingOutToasts = false
 	end
 
 	function M.mount(screenGui)
@@ -44,19 +67,6 @@ return function(env)
 			zIndex = theme.z.toast,
 		})
 
-		local function layoutToasts()
-			if not M.toastColumn or not M.toastColumn.Parent then return end
-			while #M.toasts > toastCapacity() do
-				local oldest = table.remove(M.toasts, 1)
-				if oldest then oldest.close() end
-			end
-			local narrow = responsive.isNarrow()
-			local bounds = responsive.usableRect(M.layer, narrow and theme.space.md or theme.space.lg)
-			local width = math.min(theme.size.modal, bounds.width)
-			M.toastColumn.Size = UDim2.new(0, width, 0, 0)
-			M.toastColumn.AnchorPoint = narrow and Vector2.new(0.5, 0) or Vector2.new(1, 0)
-			M.toastColumn.Position = UDim2.fromOffset(math.floor(bounds.x + bounds.width * (narrow and 0.5 or 1)), bounds.y)
-		end
 		layoutToasts()
 		local unbindToasts = dispose.add(responsive.changed:connect(layoutToasts), "toast layout")
 		M.toastColumn.Destroying:Connect(unbindToasts)
@@ -83,12 +93,9 @@ return function(env)
 
 	-- Toasts -----------------------------------------------------------------
 
-	function M.toast(text, tone, seconds)
+	function M.toast(text, tone, seconds, options)
 		if not ensure() then return nil end
-		while #M.toasts >= toastCapacity() do
-			local oldest = table.remove(M.toasts, 1)
-			if oldest then oldest.close() end
-		end
+		options = options or {}
 
 		local toneKey = tone or "info"
 		if toneKey == "danger" then toneKey = "bad" end
@@ -99,6 +106,8 @@ return function(env)
 		local badgeSize = theme.size.avatar
 		local inset = pad + badgeSize + theme.space.sm
 		local trailing = pad + closeSize + theme.space.xs
+		local titleText = util.trim(tostring(options.title or ""))
+		local actionable = type(options.onActivate) == "function"
 		local minimum = math.max(badgeSize, closeSize, theme.text.small.height) + pad * 2
 
 		-- The list owns this slot; only its child moves. Tweening the old toast's
@@ -170,43 +179,91 @@ return function(env)
 			text = tostring(text),
 			role = "small",
 			color = theme.color.text,
-			size = UDim2.new(1, -theme.size.scrollbar, 0, 0),
+			size = UDim2.new(1, 0, 0, theme.text.small.height),
 			wrap = true,
 			auto = "Y",
 			zIndex = theme.z.toast + 1,
 		})
+		local title
+		if titleText ~= "" then
+			title = P.text(card, { name = "ToastTitle", text = titleText, role = "label", color = theme.color.text,
+				truncate = true, zIndex = theme.z.toast + 1 })
+		end
 
-		local entry = { card = card, closed = false }
+		local entry = { card = card, slot = slot, closed = false }
 		local hovered, focused = false, false
 		local remaining = math.max(0, seconds or TOAST_SECONDS)
 		local started = clock.ms()
 		local generation = 0
-		local unbindLayout
-
-		local function layoutMessage()
-			if entry.closed then return end
-			local available = responsive.usableRect(M.layer, theme.space.lg).height
-			local ceiling = math.max(minimum, math.min(theme.text.small.height * 5 + pad * 2,
-				math.floor(available / toastCapacity()) - theme.space.sm))
-			local wanted = math.max(minimum, math.ceil(label.TextBounds.Y) + pad * 2)
-			slot.Size = UDim2.new(1, 0, 0, math.min(wanted, ceiling))
+		local action, close
+		local headerHeight, footerHeight, bodyHeight
+		function entry.measure(width)
+			closeSize = math.max(theme.size.controlSmall, responsive.minTarget())
+			trailing = pad + closeSize + theme.space.xs
+			headerHeight = math.max(badgeSize, closeSize, theme.text.small.height)
+			footerHeight = actionable and (closeSize + theme.space.xs) or 0
+			local measured = P.measureText(label.Text, { role = "small", width = math.max(1, width - inset - trailing - theme.size.scrollbar) })
+			bodyHeight = math.max(theme.text.small.height, label.TextBounds.Y > 0 and math.ceil(label.TextBounds.Y) or measured.Y)
+			-- Centre the label itself inside the reading area, including before the
+			-- engine publishes TextBounds. A taller viewport around a short label
+			-- otherwise leaves the text above the icon's centre line.
+			label.Size = UDim2.new(1, 0, 0, bodyHeight)
+			entry.minimum = pad * 2 + headerHeight + footerHeight + (title and (theme.space.xs + theme.text.small.height) or 0)
+			entry.wanted = pad * 2 + footerHeight + (title and (headerHeight + theme.space.xs) or 0)
+				+ math.max(title and 0 or headerHeight, math.min(bodyHeight, theme.text.small.height * 5))
 		end
-		label:GetPropertyChangedSignal("TextBounds"):Connect(layoutMessage)
-		unbindLayout = dispose.add(responsive.changed:connect(layoutMessage), "toast size")
-		layoutMessage()
+		function entry.layout(height, width)
+			if entry.closed then return end
+			slot.Size = UDim2.new(1, 0, 0, height)
+			local mainHeight = math.max(0, height - pad * 2 - footerHeight)
+			local topHeight = title and math.min(headerHeight, mainHeight) or mainHeight
+			indicator.Position = UDim2.fromOffset(pad, pad + math.max(0, (topHeight - badgeSize) / 2))
+			close.instance.Size = UDim2.fromOffset(closeSize, closeSize)
+			close.instance.Position = UDim2.new(1, -pad, 0, pad + math.max(0, (topHeight - closeSize) / 2))
+			local contentWidth = math.max(1, width - inset - trailing)
+			local messageY, messageHeight
+			if title then
+				title.Size = UDim2.fromOffset(contentWidth, topHeight)
+				title.Position = UDim2.fromOffset(inset, pad)
+				messageY = pad + topHeight + theme.space.xs
+				messageHeight = math.max(0, mainHeight - topHeight - theme.space.xs)
+			else
+				messageHeight = math.min(bodyHeight, mainHeight)
+				messageY = pad + (mainHeight - messageHeight) / 2
+			end
+			message.instance.Position = UDim2.fromOffset(inset, messageY)
+			message.instance.Size = UDim2.fromOffset(contentWidth, messageHeight)
+			if action then
+				action.instance.Position = UDim2.fromOffset(inset, math.max(pad, height - pad - closeSize))
+				action.instance.Size = UDim2.fromOffset(contentWidth, closeSize)
+			end
+		end
+		label:GetPropertyChangedSignal("TextBounds"):Connect(layoutToasts)
 
-		function entry.close()
+		function entry.close(immediate)
 			if entry.closed then return end
 			entry.closed = true
 			generation = generation + 1
-			if unbindLayout then unbindLayout() end
 			for index, item in ipairs(M.toasts) do
 				if item == entry then table.remove(M.toasts, index) break end
 			end
-			P.animate(group, "exit", {
-				GroupTransparency = 1,
-				Position = UDim2.fromOffset(0, responsive.reduceMotion and 0 or -theme.space.xs),
-			}, function() slot:Destroy() end)
+			if immediate then slot:Destroy()
+			else
+				-- Leave the list before fading, so a dismissed card does not reserve an
+				-- invisible row or push a new toast past the screen's safe bounds.
+				local origin, size = slot.AbsolutePosition, slot.AbsoluteSize
+				local layerOrigin = M.layer.AbsolutePosition
+				slot.Parent = M.layer
+				slot.Size = UDim2.fromOffset(size.X, size.Y)
+				slot.Position = UDim2.fromOffset(origin.X - layerOrigin.X, origin.Y - layerOrigin.Y)
+				card.Active, card.Selectable = false, false
+				if action then action.instance.Active, action.instance.Selectable = false, false end
+				P.animate(group, "exit", {
+					GroupTransparency = 1,
+					Position = UDim2.fromOffset(0, responsive.reduceMotion and 0 or -theme.space.xs),
+				}, function() slot:Destroy() end)
+			end
+			layoutToasts()
 		end
 		slot.Destroying:Connect(function()
 			for index, item in ipairs(M.toasts) do
@@ -214,20 +271,34 @@ return function(env)
 			end
 			entry.closed = true
 			generation = generation + 1
-			if unbindLayout then unbindLayout() end
 		end)
 
-		local close = P.iconButton(card, {
+		close = P.iconButton(card, {
 			name = "DismissNotification",
 			icon = "close",
 			diameter = closeSize,
 			anchor = Vector2.new(1, 0),
 			position = UDim2.new(1, -pad, 0, pad),
 			zIndex = theme.z.toast + 2,
-			onClick = entry.close,
+			onClick = function() entry.close() end,
 		})
 		close.instance.ZIndex = theme.z.toast + 2
-		card.Activated:Connect(entry.close)
+		local activating = false
+		function entry.activate()
+			if entry.closed or activating then return end
+			activating = true
+			if actionable then
+				local ok, err = pcall(options.onActivate)
+				if not ok then env.require("runtime/log").warn("notification", "could not open notification", err) end
+			end
+			entry.close()
+		end
+		card.Activated:Connect(entry.activate)
+		if actionable then
+			action = P.button(card, { name = "NotificationAction", text = options.actionText or "Open",
+				variant = "ghost", size = "sm", fill = true, align = "Left", zIndex = theme.z.toast + 2,
+				onClick = entry.activate })
+		end
 
 		local function schedule()
 			generation = generation + 1
@@ -272,8 +343,13 @@ return function(env)
 		card.SelectionLost:Connect(blur)
 		close.instance.SelectionGained:Connect(focus)
 		close.instance.SelectionLost:Connect(blur)
+		if action then
+			action.instance.SelectionGained:Connect(focus)
+			action.instance.SelectionLost:Connect(blur)
+		end
 
 		M.toasts[#M.toasts + 1] = entry
+		layoutToasts()
 		P.animate(group, "enter", { GroupTransparency = 0, Position = UDim2.fromOffset(0, 0) })
 		schedule()
 		return entry

@@ -95,7 +95,7 @@
 
     <div class="container">
       <dl class="capability-strip" aria-label="Current release capabilities">
-        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->96<!-- site:tool-count:end --></dd></div>
+        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->99<!-- site:tool-count:end --></dd></div>
         <div><dt>Tool groups</dt><dd><!-- site:group-count:start -->19<!-- site:group-count:end --></dd></div>
         <div><dt>Files per batch read</dt><dd>12</dd></div>
         <div><dt>Edits in one write</dt><dd>20</dd></div>
@@ -196,10 +196,10 @@
         </div>
         <div class="catalog-toolbar" id="toolFilters" role="search" aria-label="Search the tool catalog" hidden>
           <div class="search-field"><label for="toolSearch">Find a tool</label><input type="search" id="toolSearch" placeholder="Try files, raycast, or Luau" autocomplete="off" spellcheck="false" aria-controls="toolCatalog"></div>
-          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (12)</option><option value="script">Code (4)</option><option value="fs">Files (9)</option><option value="agentself">Agent (10)</option><option value="character">Character (4)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (6)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="remotes">Remotes (5)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
+          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (12)</option><option value="script">Code (4)</option><option value="fs">Files (9)</option><option value="agentself">Agent (10)</option><option value="character">Character (4)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (9)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="remotes">Remotes (5)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
           <button class="button button-outline clear-filters" type="button" id="clearFilters" disabled>Clear filters</button>
         </div>
-        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->96<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->19<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.4.0<!-- site:version:end --></span></div>
+        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->99<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->19<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.4.0<!-- site:version:end --></span></div>
         <noscript><p class="catalog-help">Open a category to browse its tools. Enable JavaScript to search and filter.</p></noscript>
         <div id="toolCatalog" class="tool-catalog">
           <!-- site:catalog:start -->
@@ -456,7 +456,7 @@
             </ul>
           </details>
           <details class="tool-group" data-group="iy">
-            <summary><span class="tool-group-label">Infinite Yield</span><span class="tool-group-count">6 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
+            <summary><span class="tool-group-label">Infinite Yield</span><span class="tool-group-count">9 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
             <ul class="tool-list">
               <li class="tool-row" data-tool-name="iy_cmd">
                 <div class="tool-row-heading"><code>iy_cmd</code><span class="risk risk-write">Write</span></div>
@@ -466,9 +466,17 @@
                 <div class="tool-row-heading"><code>iy_cmds</code><span class="risk risk-read">Read</span></div>
                 <p>List Infinite Yield commands, optionally filtered by a keyword or limited to one plugin&#39;s commands. Each line is the name, its aliases, and the plugin it came from (core commands show none). Use it to find the exact spelling before iy_cmd.</p>
               </li>
+              <li class="tool-row" data-tool-name="iy_control">
+                <div class="tool-row-heading"><code>iy_control</code><span class="risk risk-write">Write</span></div>
+                <p>Inspect and configure Infinite Yield&#39;s native saved events, keybinds and settings. Inspect first for current 1-based binding indexes, event fields and defaults. Supports OnExecute, OnSpawn, OnDied, OnDamage, OnKilled, OnJoin, OnLeave and OnChatted. Event commands can use $1/$2 arguments; native IY ignores commands containing &#39;plugin&#39;. Edits refresh IY&#39;s editor and request its normal save. Use iy_cmd for commands, aliases and waypoints; use iy_plugin_write for custom plugins or custom event definitions. stop_loops sends breakloops.</p>
+              </li>
               <li class="tool-row" data-tool-name="iy_plugin_install">
                 <div class="tool-row-heading"><code>iy_plugin_install</code><span class="risk risk-write">Write</span></div>
                 <p>Install a plugin from the Infinite Yield store: downloads its .iy file, saves it to the workspace and registers it with the running Infinite Yield, whose commands then work through iy_cmd. Accepts the plugin name (&#39;dexrecontinued&#39;), a filename (&#39;dexrecontinued.iy&#39;) or the store id.</p>
+              </li>
+              <li class="tool-row" data-tool-name="iy_plugin_read">
+                <div class="tool-row-heading"><code>iy_plugin_read</code><span class="risk risk-read">Read</span></div>
+                <p>Read an authored .iy plugin from the executor workspace, or omit plugin to get a multi-command template. Follow nextOffset for long sources. Use this before updating a plugin with iy_plugin_write.</p>
               </li>
               <li class="tool-row" data-tool-name="iy_plugin_search">
                 <div class="tool-row-heading"><code>iy_plugin_search</code><span class="risk risk-read">Read</span></div>
@@ -477,6 +485,10 @@
               <li class="tool-row" data-tool-name="iy_plugin_uninstall">
                 <div class="tool-row-heading"><code>iy_plugin_uninstall</code><span class="risk risk-write">Write</span></div>
                 <p>Remove a plugin: unregisters its commands from Infinite Yield and deletes its .iy file. Accepts the name with or without the .iy ending.</p>
+              </li>
+              <li class="tool-row" data-tool-name="iy_plugin_write">
+                <div class="tool-row-heading"><code>iy_plugin_write</code><span class="risk risk-danger">High impact</span></div>
+                <p>Create or update a custom Infinite Yield .iy plugin. Get the template with iy_plugin_read. Source may declare shared locals/globals above local Plugin, and must return a table with PluginName, PluginDescription and Commands. Each command has ListName, Description, Aliases and Function(args, speaker). Checks syntax before saving. By default executes setup once, validates the returned table and loads/reloads it through IY, returning actual registered command names. load=false only saves syntax-checked source. Set overwrite=true to replace an existing file. Reloading replaces commands; plugin-owned event connections or loops need cleanup in the plugin&#39;s own setup/unload command.</p><span class="tool-needs">Requires fs, exec</span>
               </li>
               <li class="tool-row" data-tool-name="iy_status">
                 <div class="tool-row-heading"><code>iy_status</code><span class="risk risk-read">Read</span></div>

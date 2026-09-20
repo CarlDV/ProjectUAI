@@ -204,7 +204,8 @@ Background chat:
 				local cmds = iy.cmdsTable()
 				lines[#lines + 1] = "Infinite Yield: loaded (" .. tostring(iy.source or "ambient")
 					.. ", " .. tostring(type(cmds) == "table" and #cmds or "?") .. " commands,"
-					.. " optionally available via iy_cmd; do not rely on it as a primary dependency)"
+					.. " optional commands via iy_cmd; iy_control manages native events, keybinds and settings; "
+					.. "iy_plugin_read provides a template/source and iy_plugin_write creates or updates custom plugins)"
 			end
 		end
 

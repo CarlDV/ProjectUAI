@@ -74,6 +74,36 @@ return function(env)
 
 	M.ambient = ambient
 
+	-- Tables such as binds and aliases are replaced by IY's own editors. Read the
+	-- live environment instead of holding stale copies of their initial values.
+	function M.environment()
+		if M.sandbox then return M.sandbox end
+		local fn = M.iy and M.iy.execCmd or ambient("execCmd")
+		if type(fn) == "function" and getfenv then
+			local ok, scope = pcall(getfenv, fn)
+			if ok and type(scope) == "table" and rawget(scope, "execCmd") == fn then return scope end
+		end
+		return genv()
+	end
+
+	function M.value(name)
+		local value = rawget(M.environment(), name)
+		if value ~= nil then return value end
+		if M.iy and M.iy[name] ~= nil then return M.iy[name] end
+		return ambient(name)
+	end
+
+	function M.assign(name, value)
+		rawset(M.environment(), name, value)
+		if M.iy then M.iy[name] = value end
+	end
+
+	function M.getMode()
+		local stored = config.get("iy.mode", "hidden")
+		M.mode = (stored == "hidden" or stored == "visible") and stored or "off"
+		return M.mode
+	end
+
 	function M.execFn()
 		if M.iy then return M.iy.execCmd end
 		local fn = ambient("execCmd")
@@ -82,8 +112,7 @@ return function(env)
 	end
 
 	function M.cmdsTable()
-		if M.iy then return M.iy.cmds end
-		local list = ambient("cmds")
+		local list = M.value("cmds")
 		if type(list) == "table" then return list end
 		return nil
 	end
@@ -96,6 +125,7 @@ return function(env)
 	-- `store` (history), not quiet -- passing true would push every agent call
 	-- into the user's visible command history, so false.
 	function M.exec(command)
+		if M.getMode() == "off" then return false, "Infinite Yield integration is off in Settings" end
 		local fn = M.execFn()
 		if not fn then return false, "Infinite Yield is not loaded" end
 		local speaker = env.plr
@@ -131,18 +161,17 @@ return function(env)
 	env.require("runtime/dispose").add(stopGuard, "iy.guard")
 
 	function M.applyGui()
-		local iy = M.iy
-		if not iy or not iy.PARENT then return false, "IY's GUI reference was not captured" end
-		local gui = iy.PARENT
+		local gui = M.value("PARENT")
+		if not gui then return false, "IY's GUI reference was not captured" end
 		if typeof and typeof(gui) ~= "Instance" then return false, "IY's GUI reference is not an Instance" end
-		local hidden = (M.mode == "hidden")
+		local hidden = (M.mode ~= "visible")
 		stopGuard()
 		local ok = pcall(function() gui.Enabled = not hidden end)
 		if not ok then return false, "could not set the GUI's Enabled flag" end
 		if hidden then
 			local okConn, conn = pcall(function()
 				return gui:GetPropertyChangedSignal("Enabled"):Connect(function()
-					if M.mode == "hidden" and gui.Enabled then gui.Enabled = false end
+					if M.mode ~= "visible" and gui.Enabled then gui.Enabled = false end
 				end)
 			end)
 			if okConn then guard = conn end
@@ -163,6 +192,17 @@ return function(env)
 
 		local holder = {}
 		local sandbox = setmetatable(holder, { __index = genv() })
+		-- IY loads plugins with loadfile. Bind those chunks to the same environment,
+		-- so helpers and globals above a plugin's returned table remain available to
+		-- every command without evaluating the plugin twice.
+		if setfenv and caps.fn.readfile then
+			sandbox.loadfile = function(path)
+				local plugin, err = compile(caps.fn.readfile(path), tostring(path))
+				if not plugin then error(err, 0) end
+				setfenv(plugin, sandbox)
+				return plugin
+			end
+		end
 
 		-- The fetch goes through net/http rather than raw game:HttpGet so it is
 		-- subject to the same transport fallback, identity and history the rest
@@ -192,9 +232,7 @@ return function(env)
 		-- restrict it under identity sandboxing) the writes go to the real shared
 		-- table instead, which is also fine: the ambient probe finds them there
 		-- on the next look.
-		if setfenv then
-			pcall(setfenv, fn, sandbox)
-		end
+		local captured = setfenv and pcall(setfenv, fn, sandbox)
 
 		local ok, runErr = pcall(fn)
 		if not ok then return nil, "the source raised: " .. tostring(runErr) end
@@ -207,7 +245,7 @@ return function(env)
 			return nil, "the source ran but exposed no execCmd -- IY may have refused to load here"
 		end
 
-		M.sandbox = sandbox
+		M.sandbox = captured and sandbox or nil
 		-- prefix and PARENT carry the ambient fallback too: on a host without
 		-- setfenv the chunk's globals land in the shared table instead of the
 		-- holder, and cmds already looks there. addPlugin, deletePlugin and
@@ -229,12 +267,14 @@ return function(env)
 	-- there: ambient first, then one internal load, then never again this
 	-- session unless the caller forces a retry.
 	function M.ensure()
-		if M.mode == nil then
-			local stored = config.get("iy.mode", "off")
-			M.mode = (stored == "hidden" or stored == "visible") and stored or "off"
-		end
-		if M.mode == "off" then
+		if M.getMode() == "off" then
 			return false, "Infinite Yield integration is off in Settings"
+		end
+		if M.loading then
+			local started = clock.ms()
+			while M.loading and clock.since(started) < 120000 do clock.wait(0.1) end
+			if M.loading then return false, "Infinite Yield is still loading" end
+			if M.getMode() == "off" then return false, "Infinite Yield integration is off in Settings" end
 		end
 		if M.isLoaded() then
 			if M.source == nil then M.source = "ambient" end
@@ -250,8 +290,10 @@ return function(env)
 			return false, M.loadError or "an earlier load attempt failed"
 		end
 		M.loadTried = true
-
-		local ok, err = runInternal()
+		M.loading = true
+		local ran, ok, err = pcall(runInternal)
+		M.loading = false
+		if not ran then err, ok = ok, false end
 		if not ok then
 			M.loadError = err
 			log.warn("iy", "internal load failed", err)
@@ -259,9 +301,11 @@ return function(env)
 		end
 
 		M.source = "internal"
+		M.getMode()
 		log.info("iy", "Infinite Yield loaded internally (" .. M.mode .. ")")
 		local guiOk, guiErr = M.applyGui()
 		if not guiOk then log.warn("iy", "GUI mode could not be applied", guiErr) end
+		if M.mode == "off" then return false, "Infinite Yield integration was switched off while loading" end
 		return true, nil
 	end
 
@@ -284,17 +328,22 @@ return function(env)
 
 	function M.status()
 		local rows = {}
-		rows[#rows + 1] = { "Setting", M.mode or config.get("iy.mode", "hidden") }
+		rows[#rows + 1] = { "Setting", config.get("iy.mode", "hidden") }
 		if M.isLoaded() then
 			rows[#rows + 1] = { "Loaded", "yes, via " .. (M.source or "ambient") }
 			local cmds = M.cmdsTable()
 			if type(cmds) == "table" then
 				rows[#rows + 1] = { "Commands", tostring(#cmds) }
 			end
-			local prefix = M.iy and M.iy.prefix or ambient("prefix")
+			local prefix = M.value("prefix")
 			if prefix then rows[#rows + 1] = { "Prefix", tostring(prefix) } end
+			rows[#rows + 1] = { "Event editor", type(M.value("eventEditor")) == "table" and "available" or "not exposed by this IY" }
+			local binds = M.value("binds")
+			if type(binds) == "table" then rows[#rows + 1] = { "Keybinds", tostring(#binds) } end
+			local plugins = M.value("PluginsTable")
+			if type(plugins) == "table" then rows[#rows + 1] = { "Plugins", tostring(#plugins) } end
 			if M.source == "internal" then
-				rows[#rows + 1] = { "GUI", (M.mode == "hidden") and "hidden" or "visible" }
+				rows[#rows + 1] = { "GUI", (M.mode == "visible") and "visible" or "hidden" }
 			else
 				rows[#rows + 1] = { "GUI", "the user's own -- not managed here" }
 			end

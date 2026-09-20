@@ -700,8 +700,11 @@ scenario("a write tool waits for permission", function()
 
 	-- And a denial stops it.
 	local denied = envMock.new({})
+	local deniedRequests = 0
 	denied.http.handler = function(entry)
 		if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
+		deniedRequests = deniedRequests + 1
+		if deniedRequests > 1 then return { StatusCode = 200, Body = chatBody({ content = "The requested change was not approved." }) } end
 		return { StatusCode = 200, Body = chatBody({
 			toolCalls = { toolCall("w2", "instance_create", { class = "Folder", name = "Nope", parent = "Workspace" }) },
 		}) }
@@ -758,6 +761,7 @@ scenario("an identical repeated call is broken", function()
 		end,
 	})
 	handle.config.set("agent.maxTurns", 8)
+	handle.config.set("agent.unlimitedTurns", false)
 
 	local session = handle.sessions.current()
 	session.send("loop please")
@@ -824,6 +828,7 @@ scenario("unlimited tool calls runs past the step limit", function()
 
 	local limited, limitedHandle = bootWith({ handler = scripted() })
 	limitedHandle.config.set("agent.maxTurns", 4)
+	limitedHandle.config.set("agent.unlimitedTurns", false)
 	local capped = limitedHandle.sessions.current()
 	capped.send("do a long job")
 	limited.settle(40)
@@ -832,7 +837,7 @@ scenario("unlimited tool calls runs past the step limit", function()
 	for _, event in ipairs(capped.log) do
 		if event.kind == "error" then stopped = event.message end
 	end
-	contains("the step limit stops the turn by default", stopped or "", "Reached the step limit of 4")
+	contains("the configured step limit stops a bounded turn", stopped or "", "Reached the step limit of 4")
 	check("after exactly that many requests", #chatRequests(limited), 4)
 
 	local free, freeHandle = bootWith({ handler = scripted() })
@@ -887,6 +892,7 @@ scenario("unlimited tool calls does not reach a subagent", function()
 	handle.config.set("permissions.mode", "full")
 	handle.config.set("agent.unlimitedTurns", true)
 	handle.config.set("agent.subagentTurns", 3)
+	handle.config.set("agent.subagentUnlimited", false)
 
 	local session = handle.sessions.current()
 	session.send("delegate something endless")
@@ -1645,6 +1651,7 @@ scenario("a slow subagent is not cut off by the generic tool timeout", function(
 	})
 	handle.config.set("permissions.mode", "full")
 	handle.config.set("agent.toolTimeout", 5)
+	handle.config.set("agent.subagentUnlimited", false)
 
 	local subagent = handle.env.require("agent/subagent")
 	local tool = handle.env.require("agent/registry").get("dispatch_agent")
@@ -2641,6 +2648,7 @@ scenario("a Claude request omits what Claude rejects and asks for a depth", func
 	})
 	handle.config.set("permissions.mode", "full")
 	handle.config.set("agent.maxTokens", 999999)
+	handle.config.set("agent.effort", "high")
 
 	handle.sessions.current().send("hello")
 	harness.settle(10)
@@ -2973,7 +2981,7 @@ scenario("a minimized client is told when a turn finishes", function()
 	-- The toast: the overlay layer lives on the ScreenGui, not the window, so it
 	-- shows over the game with the window closed.
 	contains("a toast announced the answer", harness.textOf(), "All done")
-	contains("naming what happened", harness.textOf(), "answered")
+	contains("naming what happened", harness.textOf(), "Reply ready")
 	harness.settle(10)
 
 	-- The badge: the count on the launcher, which survives however long the user
@@ -4090,6 +4098,7 @@ end)
 
 scenario("the providers panel shows the record without showing the key", function()
 	local harness, handle = bootWith({})
+	handle.config.set("agent.fallback", true)
 	local record = handle.providers.active()
 	record.apiKey = "sk-secret-tail-9999"
 	record.wsUrl = ""
@@ -6403,7 +6412,7 @@ scenario("iy plugin store tools register and search a catalogue", function()
 
 	local unok, unwhy = store.uninstall("dexrecontinued")
 	falsy("uninstall without IY refuses", unok)
-	contains("and says what is missing", tostring(unwhy), "not loaded")
+	contains("and says it is the setting", tostring(unwhy), "Settings")
 end)
 
 -- Markdown skills -------------------------------------------------------------

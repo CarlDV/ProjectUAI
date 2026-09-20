@@ -139,8 +139,7 @@ return function(env)
 	-- IY's plugin functions are chunk globals like everything else: present in
 	-- the shared table after an ambient load, or in the holder after ours.
 	local function iyFunction(name)
-		if iy.iy and iy.iy[name] ~= nil then return iy.iy[name] end
-		return iy.ambient and iy.ambient(name) or nil
+		return iy.value(name)
 	end
 
 	-- Download, write to the workspace root, register with IY.
@@ -148,10 +147,8 @@ return function(env)
 		local wanted = util.trim(tostring(plugin or ""))
 		if wanted == "" then return false, "no plugin named" end
 
-		if not iy.isLoaded() then
-			local ok, err = iy.ensure()
-			if not ok then return false, err end
-		end
+		local ready, reason = iy.ensure()
+		if not ready then return false, reason end
 
 		local results, err = M.search(wanted, 5)
 		if not results then return false, err end
@@ -224,6 +221,7 @@ return function(env)
 
 	-- Unregister from IY, then remove the file.
 	function M.uninstall(plugin)
+		if iy.getMode() == "off" then return false, "Infinite Yield integration is off in Settings" end
 		local wanted = util.trim(tostring(plugin or "")):lower()
 		if wanted == "" then return false, "no plugin named" end
 		if wanted:sub(-3) ~= ".iy" then wanted = wanted .. ".iy" end

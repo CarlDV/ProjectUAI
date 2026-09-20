@@ -1,11 +1,6 @@
--- Infinite Yield commands: run them, list them, inspect them -- and reach the
--- community plugin store.
---
--- The whole of IY is reachable through one dispatcher, so the tool set is small
--- on purpose. Every command -- noclip, fly, esp, remotespy, plugin loads -- is
--- the same execCmd call; what the tools add is discovery (a searchable list of
--- what exists) and honesty (status that says which route IY came by and what
--- the host can do).
+-- Infinite Yield commands, native configuration, and plugin authoring.
+-- The dispatcher runs commands; the event editor and live settings need their
+-- own adapter because they are not exposed as commands in upstream IY.
 --
 -- The plugin tools sit on top of runtime/iy_store: the store's catalogue is
 -- searched in conversation, and an install downloads the .iy, saves it into
@@ -19,10 +14,11 @@
 -- install tools carry the same label for the same reason -- a plugin is code.
 return function(env)
 	local util = env.require("runtime/util")
-	local caps = env.require("runtime/caps")
 	local H = env.require("tools/helpers")
 	local iy = env.require("runtime/iy")
 	local store = env.require("runtime/iy_store")
+	local control = env.require("runtime/iy_control")
+	local plugins = env.require("runtime/iy_plugins")
 
 	local LIST_CAP = 80
 
@@ -41,6 +37,7 @@ return function(env)
 		{
 			name = "iy_cmd",
 			risk = "write",
+			timeout = 120,
 			description = "Run an Infinite Yield command by its command string, exactly as typed into "
 				.. "IY's own bar: 'speed 100', 'noclip', 'tp PlayerName', 'esp players'. Supports IY's "
 				.. "repeat prefixes ('5^speed 100', 'inf^0.5^esp'). Check iy_status first; when the "
@@ -52,30 +49,26 @@ return function(env)
 				},
 				required = { "command" },
 			},
-			run = function(args)
-				local command = util.trim(tostring(args.command or ""))
-				if command == "" then return H.fail("no command given") end
-
-				-- A command that starts with the chat prefix is the common slip;
-				-- execCmd wants the bare command. Strip only one leading ';'.
-				if command:sub(1, 1) == ";" then command = util.trim(command:sub(2)) end
-				if command == "" then return H.fail("nothing after the prefix") end
-
-				if not iy.isLoaded() then
-					local ok, err = iy.ensure()
-					if not ok then return H.fail(err) end
-				end
+			run = function(args, ctx)
+				local command, commandErr = control.command(args.command)
+				if not command then return H.fail(commandErr) end
+				local ready, why = iy.ensure()
+				if not ready then return H.fail(why) end
+				command, commandErr = control.command(args.command)
+				if not command then return H.fail(commandErr) end
+				if ctx and ctx.aborted and ctx.aborted() then return H.fail("cancelled before dispatching the command") end
 
 				local ok, err = iy.exec(command)
 				if not ok then return H.fail(err) end
 				-- execCmd spawns its own thread, so "accepted" is the honest word:
 				-- a command that errors inside IY is reported by IY, not to us.
-				return "Ran: " .. command
+				return "Accepted by IY: " .. command .. ". Commands run asynchronously; this does not confirm completion."
 			end,
 		},
 		{
 			name = "iy_cmds",
 			risk = "read",
+			timeout = 120,
 			description = "List Infinite Yield commands, optionally filtered by a keyword or limited to "
 				.. "one plugin's commands. Each line is the name, its aliases, and the plugin it came "
 				.. "from (core commands show none). Use it to find the exact spelling before iy_cmd.",
@@ -89,10 +82,8 @@ return function(env)
 				required = {},
 			},
 			run = function(args)
-				if not iy.isLoaded() then
-					local ok, err = iy.ensure()
-					if not ok then return H.fail(err) end
-				end
+				local ok, err = iy.ensure()
+				if not ok then return H.fail(err) end
 
 				local cmds = iy.cmdsTable()
 				if type(cmds) ~= "table" then return H.fail("IY is loaded but its command table is not reachable") end
@@ -149,6 +140,95 @@ return function(env)
 			end,
 		},
 		{
+			name = "iy_control",
+			risk = "write",
+			timeout = 120,
+			description = "Inspect and configure Infinite Yield's native saved events, keybinds and settings. "
+				.. "Inspect first for current 1-based binding indexes, event fields and defaults. Supports OnExecute, OnSpawn, OnDied, "
+				.. "OnDamage, OnKilled, OnJoin, OnLeave and OnChatted. Event commands can use $1/$2 arguments; native IY ignores "
+				.. "commands containing 'plugin'. Edits refresh IY's editor and request its normal save. Use iy_cmd for commands, "
+				.. "aliases and waypoints; use iy_plugin_write for custom plugins or custom event definitions. stop_loops sends breakloops.",
+			parameters = {
+				type = "object",
+				properties = {
+					action = { type = "string", enum = { "inspect", "configure", "event_add", "event_update", "event_remove", "event_clear", "event_fire", "keybind_add", "keybind_remove", "stop_loops" } },
+					section = { type = "string", enum = { "all", "events", "keybinds", "settings" }, description = "What to inspect. Default all." },
+					event = { type = "string", description = "Native event name; required for event actions, optional inspect filter." },
+					index = { type = "integer", minimum = 1, description = "Current 1-based binding index from inspect, for update/remove." },
+					command = { type = "string", minLength = 1, maxLength = 4000, description = "IY command; required when adding an event or keybind." },
+					delay = { type = "number", minimum = 0, maximum = 3600, description = "Event command delay in seconds, default 0." },
+					conditions = { type = "object", properties = {
+						player = { type = "string", description = "me, all, or an IY player selector. Victim for OnKilled." },
+						killer = { type = "string", description = "OnKilled killer selector, default all." },
+						health_below = { type = "number", minimum = 0, description = "OnDamage: health <= this threshold; 0 matches any health." },
+						message = { type = "string", maxLength = 500, description = "OnChatted: case-insensitive Lua pattern; empty matches any message." },
+					} },
+					arguments = { type = "array", items = { type = "string" }, maxItems = 2, description = "event_fire only: actual player names and message/health in the event's field order. Health may be a numeric string." },
+					key = { type = "string", description = "keybind_add: a Roblox KeyCode name such as F, or LeftClick/RightClick." },
+					toggle = { type = "string", maxLength = 4000, description = "Optional command for alternating presses, e.g. unfly after fly." },
+					on_release = { type = "boolean", description = "Run on key release; cannot be combined with toggle." },
+					settings = { type = "object", properties = {
+						mode = { type = "string", enum = { "off", "hidden", "visible" }, description = "UAI integration mode. Change this alone to enable IY before configuring it." },
+						prefix = { type = "string", minLength = 1, maxLength = 8 },
+						keep_open = { type = "boolean" },
+						keep_on_teleport = { type = "boolean" },
+						chat_logs = { type = "boolean" },
+						join_logs = { type = "boolean" },
+						esp_transparency = { type = "number", minimum = 0, maximum = 1 },
+					} },
+					offset = { type = "integer", minimum = 1, description = "Inspect continuation offset." },
+					limit = { type = "integer", minimum = 1, maximum = 50, description = "Inspect page size; default 25." },
+				},
+				required = { "action" },
+			},
+			run = function(args, ctx)
+				local result, err = control.run(args, ctx)
+				if not result then return H.fail(err) end
+				return { text = util.encode(result), data = result }
+			end,
+		},
+		{
+			name = "iy_plugin_read",
+			risk = "read",
+			description = "Read an authored .iy plugin from the executor workspace, or omit plugin to get a multi-command "
+				.. "template. Follow nextOffset for long sources. Use this before updating a plugin with iy_plugin_write.",
+			parameters = { type = "object", properties = {
+				plugin = { type = "string", description = "Plain plugin filename, with or without .iy. Omit for the template." },
+				offset = { type = "integer", minimum = 1 },
+				limit = { type = "integer", minimum = 4, maximum = 20000, description = "Maximum source bytes; limited by the tool result budget." },
+			}, required = {} },
+			run = function(args)
+				if not args.plugin then return H.readSlice("IY plugin template", plugins.template, args) end
+				local source, err, name = plugins.read(args.plugin)
+				if not source then return H.fail(err) end
+				return H.readSlice(name, source, args)
+			end,
+		},
+		{
+			name = "iy_plugin_write",
+			risk = "danger",
+			needs = { "fs", "exec" },
+			timeout = 120,
+			description = "Create or update a custom Infinite Yield .iy plugin. Get the template with iy_plugin_read. "
+				.. "Source may declare shared locals/globals above local Plugin, and must return a table with PluginName, "
+				.. "PluginDescription and Commands. Each command has ListName, Description, Aliases and Function(args, speaker). "
+				.. "Checks syntax before saving. By default executes setup once, validates the returned table and loads/reloads it "
+				.. "through IY, returning actual registered command names. load=false only saves syntax-checked source. "
+				.. "Set overwrite=true to replace an existing file. Reloading replaces commands; plugin-owned event connections "
+				.. "or loops need cleanup in the plugin's own setup/unload command.",
+			parameters = { type = "object", properties = {
+				plugin = { type = "string", minLength = 1, maxLength = 83, description = "Plain filename, e.g. myplugin.iy. Paths and IY_FE.iy are refused." },
+				source = { type = "string", minLength = 1, maxLength = 256000, description = "Complete Luau plugin source, including return Plugin; multiple commands and top-level globals are supported." },
+				overwrite = { type = "boolean", description = "Explicitly replace an existing file; default false." },
+				load = { type = "boolean", description = "Load/reload after saving. Default true; false never executes the source." },
+			}, required = { "plugin", "source" } },
+			run = function(args, ctx)
+				local result, err = plugins.write(args, ctx)
+				if not result then return H.fail(err) end
+				return { text = util.encode(result), data = result }
+			end,
+		},
+		{
 			name = "iy_plugin_search",
 			risk = "read",
 			needs = { "http" },
@@ -187,6 +267,7 @@ return function(env)
 		{
 			name = "iy_plugin_install",
 			risk = "write",
+			timeout = 120,
 			description = "Install a plugin from the Infinite Yield store: downloads its .iy file, "
 				.. "saves it to the workspace and registers it with the running Infinite Yield, "
 				.. "whose commands then work through iy_cmd. Accepts the plugin name ('dexrecontinued'), "

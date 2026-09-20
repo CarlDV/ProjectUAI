@@ -151,17 +151,15 @@ return function(env)
 
 		-- Any conversation working is worth the launcher's dot, not just the open one:
 		-- switching conversation does not stop the one you left. The list fires on every
-		-- busy transition, which is what makes this cheap. Turning the dot off is
-		-- `show`'s job, so a turn that finished while the window was closed still says so.
+		-- busy transition. Unread replies have their own badge, so the pulse only
+		-- represents work that is actually still running.
 		dispose.add(sessions.listChanged:connect(function()
 			if not M.window then return end
-			if sessions.busyCount() > 0 and not M.window.visible then
-				M.setLauncherBusy(true)
-			end
+			M.setLauncherBusy(sessions.busyCount() > 0 and not M.window.visible)
 			M.syncNav()
 		end), "app.busyPulse")
 
-		-- Notifications for the minimized client ---------------------------------
+		-- Notifications for background conversations -----------------------------
 		--
 		-- The window can be closed for the whole of a long turn, and until now the only
 		-- sign anything happened was a dot that was already pulsing while it ran. A
@@ -178,19 +176,30 @@ return function(env)
 				kind = kind,
 				text = text,
 				tone = tone,
-				-- The conversation it came from, so opening it is one tap from wherever
-			-- these are shown. Nil for things that are not a conversation's.
+				-- Keep navigation and acknowledgement tied to this conversation.
 				sessionId = session and session.id or nil,
 				at = clock.ms(),
 			}
 			M.notifications[#M.notifications + 1] = entry
 			-- Bounded, same reasoning as the request history: an overnight session
 			-- would otherwise pile hundreds onto a list nobody scrolls.
-			while #M.notifications > 30 do table.remove(M.notifications, 1) end
+			while #M.notifications > 30 do
+				local oldest = table.remove(M.notifications, 1)
+				if oldest.toast then oldest.toast.close(true) end
+			end
 			M.setLauncherBadge(#M.notifications)
 			if config.get("ui.notifications", true) ~= false then
-				local from = session and session.title and (session.title .. "  ") or ""
-				overlay.toast(from .. text, tone, 4.5)
+				local heading = ({ turn = "Reply ready", error = "Task failed", stop = "Task stopped" })[kind] or "Project UAI"
+				entry.toast = overlay.toast(text, tone, 6, {
+					title = heading .. (session and session.title and ("  ·  " .. session.title) or ""),
+					actionText = "Open chat",
+					onActivate = function()
+						if not M.openSession(entry.sessionId) then
+							M.readNotifications(entry.sessionId)
+							overlay.toast("This conversation is no longer available.", "info")
+						end
+					end,
+				})
 			end
 			return entry
 		end
@@ -199,22 +208,22 @@ return function(env)
 			local kind = event.kind
 			if kind == "turn:end" then
 				local reply = util.trim(tostring(event.text or ""))
-				local short = util.ellipsis(reply ~= "" and reply or "the turn finished", 120)
-				note("turn", "answered: " .. short, "good", session)
+				local short = util.ellipsis(env.require("ui/markdown").plain(reply ~= "" and reply or "Task finished."), 160)
+				note("turn", short, "good", session)
 			elseif kind == "error" then
-				note("error", "a turn failed: " .. util.ellipsis(tostring(event.message or "error"), 120),
+				note("error", "Could not finish: " .. util.ellipsis(tostring(event.message or "error"), 160),
 				"bad", session)
 			elseif kind == "abort" then
-				note("stop", "a turn was stopped", "warn", session)
+				note("stop", "Task stopped.", "warn", session)
 			end
 		end
 
 		dispose.add(sessions.anyEvent:connect(function(session, event)
 			if not M.window then return end
-			-- Only while minimized. With the window open the transcript is the
-			-- notification -- a toast on top of it is the same information twice.
-			if M.window.visible then return end
 			if not session or session.headless then return end
+			-- A visible conversation is already reporting its own progress. Other
+			-- conversations still need a notice, including while Settings is open.
+			if M.window.visible and M.panel == "chat" and sessions.activeId == session.id then return end
 			notificationFor(session, event)
 		end), "app.notifications")
 
@@ -285,7 +294,7 @@ return function(env)
 			anchor = Vector2.new(0, 1),
 			position = UDim2.new(0, -theme.space.hair, 1, theme.space.hair),
 			size = UDim2.fromOffset(0, 0),
-			zIndex = theme.z.raised + 2,
+			zIndex = theme.z.header + 2,
 		})
 		local badgeCount = P.text(badge, {
 			name = "LauncherBadgeCount",
@@ -295,6 +304,8 @@ return function(env)
 			color = theme.color.textOnAccent,
 			size = UDim2.new(1, 0, 1, 0),
 			align = "Center",
+			alignY = "Center",
+			zIndex = theme.z.header + 3,
 		})
 		badge.Visible = false
 
@@ -352,10 +363,22 @@ return function(env)
 		M.launcherPulse = pulse
 		M.launcherBadge = badge
 		M.launcherBadgeCount = badgeCount
+		M.setLauncherBadge(#(M.notifications or {}))
 	end
 
 	-- The missed-notification count on the launcher. Called whenever the list grows;
-	-- cleared by `show`, because opening the window is the act of catching up.
+	-- acknowledged when its conversation is opened.
+	function M.readNotifications(sessionId)
+		local kept = {}
+		for _, entry in ipairs(M.notifications or {}) do
+			if entry.sessionId == sessionId then
+				if entry.toast then entry.toast.close(true) end
+			else kept[#kept + 1] = entry end
+		end
+		M.notifications = kept
+		M.setLauncherBadge(#kept)
+	end
+
 	function M.setLauncherBadge(count)
 		if not M.launcherBadge then return end
 		local n = math.floor(tonumber(count) or 0)
@@ -367,7 +390,7 @@ return function(env)
 		-- and "9+" is where a count stops meaning anything precise.
 		local shown = n > 9 and "9+" or tostring(n)
 		local height = math.max(theme.size.dot * 2, theme.text.caption.height + theme.space.xxs)
-		local width = (#shown > 1) and (height + theme.space.xs) or height
+		local width = math.max(height, math.ceil(P.measureText(shown, { role = "caption" }).X) + theme.space.xs * 2)
 		M.launcherBadge.Size = UDim2.fromOffset(width, height)
 		if M.launcherBadgeCount then M.launcherBadgeCount.Text = shown end
 		M.launcherBadge.Visible = true
@@ -416,10 +439,13 @@ return function(env)
 		-- the user was at the bottom when they minimized, so they are at the
 		-- bottom when they come back.
 		M.window.onShow = function()
+			M.setLauncherBusy(false)
+			if M.panel == "chat" then M.readNotifications(sessions.activeId) end
 			if M.chatPanel and M.chatPanel.view then
 				M.chatPanel.view.repin()
 			end
 		end
+		M.window.onHide = function() M.setLauncherBusy(sessions.busyCount() > 0) end
 	end
 
 	-- Config is the only source of truth for this.
@@ -780,11 +806,7 @@ return function(env)
 		M.showPanel(id or M.panel)
 		M.window.show()
 		M.setLauncherBusy(false)
-		-- Opening the window is reading the notifications, so they are cleared
-		-- rather than counted forever. The history of what happened is the
-		-- transcript's, not the badge's.
-		M.notifications = {}
-		M.setLauncherBadge(0)
+		if M.panel == "chat" then M.readNotifications(sessions.activeId) end
 	end
 
 	function M.hide()
@@ -802,8 +824,7 @@ return function(env)
 		if id and sessions.activeId ~= id then
 			if not sessions.switch(id) then return false end
 		end
-		M.showPanel("chat")
-		if M.window then M.window.show() end
+		M.show("chat")
 		if M.chatPanel and M.chatPanel.composer then M.chatPanel.composer.focus() end
 		return true
 	end
@@ -1283,6 +1304,7 @@ return function(env)
 		if M.chatPanel and M.chatPanel.view then M.chatPanel.view.attach(session) end
 		-- The plan the strip shows belongs to this conversation, so it moves with it.
 		if M.chatPanel and M.chatPanel.todos then M.chatPanel.todos.attach(session) end
+		if M.window and M.window.visible and M.panel == "chat" then M.readNotifications(session.id) end
 		-- Starts the client-wide prompt watch. It is not per-session any more: a
 		-- conversation left running in the background still has to be able to ask.
 		env.require("ui/panels/permission").watch()
@@ -1313,10 +1335,7 @@ return function(env)
 					panel.composer.setUsage(usage.line())
 				end
 				M.syncNav()
-				-- A finished turn while the window is closed is worth a hint.
-				if not M.window.visible then
-					M.setLauncherBusy(true)
-				end
+				M.setLauncherBusy(not M.window.visible and sessions.busyCount() > 0)
 			elseif event.kind == "usage" then
 				if panel and panel.composer and not session.busy then
 					panel.composer.setUsage(usage.line())
@@ -1369,6 +1388,7 @@ return function(env)
 		M.buildLauncher()
 		M.buildWindow()
 		if wasVisible then M.window.show() end
+		M.setLauncherBusy(not wasVisible and sessions.busyCount() > 0)
 		log.debug("app", "rebuilt for " .. tostring(reason) .. " as " .. responsive.mode)
 	end
 
