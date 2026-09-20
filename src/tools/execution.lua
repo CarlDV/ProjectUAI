@@ -4,6 +4,7 @@ return function(env)
 	local util = env.require("runtime/util")
 	local caps = env.require("runtime/caps")
 	local clock = env.require("runtime/clock")
+	local fsx = env.require("runtime/fsx")
 	local H = env.require("tools/helpers")
 	local M = { DEFAULT_TIMEOUT = 10, MAX_TIMEOUT = 60 }
 	local active = {}
@@ -174,8 +175,34 @@ return function(env)
 		for execution in pairs(active) do execution.stop("aborted") end
 	end, "Luau executions")
 
+	-- Source comes either inline via `code` or by reference via `path`. The path
+	-- form reads a workspace file on the client and runs it without the contents
+	-- ever crossing the model's context -- a file it just wrote does not need to be
+	-- read back and pasted in to be executed.
+	local function sourceFor(args)
+		if type(args.path) == "string" and util.trim(args.path) ~= "" then
+			if type(args.code) == "string" and util.trim(args.code) ~= "" then
+				return nil, "Pass either code or path, not both."
+			end
+			local path = util.trim(args.path)
+			local content, err = fsx.read(path, { scope = "files" })
+			if not content then
+				local paste, pasteErr = fsx.read(path, { scope = "pastes" })
+				if not paste then return nil, "Could not read '" .. path .. "': " .. tostring(err or pasteErr) end
+				content = paste
+			end
+			if util.trim(content) == "" then return nil, "'" .. path .. "' is empty." end
+			return content
+		end
+		if type(args.code) ~= "string" or util.trim(args.code) == "" then
+			return nil, "Provide code to run inline, or a path to a workspace file."
+		end
+		return tostring(args.code)
+	end
+
 	function M.run(args, ctx)
-		local code = tostring(args.code or "")
+		local code, sourceErr = sourceFor(args)
+		if not code then return { ok = false, text = sourceErr } end
 		local checked = M.check(code)
 		if not checked.ok then return checked end
 		local patched, guard = M.instrument(code)

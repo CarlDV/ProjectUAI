@@ -221,6 +221,46 @@ scenario("content[].thinking refusal in thinking mode is repaired into blocks", 
 	check("thinking text preserved", retryAssistant.content[1].thinking == "Some thoughts")
 	check("second content block is text", retryAssistant.content[2].type == "text")
 	check("text content preserved", retryAssistant.content[2].text == "I thought a bit.")
+
+	-- The conversion is ephemeral: a gateway that multiplexes backends would fail
+	-- the next turn if it were remembered, so it must not be saved on the record.
+	local repairs = handle.providers.active().repairs or {}
+	for _, r in ipairs(repairs) do
+		check("content[].thinking is not remembered", r ~= "content[].thinking", r)
+	end
+end)
+
+scenario("unknown variant thinking (422) is repaired by flattening blocks back", function()
+	local openai
+	local _, handle = bootWith({ provider = false })
+	openai = handle.env.require("provider/openai")
+
+	-- Simulate the body a sibling backend rejects: an assistant turn whose content
+	-- was already converted to thinking blocks by the sibling's Anthropic backend.
+	local body = {
+		messages = {
+			{ role = "user", content = "hi" },
+			{
+				role = "assistant",
+				content = {
+					{ type = "thinking", thinking = "my private reasoning" },
+					{ type = "text", text = "the answer" },
+				},
+			},
+			{ role = "user", content = "again" },
+		},
+	}
+
+	local message = "Failed to deserialize the JSON body into the target type: "
+		.. "messages[2]: unknown variant `thinking`, expected one of `text`, `image_url`, `file`"
+	local note, key = openai.repairForTest(body, message)
+	check("reversal produced a note", type(note) == "string", note)
+	check("reversal key is revert_thinking_blocks", key == "revert_thinking_blocks", key)
+
+	local assistant = body.messages[2]
+	check("content flattened to a string", type(assistant.content) == "string", type(assistant.content))
+	check("text preserved after flatten", assistant.content == "the answer", assistant.content)
+	check("reasoning restored", assistant.reasoning_content == "my private reasoning", assistant.reasoning_content)
 end)
 
 scenario("forbidden reasoning_content refusal is repaired by dropping the field", function()

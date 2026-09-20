@@ -60,6 +60,31 @@ scenario("compilation is read-only and execution failures are failures", functio
 	check("no unexpected scheduler errors", #h.sched.errors == 0)
 end)
 
+scenario("run_luau executes a workspace file by path without inlining it", function()
+	local h, env, registry, run = fixture()
+	local fsx = env.require("runtime/fsx")
+	assert(fsx.write("scripts/build.lua", "print('from file'); return 7", { scope = "files" }))
+	local result = run("run_luau", { path = "scripts/build.lua" })
+	check("file ran", result.ok)
+	check("file output captured", contains(result.text, "from file"))
+	check("file return value came back", contains(result.text, "Returned: 7"))
+
+	-- Files the model wrote as pastes are runnable too.
+	assert(fsx.write("snippet.lua", "_G.ranPaste = true", { scope = "pastes" }))
+	check("paste-scoped file runs", run("run_luau", { path = "snippet.lua" }).ok)
+	check("paste file executed", h.sandbox.ranPaste == true)
+
+	check("missing file is a clean failure", not run("run_luau", { path = "nope.lua" }).ok)
+	check("empty file is refused", (function()
+		assert(fsx.write("blank.lua", "   ", { scope = "files" }))
+		return not run("run_luau", { path = "blank.lua" }).ok
+	end)())
+	check("code and path together are refused", not run("run_luau", { code = "return 1", path = "scripts/build.lua" }).ok)
+	check("neither code nor path is refused", not run("run_luau", {}).ok)
+	check("path traversal is refused", not run("run_luau", { path = "../config.json" }).ok)
+	check("no scheduler errors from file runs", #h.sched.errors == 0)
+end)
+
 scenario("output preserves whitespace, tables, cycles and nil return positions", function()
 	local h, env, registry, run = fixture()
 	local result = run("run_luau", { code = "local t = {answer=42}; t.self=t; print('first\\n  second'); warn('careful'); return t, false, nil, 7" })

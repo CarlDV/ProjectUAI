@@ -551,16 +551,25 @@ return function(env)
 		{
 			-- Thinking mode on Anthropic gateways (e.g. AgentRouter/NewAPI routing to Claude):
 			-- requires assistant turns to carry content blocks with type = "thinking".
+			--
+			-- Ephemeral (see EPHEMERAL_REPAIRS): a gateway like AgentRouter multiplexes
+			-- several backends behind one endpoint, and a sibling backend rejects these
+			-- blocks as an unknown variant. Remembering the conversion would poison every
+			-- later turn that lands on the OpenAI-schema backend, so it is applied per
+			-- refusal and never saved.
+			--
+			-- Only turns that actually captured reasoning are converted: a thinking block
+			-- rebuilt from empty text has no signature and is rejected again, so a turn
+			-- with nothing to replay is left as-is for the sibling backend to accept.
 			match = "content[].thinking",
 			apply = function(body)
 				local fixed = 0
 				for _, msg in ipairs(body.messages or {}) do
-					if type(msg) == "table" and msg.role == "assistant" then
-						local reasoning = msg.reasoning_content or ""
+					if type(msg) == "table" and msg.role == "assistant" and type(msg.content) ~= "table" then
+						local reasoning = msg.reasoning_content
 						local text = type(msg.content) == "string" and msg.content or ""
-						if type(msg.content) ~= "table" then
-							local blocks = {}
-							blocks[#blocks + 1] = { type = "thinking", thinking = reasoning }
+						if type(reasoning) == "string" and util.trim(reasoning) ~= "" then
+							local blocks = { { type = "thinking", thinking = reasoning } }
 							if text ~= "" then
 								blocks[#blocks + 1] = { type = "text", text = text }
 							end
@@ -572,6 +581,44 @@ return function(env)
 				end
 				if fixed > 0 then
 					return string.format("converted %d assistant message(s) to thinking content blocks", fixed), "content[].thinking"
+				end
+			end,
+		},
+		{
+			-- The inverse of the conversion above. A sibling backend behind the same
+			-- gateway uses an OpenAI-style deserializer with no `thinking` variant and
+			-- rejects the blocks with "unknown variant `thinking`, expected one of
+			-- `text`, `image_url`, `file`". Flatten assistant content back to a plain
+			-- string and restore reasoning_content so the request the sibling backend
+			-- can read goes out. Ephemeral for the same reason its inverse is: neither
+			-- content shape is stable across the gateway's routing.
+			match = "unknown variant `thinking`",
+			apply = function(body)
+				local fixed = 0
+				for _, msg in ipairs(body.messages or {}) do
+					if type(msg) == "table" and msg.role == "assistant" and type(msg.content) == "table" then
+						local textParts, thinkParts = {}, {}
+						for _, block in ipairs(msg.content) do
+							if type(block) == "table" then
+								if block.type == "thinking" then
+									local think = block.thinking or block.text
+									if type(think) == "string" and think ~= "" then
+										thinkParts[#thinkParts + 1] = think
+									end
+								elseif type(block.text) == "string" then
+									textParts[#textParts + 1] = block.text
+								end
+							end
+						end
+						msg.content = table.concat(textParts)
+						if #thinkParts > 0 then
+							msg.reasoning_content = table.concat(thinkParts, "\n")
+						end
+						fixed = fixed + 1
+					end
+				end
+				if fixed > 0 then
+					return string.format("flattened %d assistant message(s) back to plain content", fixed), "revert_thinking_blocks"
 				end
 			end,
 		},
@@ -640,16 +687,31 @@ return function(env)
 		},
 	}
 
+	-- Repairs that change the shape of message content rather than a top-level
+	-- parameter. AgentRouter and other NewAPI gateways multiplex several backends
+	-- behind one endpoint, and the two backends disagree about content shape: one
+	-- demands thinking blocks, the other rejects them. A remembered content repair
+	-- would replay onto whichever backend the next turn happens to hit and fail
+	-- there, so these are applied per refusal and never saved to the record.
+	local EPHEMERAL_REPAIRS = {
+		["content[].thinking"] = true,
+		["revert_thinking_blocks"] = true,
+	}
+
 	local function repair(body, message)
 		local lowered = tostring(message or ""):lower()
 		for _, entry in ipairs(REPAIRS) do
-			if lowered:find(entry.match, 1, true) then
+			if lowered:find(entry.match:lower(), 1, true) then
 				local note, keyOverride = entry.apply(body, message)
 				if note then return note, keyOverride or entry.match end
 			end
 		end
 		return nil
 	end
+
+	-- Exposed for tests: repair mutates the body in place and returns the note and
+	-- key the dispatch loop would act on, without needing a live transport.
+	M.repairForTest = repair
 
 	local function applyRemembered(record, body)
 		for _, key in ipairs(record.repairs or {}) do
@@ -796,23 +858,31 @@ return function(env)
 		end
 
 		local res, err = fireWithRotation(body)
-		if res and res.status == 400 then
+		-- A gateway names a bad field in a 400, and a NewAPI gateway names a bad
+		-- content variant in a 422. Both are repairable, and both can chain: a
+		-- gateway that multiplexes backends can refuse the very shape a sibling
+		-- backend just demanded, so a single repair is not enough -- the reversal
+		-- has to get its own retry. Bounded so a gateway that flip-flops between
+		-- two backends cannot spin here forever; when the budget runs out the body
+		-- falls through to the normal failure path and the chain moves on.
+		local repairsLeft = 4
+		while res and (res.status == 400 or res.status == 422) and repairsLeft > 0 do
+			repairsLeft = repairsLeft - 1
 			local message = M.errorText(res, nil)
 			local note, key = repair(body, message)
-			if note then
-				log.info("provider", record.label .. ": " .. note .. ", retrying")
-				if key == "max_tokens" then
-					-- A value, not a switch, so it cannot ride in record.repairs -- that
-					-- list replays a key with no error text to read a number out of.
-					M.rememberMaxTokens(record, body.max_tokens or body.max_completion_tokens)
-				else
-					remember(record, key)
-				end
-				if request.onRetry then
-					request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 400 })
-				end
-				res, err = fireWithRotation(body)
+			if not note then break end
+			log.info("provider", record.label .. ": " .. note .. ", retrying")
+			if key == "max_tokens" then
+				-- A value, not a switch, so it cannot ride in record.repairs -- that
+				-- list replays a key with no error text to read a number out of.
+				M.rememberMaxTokens(record, body.max_tokens or body.max_completion_tokens)
+			elseif not EPHEMERAL_REPAIRS[key] then
+				remember(record, key)
 			end
+			if request.onRetry then
+				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = res.status })
+			end
+			res, err = fireWithRotation(body)
 		end
 
 		-- The executor's transport wall: no body, no headers, an executor raise for
