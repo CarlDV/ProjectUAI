@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Replace the temporary mobile dragging fix with a landscape-focused touch layout: compact multiline input, searchable conversation navigation, wider action sheets, and full-width settings forms.
+- Preserve drafts, selections, open forms, and separate landscape/portrait placement through rotation. Keep the keyboard clear of input and focused form fields, and restore the launcher when minimized.
+- Keep attachments in a bounded horizontal strip and retain access to them from Message options when keyboard space is tight. Mobile Enter adds a line; Send submits.
+- Keep desktop styling, layout, and saved placement independent of the mobile changes.
+
 ## 1.5.0 — September 20, 2026
 
 ### Added

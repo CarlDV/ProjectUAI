@@ -38,6 +38,7 @@ return function(env)
 		reduceMotion = false,
 		transparency = 1,
 		keyboardHeight = 0,
+		keyboardTop = nil,
 		inset = Vector2.new(0, 0),
 		bottomInset = 0,
 		changed = signal.new("responsive"),
@@ -91,6 +92,16 @@ return function(env)
 			M.gamepad = env.uis.GamepadEnabled == true
 		end)
 		if not okInput then M.touch, M.pointer = false, true end
+		-- Mobile GUI coordinates can differ from the camera's render resolution.
+		-- Use the same measured space for breakpoints, placement and keyboard bounds.
+		if M.touch and not M.pointer and M.screenFrame then
+			local size = M.screenFrame.AbsoluteSize
+			if size.X > 0 and size.Y > 0 then
+				width, height = size.X, size.Y
+				M.viewport = Vector2.new(width, height)
+				M.orientation = height > width and "portrait" or "landscape"
+			end
+		end
 
 		pcall(function()
 			M.console = env.guisvc:IsTenFootInterface() == true
@@ -126,13 +137,19 @@ return function(env)
 		-- Mobile chat and the jump button sit at the bottom on a touch device.
 		M.bottomInset = math.max(platformBottom, M.touch and 24 or 0)
 
-		M.keyboardHeight = 0
+		M.keyboardHeight, M.keyboardTop = 0, nil
 		pcall(function()
 			if env.uis.OnScreenKeyboardVisible then
 				local size = env.uis.OnScreenKeyboardSize
 				M.keyboardHeight = math.max(0, math.min(height, size and size.Y or 0))
-			else
-				M.keyboardHeight = 0
+				-- A keyboard can sit above the bottom edge (floating keyboards and
+				-- accessory bars). Its reported top is the actual obstruction.
+				if M.touch then
+					local position = env.uis.OnScreenKeyboardPosition
+					if position and position.Y > 0 and size and size.Y > 0 then
+						M.keyboardTop = position.Y
+					end
+				end
 			end
 		end)
 
@@ -155,6 +172,9 @@ return function(env)
 			log.debug("responsive", string.format("%s -> %s at %dx%d (%s)",
 				M.breakpoint, M.mode, M.viewport.X, M.viewport.Y, tostring(reason)))
 			M.modeChanged:fire({ mode = M.mode, breakpoint = M.breakpoint })
+		end
+		if M.isMobile() and M.keyboardHeight > 0 then
+			clock.delay(0.05, function() if M.ready then M.revealFocused() end end)
 		end
 	end
 
@@ -219,11 +239,16 @@ return function(env)
 
 		-- The on-screen keyboard is not a resize: the viewport does not change, so
 		-- it has to be watched separately or the composer ends up behind it.
-		for _, property in ipairs({ "OnScreenKeyboardVisible", "OnScreenKeyboardSize" }) do
+		for _, property in ipairs({ "OnScreenKeyboardVisible", "OnScreenKeyboardSize", "OnScreenKeyboardPosition" }) do
 			pcall(function()
 				watch(env.uis:GetPropertyChangedSignal(property):Connect(function() refresh("keyboard") end))
 			end)
 		end
+		pcall(function()
+			watch(env.uis.TextBoxFocused:Connect(function()
+				if M.isMobile() then clock.delay(0.05, function() if M.ready then M.revealFocused() end end) end
+			end))
+		end)
 
 		for _, property in ipairs({ "ReducedMotionEnabled", "PreferredTransparency" }) do
 			pcall(function()
@@ -289,6 +314,16 @@ return function(env)
 	-- can never open larger than the screen it is on.
 	function M.geometry()
 		local width, height = M.viewport.X, M.viewport.Y
+		if M.isMobile() then
+			-- Keep game space around the panel, with enough reading room on a
+			-- phone. Expand remains an explicit, reversible action.
+			local portrait = M.orientation == "portrait"
+			return {
+				width = math.floor(math.min(width * (portrait and 0.96 or 0.6), portrait and 600 or 560)),
+				height = math.floor(math.min(height * (portrait and 0.78 or 0.82), 700)),
+				anchored = portrait and "bottom" or "right",
+			}
+		end
 		if M.mode == "sheet" then
 			return {
 				width = width,
@@ -338,6 +373,7 @@ return function(env)
 	-- strands both the window and launcher far below the top on some clients.
 	function M.usableRect(relative, margin, avoidTopbar)
 		margin = margin or 0
+		if avoidTopbar == nil and M.isMobile() then avoidTopbar = false end
 		local origin, size = M.parentGeometry(relative)
 		margin = math.max(0, math.min(margin, (math.min(size.X, size.Y) - 1) / 2))
 		local left = (avoidTopbar == false and 0 or math.max(0, M.inset.X - origin.X)) + margin
@@ -348,6 +384,10 @@ return function(env)
 		local screenOrigin, screenSize = M.parentGeometry(M.screen)
 		local right = math.min(size.X, screenOrigin.X + screenSize.X - origin.X) - margin
 		local bottom = math.min(size.Y, screenOrigin.Y + screenSize.Y - M.bottomObstruction() - origin.Y) - margin
+		if M.isMobile() and M.keyboardTop then
+			bottom = math.min(size.Y - margin, screenOrigin.Y + screenSize.Y - M.bottomInset - origin.Y - margin,
+				M.keyboardTop - origin.Y - margin)
+		end
 		return { x = left, y = top, width = math.max(1, right - left), height = math.max(1, bottom - top) }
 	end
 
@@ -357,6 +397,31 @@ return function(env)
 			M.touch and "touch " or "",
 			M.gamepad and "gamepad " or "",
 			M.reduceMotion and "reduced-motion" or "")
+	end
+
+	-- Reveal the active mobile field after the keyboard and its ancestors finish
+	-- resizing. Only its scrolling ancestors move; reading another panel stays put.
+	function M.revealFocused()
+		if not M.isMobile() then return end
+		local ok, field = pcall(function() return env.uis:GetFocusedTextBox() end)
+		if not ok or not field or not field.Parent or not M.screen or not field:IsDescendantOf(M.screen) then return end
+		local node = field.Parent
+		while node and node ~= M.screen do
+			if node:IsA("ScrollingFrame") and node.ScrollingEnabled and node.Visible then
+				local visible = node.AbsoluteWindowSize.Y
+				if visible <= 0 then visible = node.AbsoluteSize.Y end
+				local margin = M.minTarget() / 4
+				local top = node.AbsolutePosition.Y + margin
+				local bottom = node.AbsolutePosition.Y + visible - margin
+				local y, height = field.AbsolutePosition.Y, field.AbsoluteSize.Y
+				local delta = y < top and y - top or (y + height > bottom and math.min(y - top, y + height - bottom) or 0)
+				local maximum = math.max(0, node.AbsoluteCanvasSize.Y - visible)
+				if visible > 0 and delta ~= 0 then
+					node.CanvasPosition = Vector2.new(node.CanvasPosition.X, util.clamp(node.CanvasPosition.Y + delta, 0, maximum))
+				end
+			end
+			node = node.Parent
+		end
 	end
 
 	return M

@@ -104,6 +104,9 @@ return function(env)
 		-- Both are registered for disposal, because after an unload a config write must
 		-- not rebuild an interface that is no longer there.
 		dispose.add(responsive.modeChanged:connect(function()
+			-- Phone/tablet chrome is identical across breakpoints. Relayout keeps
+			-- the live caret, selection, scroll position and provider edits intact.
+			if M.window and M.window.mobile and responsive.isMobile() then return end
 			M.rebuild("mode")
 		end), "app.modeChanged")
 
@@ -541,13 +544,23 @@ return function(env)
 		-- the user was at the bottom when they minimized, so they are at the
 		-- bottom when they come back.
 		M.window.onShow = function()
+			if responsive.isMobile() and M.launcher then M.launcher.Visible = false end
 			M.setLauncherBusy(false)
 			if M.panel == "chat" then M.readNotifications(sessions.activeId) end
 			if M.chatPanel and M.chatPanel.view then
 				M.chatPanel.view.repin()
 			end
 		end
-		M.window.onHide = function() M.setLauncherBusy(sessions.busyCount() > 0) end
+		M.window.onHide = function()
+			if responsive.isMobile() then
+				if M.launcher then M.launcher.Visible = true end
+				pcall(function()
+					local field = env.uis:GetFocusedTextBox()
+					if field and field:IsDescendantOf(M.window.root) then field:ReleaseFocus() end
+				end)
+			end
+			M.setLauncherBusy(sessions.busyCount() > 0)
+		end
 	end
 
 	-- Config is the only source of truth for this.
@@ -556,7 +569,7 @@ return function(env)
 	-- early from on re-entry -- so the field and `ui.sidebarCollapsed` could diverge and
 	-- never reconcile, and the switch in the appearance pane wrote a value nothing read.
 	function M.sidebarVisible()
-		return (responsive.mode == "window") and (config.get("ui.sidebarCollapsed", false) ~= true)
+		return not responsive.isMobile() and (responsive.mode == "window") and (config.get("ui.sidebarCollapsed", false) ~= true)
 	end
 
 	-- The header reads left to right as what you are looking at, then the window
@@ -603,7 +616,7 @@ return function(env)
 			-- the sidebar -- so collapsing it was a one-way trip, and the appearance pane
 			-- promised a header toggle that was not there. In sheet, panel and tv mode
 			-- there is no sidebar to restore, so no button is offered.
-			if responsive.mode == "window" then
+			if responsive.mode == "window" and not mobile then
 				local expand = P.iconButton(left, {
 					name = "Nav_collapse",
 					icon = "sidebarToggle",
@@ -954,7 +967,7 @@ return function(env)
 			if not sessions.switch(id) then return false end
 		end
 		M.show("chat")
-		if M.chatPanel and M.chatPanel.composer then M.chatPanel.composer.focus() end
+		if not responsive.isMobile() and M.chatPanel and M.chatPanel.composer then M.chatPanel.composer.focus() end
 		return true
 	end
 
@@ -1057,6 +1070,9 @@ return function(env)
 	-- The hamburger. Every panel, plus the two things that are not panels: a new
 	-- conversation and the search.
 	function M.showAppMenu(target)
+		if responsive.isMobile() then
+			return env.require("ui/mobilenav").open(M, PANELS)
+		end
 		local options = {}
 		for _, entry in ipairs(PANELS) do
 			options[#options + 1] = {

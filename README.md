@@ -118,12 +118,18 @@ collapsed; consecutive trace updates share a disclosure until a tool separates t
 The model picker keeps search and selection stable, and its provider selector and
 the composer's model chip size to their actual labels.
 
-**Mobile layout.** A compact header, composer and prompt list leave more room for
-chat while keeping 44px touch targets. Drag the title to move the window anywhere
-inside the device's safe area, including in portrait. The header's resize grip
-adjusts its size; the expand button fills the available screen and restores your
-previous placement. Portrait and landscape layouts remember their positions
-separately, and the keyboard temporarily lifts the panel without overwriting them.
+**Mobile layout.** Built for landscape play: a compact header and multiline
+composer leave room for chat and the game, with 44px touch targets. Enter adds a
+line; the Send button submits. Expand the composer for a longer draft, or use
+Message options for models, attachments and context. The app menu has searchable
+conversation history, direct opening and separate rename/delete controls.
+Settings use a category picker and a full-width form.
+
+Drag the title to move the panel, use the header grip to resize it, or expand it
+to fill the available screen. Landscape and portrait remember separate placements.
+Rotation preserves drafts, selections and open forms; the keyboard temporarily
+lifts the panel and keeps focused fields in view. The launcher returns when the
+panel is minimized. Desktop layout and geometry remain independent.
 
 **Managed in-game chat loops.** Ask for a quiz, rotating announcements, or keyword
 replies. `quiz_bot`, `auto_chat`, and `auto_reply` return a background job immediately;
@@ -328,6 +334,7 @@ luajit test/markdown_regressions.lua
 luajit test/markdown_tables.lua
 luajit test/shared_ui_layout.lua
 luajit test/mobile_ui.lua
+luajit test/mobile_workflows.lua
 luajit test/panel_layout_regressions.lua
 luajit test/model_picker.lua
 luajit test/chat_loops.lua
@@ -374,11 +381,19 @@ Luau compiler, then run a scenario file through the same offline harness:
 
 ```bash
 lune run test/lune_runner.luau test/mobile_ui.lua
+lune run test/lune_runner.luau test/mobile_workflows.lua
 lune run test/lune_runner.luau test/shared_ui_layout.lua
 ```
 
 These checks use mocked Roblox services. They verify code, geometry and
 interactions, but do not render native Roblox text or GUI layouts.
+
+For landscape image review, `test/mobile_snapshots.lua` exports UI trees from the
+built bundle under Lune. `node test/render_mobile.js <snapshot directory>` renders
+those trees with Playwright/Chromium; set `PLAYWRIGHT_MODULE` to an external
+Playwright installation if needed. These are approximate layout previews. Passing
+a second snapshot directory compares desktop UI trees with the previous build.
+Native rendering and keyboard behavior should also be checked in the Roblox client.
 
 ## Public showcase website
 

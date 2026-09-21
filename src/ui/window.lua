@@ -26,6 +26,9 @@ return function(env)
 		local minWidth = props.minWidth or 320
 		local minHeight = mobile and math.min(props.minHeight or 280, 200) or (props.minHeight or 280)
 		local function geometryKey()
+			-- Orientation, not a width breakpoint: both orientations of a tablet
+			-- can be panels, and a forced window layout must not write desktop state.
+			if mobile then return responsive.orientation == "portrait" and "ui.mobileSheet" or "ui.mobilePanel" end
 			if responsive.mode == "sheet" then return "ui.mobileSheet" end
 			if responsive.mode == "panel" then return "ui.mobilePanel" end
 			return "ui.window"
@@ -75,10 +78,12 @@ return function(env)
 
 		local handle = {
 			root = root,
+			mobile = mobile,
 			visible = false,
 			maximised = config.get(geometryKey() .. ".maximised", false) == true,
 		}
 		local layoutMode = responsive.mode
+		local layoutKey = geometryKey()
 
 		-- Everything this window leaves running outside its own instance tree, released
 		-- together by handle.destroy.
@@ -139,8 +144,9 @@ return function(env)
 			stopGestures()
 			local geometry = responsive.geometry()
 			local mode = responsive.mode
-			if layoutMode ~= mode then
+			if layoutMode ~= mode or layoutKey ~= geometryKey() then
 				layoutMode = mode
+				layoutKey = geometryKey()
 				handle.maximised = config.get(geometryKey() .. ".maximised", false) == true
 			end
 			local viewport = responsive.viewport
@@ -149,17 +155,20 @@ return function(env)
 			local availableY = parentSize.Y > 0 and parentSize.Y or viewport.Y
 			local availableX = parentSize.X > 0 and parentSize.X or viewport.X
 
-			if (mode == "sheet" or mode == "panel") and handle.maximised then
+			if (mobile or mode == "sheet" or mode == "panel") and handle.maximised then
 				root.AnchorPoint = Vector2.new(0, 0)
 				root.Size = UDim2.fromOffset(math.floor(bounds.width), math.floor(bounds.height))
 				root.Position = UDim2.fromOffset(math.floor(bounds.x), math.floor(bounds.y))
-			elseif mode == "sheet" or mode == "panel" then
+			elseif mobile or mode == "sheet" or mode == "panel" then
 				local key = geometryKey()
 				local placed = config.get(key .. ".placed", false)
 				local maxPanelWidth = bounds.width
 				local maxPanelHeight = bounds.height
 				local defaultWidth = math.min(geometry.width, maxPanelWidth)
 				local defaultHeight = math.min(geometry.height, maxPanelHeight)
+				if mobile and responsive.keyboardHeight == 0 then
+					defaultHeight = math.min(defaultHeight, math.floor(maxPanelHeight * 0.92))
+				end
 				local width = defaultWidth
 				local height = defaultHeight
 				if placed then
@@ -170,7 +179,10 @@ return function(env)
 				root.Size = UDim2.fromOffset(math.floor(width), math.floor(height))
 				local defaultX = bounds.x + bounds.width - width
 				local defaultY = bounds.y
-				if mode == "sheet" then defaultY = bounds.y + bounds.height - height
+				if mobile and responsive.orientation == "portrait" then
+					defaultX = bounds.x + (bounds.width - width) / 2
+					defaultY = bounds.y + bounds.height - height
+				elseif mode == "sheet" then defaultY = bounds.y + bounds.height - height
 				elseif responsive.isMobile() then defaultY = bounds.y + (bounds.height - height) / 2 end
 				if placed then
 					root.Position = UDim2.fromOffset(
@@ -331,7 +343,7 @@ return function(env)
 			local _, viewport = responsive.parentGeometry(parent)
 			local bounds = responsive.usableRect(parent, theme.space.sm, false)
 			local size = root.AbsoluteSize
-			if responsive.mode == "panel" or responsive.mode == "sheet" then
+			if mobile or responsive.mode == "panel" or responsive.mode == "sheet" then
 				local x, y = root.Position.X.Offset, root.Position.Y.Offset
 				local leftGap = x - bounds.x
 				local rightGap = bounds.x + bounds.width - (x + size.X)
@@ -433,7 +445,7 @@ return function(env)
 			local delta = input.Position - resizeOrigin
 			local _, viewport = responsive.parentGeometry(parent)
 			local bounds = responsive.usableRect(parent, theme.space.sm, false)
-			if responsive.mode == "panel" or responsive.mode == "sheet" then
+			if mobile or responsive.mode == "panel" or responsive.mode == "sheet" then
 				local maxWidth = bounds.width
 				local maxHeight = bounds.height
 				root.Size = UDim2.fromOffset(

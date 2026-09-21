@@ -5455,9 +5455,7 @@ scenario("mobile panel can be moved and resized, and burger menu stays within sc
 	harness.click(burger)
 	harness.settle(2)
 
-	local menuLayer = harness.byName("MenuLayer")
-	truthy("menu opened", menuLayer ~= nil)
-	local menuCard = harness.byName("Menu", menuLayer)
+	local menuCard = harness.byName("MobileNavigation")
 	truthy("menu card rendered", menuCard ~= nil)
 	truthy("menu card top edge is on screen (no negative Y)", menuCard.AbsolutePosition.Y >= 0,
 		"AbsolutePosition.Y = " .. tostring(menuCard.AbsolutePosition.Y))
@@ -5466,7 +5464,7 @@ scenario("mobile panel can be moved and resized, and burger menu stays within sc
 		"bottom = " .. tostring(menuCard.AbsolutePosition.Y + menuCard.AbsoluteSize.Y))
 
 	-- Options can be selected
-	local optionTools = harness.byName("Option_tools", menuLayer)
+	local optionTools = harness.byName("MobileNav_tools", menuCard)
 	truthy("option row exists and is reachable", optionTools ~= nil)
 	harness.click(optionTools)
 	harness.settle(2)

@@ -65,6 +65,7 @@ return function(env)
 			zIndex = theme.z.raised,
 		})
 		local composer = { expanded = false, busy = false, attachments = {} }
+		local mobileFocused, contextRequested, extraHeight = false, false, 0
 		local draftId
 		local restoring = false
 		local destroyed = false
@@ -261,16 +262,21 @@ return function(env)
 		paintIsolate()
 
 		-- 5. Attach. Real files from the client's own folder, and the memory it keeps.
-		local attachRow
+		local attachRow, attachmentScroll
 		local attachmentHandles = {}
 		local function fitAttachments()
 			if not alive() then return end
 			local width = math.max(0, surface.AbsoluteSize.X - inset * 2)
+			local total = 0
 			for _, item in ipairs(attachmentHandles) do
 				local reserve = theme.space.xs * 2 + theme.space.xxs * 2
 					+ item.leading.Size.X.Offset + item.close.Size.X.Offset
 				local wanted = math.ceil(P.measureText(item.label.Text, { role = "caption" }).X) + reserve
 				item.button.instance.Size = UDim2.fromOffset(math.min(width, math.max(chipHeight, wanted)), chipHeight)
+				total = total + item.button.instance.Size.X.Offset + theme.space.xs
+			end
+			if mobile and attachRow then
+				attachRow.Size = UDim2.fromOffset(math.max(0, total - theme.space.xs), chipHeight)
 			end
 		end
 		local function renderAttachments()
@@ -401,12 +407,16 @@ return function(env)
 			attachMenu(handle.instance)
 		end)
 
-		attachRow = P.row(surface, {
+		if mobile then
+			attachmentScroll = P.scroll(surface, { name = "AttachmentStrip", horizontal = true,
+				size = UDim2.new(1, 0, 0, chipHeight + theme.size.scrollbar), visible = false, gap = 0 })
+		end
+		attachRow = P.row(attachmentScroll and attachmentScroll.instance or surface, {
 			name = "Attachments",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
+			size = mobile and UDim2.fromOffset(0, chipHeight) or UDim2.new(1, 0, 0, 0),
+			auto = mobile and "X" or "Y",
 			gap = theme.space.xs,
-			wrap = true,
+			wrap = not mobile,
 			layoutOrder = 2,
 		})
 		attachRow.Visible = false
@@ -507,18 +517,27 @@ return function(env)
 		end
 
 		local function stackedInput()
-			return composer.expanded and (not mobile or parent.AbsoluteSize.Y >=
-				controlHeight * 2 + inset * 2 + topInset + bottomInset + theme.space.xs + theme.space.sm)
+			if not mobile then return composer.expanded end
+			-- Landscape gaming needs its vertical reading space. A normal prompt
+			-- stays inline; explicit expansion gives longer drafts their own row.
+			if responsive.orientation == "landscape" and not composer.expanded then return false end
+			local editing = composer.expanded or mobileFocused or (composer.field and composer.field.get() ~= "")
+			return editing and parent.AbsoluteSize.Y >= extraHeight + controlHeight * 2
+				+ inset * 2 + topInset + bottomInset + theme.space.xs + theme.text.body.height * 2
 		end
 		local function promptHeight()
 			if stackedInput() then
+				if mobile then
+					local width = math.max(controlHeight, surface.AbsoluteSize.X - inset * 2)
+					local text = composer.field and composer.field.get() or ""
+					local measured = P.measureText(text, { width = width }).Y + theme.space.sm * 2
+					local wanted = composer.expanded and math.max(measured, theme.text.body.height * 2 + theme.space.sm * 2) or measured
+					local room = parent.AbsoluteSize.Y - extraHeight - controlHeight - theme.space.xs
+						- inset * 2 - topInset - bottomInset - theme.text.body.height * 2
+					return math.max(controlHeight, math.min(wanted, theme.size.composerExpanded, room))
+				end
 				local wanted = math.max(theme.text.body.height * 2 + theme.space.md,
 					math.min(theme.size.composerExpanded, responsive.viewport.Y * 0.25))
-				if mobile then
-					local remaining = parent.AbsoluteSize.Y - controlHeight - theme.space.xs
-						- inset * 2 - topInset - bottomInset - theme.text.body.height * 2
-					wanted = math.min(wanted, math.max(controlHeight, remaining))
-				end
 				return wanted
 			end
 			return math.max(theme.size.control, theme.text.body.height, responsive.minTarget())
@@ -529,15 +548,22 @@ return function(env)
 				name = "Prompt",
 				bare = true,
 				placeholder = props.placeholder or "Message UAI…",
-				multiline = composer.expanded,
+				multiline = mobile or composer.expanded,
 				height = promptHeight(),
 				text = carried,
-				onFocus = function() paintFocus(true) end,
-				onBlur = function() paintFocus(false) end,
+				onFocus = function()
+					paintFocus(true)
+					if mobile then mobileFocused = true; if resizeComposer then resizeComposer() end end
+				end,
+				onBlur = function()
+					paintFocus(false)
+					if mobile then mobileFocused = false; if resizeComposer then resizeComposer() end end
+				end,
 				onChange = function(text)
 					if not alive() or type(text) ~= "string" then return end
 					syncSend()
 					saveDraft()
+					if mobile and resizeComposer then resizeComposer() end
 					if restoring then previousLength = #text; return end
 					local cap = sessions.PASTE_CAP
 					local jumped = #text > cap and (#text - previousLength) > cap
@@ -558,7 +584,7 @@ return function(env)
 					end
 				end,
 				onSubmit = function()
-					if not composer.expanded then submit() end
+					if not mobile and not composer.expanded then submit() end
 				end,
 			})
 		end
@@ -624,16 +650,34 @@ return function(env)
 					{ label = "Prompt library", detail = "Explore, create, or diagnose", value = "prompts", icon = "spark" },
 					{ label = "Model and effort", detail = modelLabel.Text, value = "model", icon = "spark" },
 					{ label = "Permissions", detail = permissionLabel.Text, value = "permissions", icon = "sliders" },
-					{ label = scopeScroll.instance.Visible and "Hide context details" or "Show context details", value = "context", icon = "folder" },
-					{ label = composer.expanded and "Single-line input" or "Multiline input", value = "expand", icon = "code" },
+					{ label = (mobile and contextRequested or scopeScroll.instance.Visible) and "Hide context details" or "Show context details", value = "context", icon = "folder" },
+					{ label = mobile and (composer.expanded and "Automatic input height" or "Expand input")
+						or (composer.expanded and "Single-line input" or "Multiline input"), value = "expand", icon = "code" },
 				}
+				if mobile then
+					table.insert(options, 1, { label = "Attach file or memory", value = "attach", icon = "plus" })
+					if #composer.attachments > 0 then
+						options[#options + 1] = { label = "Attachments", detail = util.pluralise(#composer.attachments, "attachment"),
+							value = "attachments", icon = "document" }
+					end
+				end
 				if statusLabel.Text ~= "" then
 					options[#options + 1] = { label = "Usage and status", detail = statusLabel.Text, value = "status" }
 				end
 				options[#options + 1] = { divider = true }
 				options[#options + 1] = { label = "Clear conversation", value = "clear", icon = "trash", tone = "bad" }
-				overlay.menu({ target = handle.instance, options = options, onSelect = function(value)
+				overlay.menu({ target = handle.instance, title = "Message options", options = options, onSelect = function(value)
 					if value == "prompts" then promptMenu(handle.instance)
+					elseif value == "attach" then attachMenu(handle.instance)
+					elseif value == "attachments" then
+						local attached = {}
+						for index, entry in ipairs(composer.attachments) do
+							attached[#attached + 1] = { label = entry.label, detail = "Tap to remove", value = index, icon = "document" }
+						end
+						overlay.menu({ target = handle.instance, title = "Attachments", options = attached, onSelect = function(index)
+							if not alive() or not composer.attachments[index] then return end
+							table.remove(composer.attachments, index); renderAttachments()
+						end })
 					elseif value == "loops" then env.require("ui/chat/loops").open(handle.instance)
 					elseif value == "model" then M.providerMenu(handle.instance, composer)
 					elseif value == "permissions" then
@@ -647,7 +691,9 @@ return function(env)
 							permissions.setMode(mode); composer.syncContext()
 						end })
 					elseif value == "context" then
-						scopeScroll.instance.Visible = not scopeScroll.instance.Visible; resizeComposer()
+						if mobile then contextRequested = not contextRequested
+						else scopeScroll.instance.Visible = not scopeScroll.instance.Visible end
+						resizeComposer()
 					elseif value == "expand" then composer.setExpanded(not composer.expanded)
 					elseif value == "status" then overlay.toast(statusLabel.Text, "info", 5)
 					elseif value == "clear" and props.onClear then props.onClear() end
@@ -659,12 +705,15 @@ return function(env)
 			local expanded = stackedInput()
 			local width = math.max(surface.AbsoluteSize.X - inset * 2, 0)
 			local left = chipHeight + (mobile and controlGap or theme.space.xs)
+			if mobile and not expanded then left = theme.space.xs end
+			plusButton.instance.Visible = not mobile or expanded
 			local right = controlHeight + chipHeight + controlGap * 2
 			-- Size to the actual label, not a permanent 144px slot around 'big-pickle'.
 			local measured = math.max(P.measureText(modelLabel.Text, { role = "caption" }).X, modelLabel.TextBounds.X)
 			local wanted = math.ceil(measured) + theme.size.dot + theme.size.icon + theme.space.xs * 4
 			local available = width - left - right - (expanded and 0 or theme.size.composerFieldMin)
 			local modelWidth = math.max(0, math.min(wanted, theme.size.composerModel, available))
+			if mobile and not expanded then modelWidth = 0 end
 			if modelWidth < math.min(wanted, theme.size.composerModelMin) then modelWidth = 0 end
 			modelChip.instance.Visible = modelWidth > 0
 			modelChip.instance.Size = UDim2.fromOffset(modelWidth, chipHeight)
@@ -685,16 +734,28 @@ return function(env)
 			if not alive() or resizing then return end
 			resizing = true
 			local top = inset
+			if mobile then
+				local room = parent.AbsoluteSize.Y
+				-- Extra context never takes the typing row off screen. Attachments
+				-- remain removable from Message options when keyboard space is short.
+				scopeScroll.instance.Visible = contextRequested and room >= controlHeight * 4 + theme.space.lg
+				attachmentScroll.instance.Visible = attachRow.Visible and room >= controlHeight * 3 + theme.space.lg
+			end
 			if scopeScroll.instance.Visible then
 				scopeScroll.instance.Position = UDim2.fromOffset(inset, top)
 				scopeScroll.instance.Size = UDim2.new(1, -inset * 2, 0, chipHeight + theme.size.scrollbar)
 				top = top + chipHeight + theme.size.scrollbar + inset
 			end
-			if attachRow.Visible then
+			if mobile and attachmentScroll.instance.Visible then
+				attachmentScroll.instance.Position = UDim2.fromOffset(inset, top)
+				attachmentScroll.instance.Size = UDim2.new(1, -inset * 2, 0, chipHeight + theme.size.scrollbar)
+				top = top + chipHeight + theme.size.scrollbar + inset
+			elseif not mobile and attachRow.Visible then
 				attachRow.Position = UDim2.fromOffset(inset, top)
 				attachRow.Size = UDim2.new(1, -inset * 2, 0, 0)
 				top = top + math.max(attachRow.AbsoluteSize.Y, chipHeight) + inset
 			end
+			extraHeight = top - inset
 			local fieldHeight = promptHeight()
 			local expanded = stackedInput()
 			inputHolder.Position = UDim2.fromOffset(inset, top)
@@ -782,6 +843,11 @@ return function(env)
 		function composer.setExpanded(value, keepFocus)
 			if not alive() then return end
 			composer.expanded = value == true
+			if mobile then
+				if keepFocus ~= false then composer.field.focus() end
+				resizeComposer(); syncSend(); saveDraft()
+				return
+			end
 			paintFocus(false)
 			local carried = composer.field.get()
 			pcall(function() composer.field.shell:Destroy() end)

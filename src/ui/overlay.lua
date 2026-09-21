@@ -409,7 +409,7 @@ return function(env)
 		local headerContentHeight = math.max(closeDiameter,
 			theme.text.title.height + (props.description and (theme.space.hair + theme.text.small.height) or 0))
 		local footerContentHeight = math.max(theme.size.control, responsive.minTarget())
-		local pad = theme.space.lg
+		local pad = responsive.isMobile() and theme.space.md or theme.space.lg
 		local headerTotal = headerContentHeight + pad * 2
 		local footerTotal = footerContentHeight + theme.space.sm * 2
 
@@ -479,7 +479,8 @@ return function(env)
 		local function relayout()
 			if handle.closed then return end
 			local isSheet = responsive.mode == "sheet"
-			local bounds = responsive.usableRect(M.layer, isSheet and theme.space.md or theme.space.lg)
+			local bounds = responsive.usableRect(M.layer, responsive.isMobile() and theme.space.sm
+				or (isSheet and theme.space.md or theme.space.lg))
 			card.AnchorPoint = isSheet and Vector2.new(0.5, 1) or Vector2.new(0.5, 0.5)
 			card.Position = UDim2.fromOffset(math.floor(bounds.x + bounds.width / 2),
 				math.floor(bounds.y + bounds.height * (isSheet and 1 or 0.5)))
@@ -553,8 +554,8 @@ return function(env)
 			fitChrome = function(roomHeight)
 				if handle.closed or fitting then return end
 				fitting = true
-				local roomNow = roomHeight or responsive.usableRect(M.layer,
-					responsive.mode == "sheet" and theme.space.md or theme.space.lg).height
+				local roomNow = roomHeight or responsive.usableRect(M.layer, responsive.isMobile() and theme.space.sm
+					or (responsive.mode == "sheet" and theme.space.md or theme.space.lg)).height
 				local width = math.max(1, card.Size.X.Offset - pad * 2
 					- (props.dismissable ~= false and (closeDiameter + theme.space.sm) or 0))
 				local function textHeight(label, role)
@@ -575,7 +576,8 @@ return function(env)
 				footerTotal = hasFooter and (footerHeight + theme.space.sm * 2) or 0
 				local bodyBounds = bodyLayout.AbsoluteContentSize
 				local bodyHeight = bodyBounds and bodyBounds.Y or handle.content.AbsoluteSize.Y
-				local chromePad = roomNow < (headerTotal + footerTotal + closeDiameter) and theme.space.xs or pad
+				local chromePad = responsive.isMobile() and theme.space.xs
+					or (roomNow < (headerTotal + footerTotal + closeDiameter) and theme.space.xs or pad)
 				local wantedHeader = math.max(closeDiameter, titleHeight) + chromePad * 2
 				local preferred = props.height or (props.scroll == true and 620
 					or (wantedHeader + footerTotal + bodyHeight + theme.space.sm + theme.space.xxs))
@@ -861,7 +863,7 @@ return function(env)
 		local unbindResponsive
 		local function relayout()
 			if handle.closed then return end
-			local bounds = responsive.usableRect(M.layer, theme.space.lg)
+			local bounds = responsive.usableRect(M.layer, responsive.isMobile() and theme.space.sm or theme.space.lg)
 			handle.width = math.min(props.width or theme.size.dialog, bounds.width)
 			handle.height = math.min(props.height or theme.size.dialogTall, bounds.height)
 			card.Size = UDim2.fromOffset(handle.width, handle.height)
@@ -930,12 +932,15 @@ return function(env)
 	function M.menu(props)
 		props = props or {}
 		if not ensure() then return nil end
+		local mobile = responsive.isMobile()
 		local target = props.target
 		if not target or not target.Parent or not target.Visible then return nil end
 
 		local scrim = P.frame(M.layer, {
 			name = "MenuLayer",
 			size = UDim2.fromScale(1, 1),
+			bg = mobile and theme.color.scrim or nil,
+			bgTransparency = mobile and theme.opacity.scrim or nil,
 			zIndex = theme.z.dropdown,
 		})
 		local dismiss = Instance.new("TextButton", scrim)
@@ -987,7 +992,8 @@ return function(env)
 		end
 		if #(props.options or {}) > 0 then bodyHeight = bodyHeight - theme.space.hair end
 		bodyHeight = math.min(bodyHeight, props.maxHeight or theme.size.menuMax)
-		local preferredWidth, preferredHeight = math.ceil(width), bodyHeight
+		local menuHeader = mobile and (responsive.minTarget() + theme.space.xxs * 2) or 0
+		local preferredWidth, preferredHeight = math.ceil(width), bodyHeight + menuHeader
 
 		local card = P.frame(scrim, {
 			name = "Menu",
@@ -1034,6 +1040,14 @@ return function(env)
 				ancestor = ancestor.Parent
 			end
 			local bounds = responsive.usableRect(M.layer, theme.space.xs)
+			if mobile then
+				local w = math.min(bounds.width, math.max(preferredWidth, theme.size.modelPicker))
+				local h = math.min(preferredHeight, bounds.height)
+				card.Size = UDim2.fromOffset(math.floor(w), math.floor(h))
+				card.Position = UDim2.fromOffset(math.floor(bounds.x + (bounds.width - w) / 2),
+					math.floor(bounds.y + bounds.height - h))
+				return
+			end
 			local origin = M.layer.AbsolutePosition
 			local x, y = target.AbsolutePosition.X - origin.X, target.AbsolutePosition.Y - origin.Y
 			local bottom = bounds.y + bounds.height
@@ -1072,9 +1086,21 @@ return function(env)
 
 		dismiss.Activated:Connect(handle.close)
 
+		if mobile then
+			P.text(card, { name = "MenuTitle", text = props.title or "Options", role = "bodyStrong",
+				position = UDim2.fromOffset(theme.space.md, 0),
+				size = UDim2.new(1, -menuHeader - theme.space.md, 0, menuHeader) })
+			P.iconButton(card, { name = "MenuClose", icon = "close", diameter = responsive.minTarget(),
+				anchor = Vector2.new(1, 0), position = UDim2.new(1, -theme.space.xxs, 0, theme.space.xxs),
+				onClick = handle.close })
+			P.frame(card, { name = "MenuDivider", position = UDim2.fromOffset(0, menuHeader - theme.stroke.hair),
+				size = UDim2.new(1, 0, 0, theme.stroke.hair), bg = theme.color.borderSubtle })
+		end
+
 		local list = P.scroll(card, {
 			name = "Options",
-			size = UDim2.fromScale(1, 1),
+			size = UDim2.new(1, 0, 1, -menuHeader),
+			position = mobile and UDim2.fromOffset(0, menuHeader) or nil,
 			gap = theme.space.hair,
 			padding = theme.space.xs,
 			zIndex = theme.z.dropdown + 2,

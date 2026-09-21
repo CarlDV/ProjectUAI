@@ -499,6 +499,17 @@ its touch target cannot cover Send; a separate expand action restores the previo
 size and position. In short keyboard space, multiline input uses one compact row
 without changing the draft or its multiline editing mode.
 
+Landscape is the primary touch layout. Ordinary typing stays in the compact
+composer, and explicit expansion provides more draft space. Mobile Enter inserts
+a newline; only Send submits. Attachments occupy one horizontal scroll row, with
+management available from Message options when keyboard space hides their preview.
+Rotation relays out existing mobile views without replacing their text fields,
+selections or live forms. Mobile navigation pins conversation search above a
+scrollable history, opens conversations directly, and separates history actions
+from opening. Short keyboard layouts return footer space to the results. Settings
+use a category picker with the full width available to the active form. The mobile
+launcher is visible only while the main window is minimized.
+
 Sheets, panels and desktop windows can all be moved. Default desktop placement
 avoids CoreGui's top bar, but dragging and restoring a chosen position use the full
 device-safe parent, measured through a transparent frame inside the ScreenGui.
@@ -507,6 +518,12 @@ is recorded on release, separately in `ui.window`, `ui.mobilePanel` and
 `ui.mobileSheet`; maximised or keyboard-constrained sizes never overwrite a normal
 placement. Keyboard dismissal restores it. Header controls do not initiate drags,
 and each gesture continues to follow only the input that began it.
+
+Mobile geometry is keyed by orientation, including tablets whose portrait and
+landscape modes are both `panel`. A forced mobile `window` layout still uses mobile
+geometry. Keyboard positioning uses the reported top edge when available, and
+focused mobile fields are revealed through their scrolling ancestors. Desktop
+geometry and pointer layouts retain their existing behavior.
 
 Profile avatars start with a readable initial behind a renderable image. A deferred
 worker resolves a ready headshot through `Players:GetUserThumbnailAsync` and calls

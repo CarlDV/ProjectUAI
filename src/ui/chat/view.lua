@@ -274,7 +274,15 @@ return function(env)
 			end
 			view.welcomeCard = env.require("ui/panels/home").card(scroll.instance, nextOrder(), props)
 			scroll.instance.CanvasPosition = Vector2.new(0, 0)
-			if providers.count() == 0 then
+			if mobile then
+				local setup = P.button(view.welcomeCard, { name = "MobileSetup", text = "Connect a provider", icon = "sliders",
+					variant = "secondary", layoutOrder = 5, onClick = function() env.require("ui/app").show("providers") end })
+				setup.instance.Size = UDim2.new(1, 0, 0, responsive.minTarget())
+				local function syncSetup() setup.instance.Visible = providers.count() == 0 end
+				local unsubscribe = providers.changed:connect(syncSetup)
+				setup.instance.Destroying:Connect(unsubscribe)
+				syncSetup()
+			elseif providers.count() == 0 then
 				C.emptyState(view.welcomeCard, {
 					title = "No provider configured",
 					description = "Add an OpenAI-compatible endpoint to start. Anything that speaks /v1/chat/completions works: a hosted API, a relay, or a local server.",

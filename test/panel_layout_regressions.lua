@@ -35,7 +35,8 @@ end
 cache["runtime/config"] = config
 local target = 44
 local responsive = { mode = "panel", reduceMotion = true, changed = signal.new("responsive"),
-	minTarget = function() return target end, describe = function() return "test viewport" end }
+	minTarget = function() return target end, isMobile = function() return false end,
+	describe = function() return "test viewport" end }
 cache["ui/responsive"] = responsive
 cache["ui/icons"] = { draw = function() end, chevron = function() end, check = function() end }
 local warnings = {}

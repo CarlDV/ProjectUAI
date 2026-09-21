@@ -13,7 +13,53 @@ return function(env)
 
 	local M = {}
 
+	local function openMobile(initial)
+		local dialog = overlay.dialog({ name = "SettingsDialog" })
+		if not dialog then return end
+		local control = responsive.minTarget()
+		local pad = theme.space.sm
+		local top = control + pad * 2
+		local body = P.scroll(dialog.card, { name = "PaneScroll", position = UDim2.fromOffset(0, top),
+			size = UDim2.new(1, 0, 1, -top), gap = theme.space.md,
+			padding = { x = theme.space.md, top = pad, bottom = theme.space.lg } })
+		local active, category, select
+		category = P.rowButton(dialog.card, { name = "CategoryPicker",
+			position = UDim2.fromOffset(pad, pad), size = UDim2.new(1, -dialog.closeInset - pad, 0, control),
+			padding = { x = pad }, onClick = function(button)
+				local options = {}
+				for _, section in ipairs(panes.sections()) do
+					options[#options + 1] = { isHeader = true, title = section.title }
+					for _, entry in ipairs(section.panes) do
+						options[#options + 1] = { label = entry.label, value = entry.id, icon = entry.icon,
+							selected = active == entry.id }
+					end
+				end
+				overlay.menu({ target = button.instance, title = "Settings", options = options, onSelect = select })
+			end })
+		category.icon("gear", 1)
+		local label = category.label("Settings", 2, nil, "bodyStrong")
+		category.icon("chevron", 3)
+		P.frame(dialog.card, { name = "DialogDivider", position = UDim2.fromOffset(0, top),
+			size = UDim2.new(1, 0, 0, theme.stroke.hair), bg = theme.color.borderSubtle })
+		select = function(id)
+			local entry = panes.pane(id)
+			if dialog.closed or not entry or active == id then return end
+			active = id
+			label.Text = entry.label
+			body.clear()
+			local column = P.column(body.instance, { name = "Pane_" .. id, size = UDim2.new(1, 0, 0, 0),
+				auto = "Y", gap = theme.space.md })
+			panes.render(id, column)
+			body.instance.CanvasPosition = Vector2.new(0, 0)
+		end
+		select(panes.pane(initial) and initial or panes.PANES[1].id)
+		dialog.select = select
+		dialog.activeCategory = function() return active end
+		return dialog
+	end
+
 	function M.open(initial)
+		if responsive.isMobile() then return openMobile(initial) end
 		local dialog = overlay.dialog({ name = "SettingsDialog" })
 		if not dialog then return nil end
 
