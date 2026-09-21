@@ -51,7 +51,8 @@ return function(env)
 			-- floating text.
 			notifications = true,
 			window = { width = 0, height = 0, x = 0, y = 0, maximised = false, placed = false },
-			mobilePanel = { width = 0, height = 0, x = 0, y = 0, placed = false },
+			mobilePanel = { width = 0, height = 0, x = 0, y = 0, maximised = false, placed = false },
+			mobileSheet = { width = 0, height = 0, x = 0, y = 0, maximised = false, placed = false },
 			launcher = { x = 0, y = 0, placed = false },
 			-- The last changelog version the user opened. The app menu marks What's
 			-- New while the running version is newer than this; opening the modal

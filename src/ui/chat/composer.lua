@@ -50,10 +50,15 @@ return function(env)
 
 	function M.new(parent, props)
 		props = props or {}
+		local mobile = responsive.isMobile()
 		local chipHeight = math.max(theme.size.chip, responsive.minTarget())
 
 		local controlHeight = math.max(theme.size.control, responsive.minTarget())
-		local inset = theme.space.sm
+		local inset = mobile and theme.space.xxs or theme.space.sm
+		local sideInset = mobile and theme.space.sm or theme.space.lg
+		local topInset = mobile and theme.space.hair or theme.space.xxs
+		local bottomInset = mobile and theme.space.hair or theme.space.sm
+		local controlGap = mobile and theme.space.xxs or theme.space.sm
 		local resizeComposer
 		local shell = P.frame(parent, {
 			name = "Composer", size = UDim2.new(1, 0, 0, controlHeight + inset * 3 + theme.space.xxs),
@@ -79,9 +84,9 @@ return function(env)
 			end
 		end
 		local surface = P.frame(shell, {
-			name = "ComposerSurface", size = UDim2.new(1, -theme.space.lg * 2, 0, controlHeight + inset * 2),
-			position = UDim2.fromOffset(theme.space.lg, theme.space.xxs),
-			bg = theme.color.surface, radius = theme.radius.lg,
+			name = "ComposerSurface", size = UDim2.new(1, -sideInset * 2, 0, controlHeight + inset * 2),
+			position = UDim2.fromOffset(sideInset, topInset),
+			bg = theme.color.surface, radius = mobile and theme.radius.md or theme.radius.lg,
 		})
 		local boxStroke = P.stroke(surface, theme.color.border)
 		local sendButton
@@ -501,10 +506,20 @@ return function(env)
 			})
 		end
 
+		local function stackedInput()
+			return composer.expanded and (not mobile or parent.AbsoluteSize.Y >=
+				controlHeight * 2 + inset * 2 + topInset + bottomInset + theme.space.xs + theme.space.sm)
+		end
 		local function promptHeight()
-			if composer.expanded then
-				return math.max(theme.text.body.height * 2 + theme.space.md,
+			if stackedInput() then
+				local wanted = math.max(theme.text.body.height * 2 + theme.space.md,
 					math.min(theme.size.composerExpanded, responsive.viewport.Y * 0.25))
+				if mobile then
+					local remaining = parent.AbsoluteSize.Y - controlHeight - theme.space.xs
+						- inset * 2 - topInset - bottomInset - theme.text.body.height * 2
+					wanted = math.min(wanted, math.max(controlHeight, remaining))
+				end
+				return wanted
 			end
 			return math.max(theme.size.control, theme.text.body.height, responsive.minTarget())
 		end
@@ -555,7 +570,7 @@ return function(env)
 			icon = "send",
 			variant = "primary",
 			diameter = controlHeight,
-			radius = theme.radius.lg,
+			radius = mobile and theme.radius.md or theme.radius.lg,
 			layoutOrder = 2,
 			onClick = function()
 				if composer.busy then
@@ -641,27 +656,28 @@ return function(env)
 		})
 		local function fitLabels()
 			if not alive() then return end
+			local expanded = stackedInput()
 			local width = math.max(surface.AbsoluteSize.X - inset * 2, 0)
-			local left = chipHeight + theme.space.xs
-			local right = controlHeight + chipHeight + theme.space.sm * 2
+			local left = chipHeight + (mobile and controlGap or theme.space.xs)
+			local right = controlHeight + chipHeight + controlGap * 2
 			-- Size to the actual label, not a permanent 144px slot around 'big-pickle'.
 			local measured = math.max(P.measureText(modelLabel.Text, { role = "caption" }).X, modelLabel.TextBounds.X)
 			local wanted = math.ceil(measured) + theme.size.dot + theme.size.icon + theme.space.xs * 4
-			local available = width - left - right - (composer.expanded and 0 or theme.size.composerFieldMin)
+			local available = width - left - right - (expanded and 0 or theme.size.composerFieldMin)
 			local modelWidth = math.max(0, math.min(wanted, theme.size.composerModel, available))
 			if modelWidth < math.min(wanted, theme.size.composerModelMin) then modelWidth = 0 end
 			modelChip.instance.Visible = modelWidth > 0
 			modelChip.instance.Size = UDim2.fromOffset(modelWidth, chipHeight)
-			modelChip.instance.AnchorPoint = composer.expanded and Vector2.new(0, 0.5) or Vector2.new(1, 0.5)
-			modelChip.instance.Position = composer.expanded and UDim2.new(0, left, 0.5, 0) or UDim2.new(1, -right, 0.5, 0)
+			modelChip.instance.AnchorPoint = expanded and Vector2.new(0, 0.5) or Vector2.new(1, 0.5)
+			modelChip.instance.Position = expanded and UDim2.new(0, left, 0.5, 0) or UDim2.new(1, -right, 0.5, 0)
 			plusButton.instance.AnchorPoint = Vector2.new(0, 0.5)
 			plusButton.instance.Position = UDim2.fromScale(0, 0.5)
 			moreButton.instance.AnchorPoint = Vector2.new(1, 0.5)
-			moreButton.instance.Position = UDim2.new(1, -(controlHeight + theme.space.sm), 0.5, 0)
+			moreButton.instance.Position = UDim2.new(1, -(controlHeight + controlGap), 0.5, 0)
 			sendButton.instance.AnchorPoint = Vector2.new(1, 0.5)
 			sendButton.instance.Position = UDim2.fromScale(1, 0.5)
-			fieldHolder.Position = UDim2.fromOffset(composer.expanded and 0 or left, 0)
-			fieldHolder.Size = UDim2.new(1, composer.expanded and 0
+			fieldHolder.Position = UDim2.fromOffset(expanded and 0 or left, 0)
+			fieldHolder.Size = UDim2.new(1, expanded and 0
 				or -(left + right + (modelWidth > 0 and modelWidth + theme.space.sm or 0)), 0, promptHeight())
 		end
 		local resizing = false
@@ -680,15 +696,16 @@ return function(env)
 				top = top + math.max(attachRow.AbsoluteSize.Y, chipHeight) + inset
 			end
 			local fieldHeight = promptHeight()
+			local expanded = stackedInput()
 			inputHolder.Position = UDim2.fromOffset(inset, top)
-			local inputHeight = fieldHeight + (composer.expanded and controlHeight + theme.space.xs or 0)
+			local inputHeight = fieldHeight + (expanded and controlHeight + theme.space.xs or 0)
 			inputHolder.Size = UDim2.new(1, -inset * 2, 0, inputHeight)
 			composer.field.shell.Size = UDim2.new(1, 0, 0, fieldHeight)
-			metaRow.Position = UDim2.fromOffset(0, composer.expanded and fieldHeight + theme.space.xs or 0)
+			metaRow.Position = UDim2.fromOffset(0, expanded and fieldHeight + theme.space.xs or 0)
 			metaRow.Size = UDim2.new(1, 0, 0, controlHeight)
 			local surfaceHeight = top + inputHeight + inset
-			surface.Size = UDim2.new(1, -theme.space.lg * 2, 0, surfaceHeight)
-			shell.Size = UDim2.new(1, 0, 0, surfaceHeight + theme.space.xxs + theme.space.sm)
+			surface.Size = UDim2.new(1, -sideInset * 2, 0, surfaceHeight)
+			shell.Size = UDim2.new(1, 0, 0, surfaceHeight + topInset + bottomInset)
 			fitLabels()
 			fitAttachments()
 			resizing = false
@@ -699,6 +716,7 @@ return function(env)
 		end)
 		modelLabel:GetPropertyChangedSignal("TextBounds"):Connect(fitLabels)
 		attachRow:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() resizeComposer() end)
+		if mobile then parent:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() resizeComposer() end) end
 
 		-- Everything on the meta row, from the real records ---------------------
 

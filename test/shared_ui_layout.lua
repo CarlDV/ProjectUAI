@@ -325,11 +325,11 @@ viewport(844, 390)
 responsive.touch, responsive.mode, responsive.bottomInset = true, "panel", 24
 local mobile = windowModule.new(root, { minHeight = 300 })
 mobile.show()
-bounds = responsive.usableRect(root, theme.space.sm)
+bounds = responsive.usableRect(root, theme.space.sm, false)
 local startX, startY = mobile.root.Position.X.Offset, mobile.root.Position.Y.Offset
-check("landscape mobile panel initially fills the safe height", mobile.root.Size.Y.Offset == bounds.height)
+check("landscape mobile panel leaves room to move without resizing", mobile.root.Size.Y.Offset < bounds.height)
 h.drag(mobile.header, 600, 30, 450, 60)
-check("full-height panel drags horizontally while its vertical bounds stay fixed", mobile.root.Position.X.Offset ~= startX and mobile.root.Position.Y.Offset == startY)
+check("mobile panel moves on both axes before resizing", mobile.root.Position.X.Offset ~= startX and mobile.root.Position.Y.Offset ~= startY)
 local mobileGrip = mobile.root:FindFirstChild("ResizeGrip")
 local gripPosition = mobileGrip.AbsolutePosition
 h.drag(mobileGrip, gripPosition.X, gripPosition.Y, gripPosition.X - 60, gripPosition.Y - 40)

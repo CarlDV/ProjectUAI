@@ -1,14 +1,13 @@
 -- The window shell: chrome, drag, resize, snap, maximise, and the three layout
 -- modes it has to be able to become.
 --
--- On a phone it is a bottom sheet that lifts above the on-screen keyboard. On a
--- small viewport it docks to the right edge full height. On a desktop it is a
+-- On a phone it is a movable sheet that lifts above the on-screen keyboard. On a
+-- small viewport it is a compact panel. On a desktop it is a
 -- floating window whose geometry is remembered. On a console it is a large centred
 -- panel with no drag, because there is no pointer to drag with.
 return function(env)
 	local util = env.require("runtime/util")
 	local config = env.require("runtime/config")
-	local clock = env.require("runtime/clock")
 	local log = env.require("runtime/log")
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
@@ -23,8 +22,14 @@ return function(env)
 
 	function M.new(parent, props)
 		props = props or {}
+		local mobile = responsive.isMobile()
 		local minWidth = props.minWidth or 320
-		local minHeight = props.minHeight or 280
+		local minHeight = mobile and math.min(props.minHeight or 280, 200) or (props.minHeight or 280)
+		local function geometryKey()
+			if responsive.mode == "sheet" then return "ui.mobileSheet" end
+			if responsive.mode == "panel" then return "ui.mobilePanel" end
+			return "ui.window"
+		end
 
 		-- The shell is a CanvasGroup only where that is safe.
 		--
@@ -52,7 +57,7 @@ return function(env)
 		root.ZIndex = theme.z.raised
 		root.ClipsDescendants = true
 		if fades then root.GroupTransparency = 1 end
-		P.corner(root, theme.radius.xl)
+		P.corner(root, mobile and theme.radius.lg or theme.radius.xl)
 		local outline = P.stroke(root, theme.color.border)
 
 		-- No UIScale on this, deliberately.
@@ -71,8 +76,9 @@ return function(env)
 		local handle = {
 			root = root,
 			visible = false,
-			maximised = config.get("ui.window.maximised", false) == true,
+			maximised = config.get(geometryKey() .. ".maximised", false) == true,
 		}
+		local layoutMode = responsive.mode
 
 		-- Everything this window leaves running outside its own instance tree, released
 		-- together by handle.destroy.
@@ -92,25 +98,18 @@ return function(env)
 		-- Geometry ------------------------------------------------------------
 
 		local function saveGeometry()
-			if destroyed or not handle.visible then return end
-			if responsive.mode == "panel" then
-				config.set("ui.mobilePanel.width", math.floor(root.AbsoluteSize.X), { quiet = true })
-				config.set("ui.mobilePanel.height", math.floor(root.AbsoluteSize.Y), { quiet = true })
-				config.set("ui.mobilePanel.x", math.floor(root.Position.X.Offset), { quiet = true })
-				config.set("ui.mobilePanel.y", math.floor(root.Position.Y.Offset), { quiet = true })
-				config.set("ui.mobilePanel.placed", true, { quiet = true })
-				return
-			end
-			if responsive.mode ~= "window" then return end
-			config.set("ui.window.width", math.floor(root.AbsoluteSize.X), { quiet = true })
-			config.set("ui.window.height", math.floor(root.AbsoluteSize.Y), { quiet = true })
-			config.set("ui.window.x", math.floor(root.Position.X.Offset), { quiet = true })
-			config.set("ui.window.y", math.floor(root.Position.Y.Offset), { quiet = true })
-			config.set("ui.window.placed", true, { quiet = true })
+			if destroyed or not handle.visible or handle.maximised or responsive.mode == "tv"
+				or responsive.keyboardHeight > 0 then return end
+			local key = geometryKey()
+			config.set(key .. ".width", math.floor(root.Size.X.Offset), { quiet = true })
+			config.set(key .. ".height", math.floor(root.Size.Y.Offset), { quiet = true })
+			config.set(key .. ".x", math.floor(root.Position.X.Offset), { quiet = true })
+			config.set(key .. ".y", math.floor(root.Position.Y.Offset), { quiet = true })
+			config.set(key .. ".placed", true, { quiet = true })
 		end
-
-		local persistGeometry, cancelGeometry = clock.debounce(saveGeometry, 0.6)
-		releases[#releases + 1] = cancelGeometry
+		-- Config already debounces disk writes. Record the release now so a keyboard
+		-- or viewport event cannot restore stale geometry before a second timer fires.
+		local persistGeometry = saveGeometry
 
 		-- A size that leaves the window on whole pixels when it is centred.
 		--
@@ -140,19 +139,23 @@ return function(env)
 			stopGestures()
 			local geometry = responsive.geometry()
 			local mode = responsive.mode
+			if layoutMode ~= mode then
+				layoutMode = mode
+				handle.maximised = config.get(geometryKey() .. ".maximised", false) == true
+			end
 			local viewport = responsive.viewport
-			local bounds = responsive.usableRect(parent, theme.space.sm)
-			local parentSize = parent.AbsoluteSize
+			local bounds = responsive.usableRect(parent, theme.space.sm, not responsive.isMobile())
+			local _, parentSize = responsive.parentGeometry(parent)
 			local availableY = parentSize.Y > 0 and parentSize.Y or viewport.Y
 			local availableX = parentSize.X > 0 and parentSize.X or viewport.X
 
-			if mode == "sheet" then
-				local height = math.min(geometry.height, bounds.height)
-				root.AnchorPoint = Vector2.new(0.5, 1)
-				root.Size = UDim2.fromOffset(bounds.width, math.floor(height))
-				root.Position = UDim2.fromOffset(math.floor(bounds.x + bounds.width / 2), math.floor(bounds.y + bounds.height))
-			elseif mode == "panel" then
-				local placed = config.get("ui.mobilePanel.placed", false)
+			if (mode == "sheet" or mode == "panel") and handle.maximised then
+				root.AnchorPoint = Vector2.new(0, 0)
+				root.Size = UDim2.fromOffset(math.floor(bounds.width), math.floor(bounds.height))
+				root.Position = UDim2.fromOffset(math.floor(bounds.x), math.floor(bounds.y))
+			elseif mode == "sheet" or mode == "panel" then
+				local key = geometryKey()
+				local placed = config.get(key .. ".placed", false)
 				local maxPanelWidth = bounds.width
 				local maxPanelHeight = bounds.height
 				local defaultWidth = math.min(geometry.width, maxPanelWidth)
@@ -160,21 +163,22 @@ return function(env)
 				local width = defaultWidth
 				local height = defaultHeight
 				if placed then
-					width = util.clamp(config.get("ui.mobilePanel.width", defaultWidth), math.min(minWidth, maxPanelWidth), maxPanelWidth)
-					height = util.clamp(config.get("ui.mobilePanel.height", defaultHeight), math.min(minHeight, maxPanelHeight), maxPanelHeight)
+					width = util.clamp(config.get(key .. ".width", defaultWidth), math.min(minWidth, maxPanelWidth), maxPanelWidth)
+					height = util.clamp(config.get(key .. ".height", defaultHeight), math.min(minHeight, maxPanelHeight), maxPanelHeight)
 				end
 				root.AnchorPoint = Vector2.new(0, 0)
 				root.Size = UDim2.fromOffset(math.floor(width), math.floor(height))
+				local defaultX = bounds.x + bounds.width - width
+				local defaultY = bounds.y
+				if mode == "sheet" then defaultY = bounds.y + bounds.height - height
+				elseif responsive.isMobile() then defaultY = bounds.y + (bounds.height - height) / 2 end
 				if placed then
-					local defaultX = bounds.x + bounds.width - width
-					local defaultY = bounds.y
 					root.Position = UDim2.fromOffset(
-						math.floor(config.get("ui.mobilePanel.x", defaultX)),
-						math.floor(config.get("ui.mobilePanel.y", defaultY)))
+						math.floor(config.get(key .. ".x", defaultX)),
+						math.floor(config.get(key .. ".y", defaultY)))
 					handle.clampIntoView()
 				else
-					root.Position = UDim2.fromOffset(
-						math.floor(bounds.x + bounds.width - width), math.floor(bounds.y))
+					root.Position = UDim2.fromOffset(math.floor(defaultX), math.floor(defaultY))
 				end
 			elseif mode == "tv" then
 				root.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -211,30 +215,20 @@ return function(env)
 		-- Keep the complete surface reachable, including its composer and footer,
 		-- after moving between viewports or opening the on-screen keyboard.
 		function handle.clampIntoView()
-			local viewport = responsive.viewport
-			local size = root.AbsoluteSize
-			local bounds = responsive.usableRect(parent, theme.space.xs)
-			if responsive.mode == "panel" then
-				local minX = bounds.x
-				local maxX = math.max(minX, bounds.x + bounds.width - size.X)
-				local minY = bounds.y
-				local maxY = math.max(minY, bounds.y + bounds.height - size.Y)
-				root.Position = UDim2.fromOffset(
-					math.floor(util.clamp(root.Position.X.Offset, minX, maxX)),
-					math.floor(util.clamp(root.Position.Y.Offset, minY, maxY)))
-				return
-			end
-			if responsive.mode ~= "window" then return end
-			local parentSize = parent.AbsoluteSize
-			local halfX = (parentSize.X > 0 and parentSize.X or viewport.X) * 0.5
-			local halfY = (parentSize.Y > 0 and parentSize.Y or viewport.Y) * 0.5
-			local minX = bounds.x + size.X / 2 - halfX
-			local maxX = math.max(minX, bounds.x + bounds.width - size.X / 2 - halfX)
-			local minY = bounds.y + size.Y / 2 - halfY
-			local maxY = math.max(minY, bounds.y + bounds.height - size.Y / 2 - halfY)
+			if responsive.mode == "tv" then return end
+			local size = root.Size
+			local bounds = responsive.usableRect(parent, theme.space.xs, false)
+			local _, parentSize = responsive.parentGeometry(parent)
+			-- Clamp the top-left edge in parent coordinates, then preserve the existing
+			-- anchor/scale. A sheet, panel and centred desktop window use different anchors.
+			local baseX = root.Position.X.Scale * parentSize.X - size.X.Offset * root.AnchorPoint.X
+			local baseY = root.Position.Y.Scale * parentSize.Y - size.Y.Offset * root.AnchorPoint.Y
+			local minX, minY = bounds.x - baseX, bounds.y - baseY
+			local maxX = math.max(minX, bounds.x + bounds.width - size.X.Offset - baseX)
+			local maxY = math.max(minY, bounds.y + bounds.height - size.Y.Offset - baseY)
 			root.Position = UDim2.new(
-				0.5, math.floor(util.clamp(root.Position.X.Offset, math.min(minX, maxX), math.max(minX, maxX))),
-				0.5, math.floor(util.clamp(root.Position.Y.Offset, math.min(minY, maxY), math.max(minY, maxY))))
+				root.Position.X.Scale, math.floor(util.clamp(root.Position.X.Offset, minX, maxX)),
+				root.Position.Y.Scale, math.floor(util.clamp(root.Position.Y.Offset, minY, maxY)))
 		end
 
 		-- Chrome --------------------------------------------------------------
@@ -243,7 +237,8 @@ return function(env)
 		-- max(control, minTarget()), which is 44 on a touch device, so a header fixed at
 		-- the 42px token clipped two pixels off every one of them there. Published so
 		-- the shell that fills the header uses the same number instead of the token.
-		local headerHeight = math.max(theme.size.header, responsive.minTarget() + theme.space.sm)
+		local headerHeight = mobile and math.max(responsive.minTarget(), theme.text.bodyStrong.height) + theme.space.xxs
+			or math.max(theme.size.header, responsive.minTarget() + theme.space.sm)
 		handle.headerHeight = headerHeight
 
 		-- The header is a transparent top bar across the active pane that provides
@@ -252,10 +247,11 @@ return function(env)
 			name = "Header",
 			size = UDim2.new(1, 0, 0, headerHeight),
 			gap = theme.space.sm,
-			padding = { x = theme.space.md },
+			padding = { x = mobile and theme.space.xs or theme.space.md },
 			zIndex = theme.z.header,
 		})
 		handle.header.BackgroundTransparency = 1
+		handle.header.Active = true
 
 		handle.body = P.frame(root, {
 			name = "Body",
@@ -272,13 +268,30 @@ return function(env)
 		local dragInput, resizeInput
 
 		local function draggableNow()
-			return (responsive.mode == "window" or responsive.mode == "panel") and not handle.maximised
+			return (responsive.mode == "window" or responsive.mode == "panel" or responsive.mode == "sheet") and not handle.maximised
+		end
+
+		local function overHeaderControl(input)
+			for _, child in ipairs(handle.header:GetDescendants()) do
+				if child:IsA("GuiButton") or child:IsA("TextBox") then
+					local shown, ancestor = true, child
+					while ancestor and ancestor ~= handle.header do
+						if ancestor:IsA("GuiObject") and not ancestor.Visible then shown = false; break end
+						ancestor = ancestor.Parent
+					end
+					local point, size = child.AbsolutePosition, child.AbsoluteSize
+					if shown and input.Position.X >= point.X and input.Position.X < point.X + size.X
+						and input.Position.Y >= point.Y and input.Position.Y < point.Y + size.Y then return true end
+				end
+			end
+			return false
 		end
 
 		handle.header.InputBegan:Connect(function(input)
 			local kind = input.UserInputType
 			if kind ~= Enum.UserInputType.MouseButton1 and kind ~= Enum.UserInputType.Touch then return end
 			if not draggableNow() or dragging or resizeInput or not handle.visible then return end
+			if overHeaderControl(input) then return end
 			dragging, moved = true, false
 			dragInput = input
 			origin = input.Position
@@ -315,10 +328,10 @@ return function(env)
 		-- dropped. Only the near edge snaps, and only within a small margin.
 		function handle.snap()
 			if not draggableNow() then return end
-			local viewport = parent.AbsoluteSize
-			local bounds = responsive.usableRect(parent, theme.space.sm)
+			local _, viewport = responsive.parentGeometry(parent)
+			local bounds = responsive.usableRect(parent, theme.space.sm, false)
 			local size = root.AbsoluteSize
-			if responsive.mode == "panel" then
+			if responsive.mode == "panel" or responsive.mode == "sheet" then
 				local x, y = root.Position.X.Offset, root.Position.Y.Offset
 				local leftGap = x - bounds.x
 				local rightGap = bounds.x + bounds.width - (x + size.X)
@@ -362,6 +375,7 @@ return function(env)
 		grip.Size = UDim2.fromOffset(gripSize, gripSize)
 		grip.ZIndex = theme.z.header + 2
 		grip.Selectable = false
+		handle.resizeGrip = grip
 
 		local function updateGrip()
 			local currentGripSize = responsive.touch and math.max(RESIZE_GRIP, responsive.minTarget()) or RESIZE_GRIP
@@ -374,8 +388,9 @@ return function(env)
 				name = "Grip" .. index,
 				size = UDim2.fromOffset(index * 5 + 1, 1),
 				anchor = Vector2.new(1, 1),
-				position = UDim2.new(1, -4, 1, -(index * 4)),
-				bg = theme.color.borderStrong,
+				position = mobile and UDim2.new(0.5, index * 3, 0.5, 4 - index * 4)
+					or UDim2.new(1, -4, 1, -(index * 4)),
+				bg = mobile and theme.color.textSecondary or theme.color.borderStrong,
 				radius = theme.radius.pill,
 			})
 			line.Rotation = -45
@@ -403,7 +418,7 @@ return function(env)
 					resizing = false
 					resizeInput = nil
 					if resizeConnection then resizeConnection:Disconnect(); resizeConnection = nil end
-					persistGeometry()
+					if input.UserInputState == Enum.UserInputState.End then persistGeometry() end
 					if handle.onLayout then pcall(handle.onLayout, responsive.mode, "resize") end
 				end
 			end)
@@ -416,9 +431,9 @@ return function(env)
 				if input ~= resizeInput then return end
 			elseif kind ~= Enum.UserInputType.MouseMovement then return end
 			local delta = input.Position - resizeOrigin
-			local viewport = parent.AbsoluteSize
-			local bounds = responsive.usableRect(parent, theme.space.sm)
-			if responsive.mode == "panel" then
+			local _, viewport = responsive.parentGeometry(parent)
+			local bounds = responsive.usableRect(parent, theme.space.sm, false)
+			if responsive.mode == "panel" or responsive.mode == "sheet" then
 				local maxWidth = bounds.width
 				local maxHeight = bounds.height
 				root.Size = UDim2.fromOffset(
@@ -440,12 +455,13 @@ return function(env)
 		end))
 
 		function handle.setMaximised(value)
+			if value == true and not handle.maximised then saveGeometry() end
 			handle.maximised = value == true
 			-- Quiet, like every other geometry write here: this is a record of where
 			-- the window is, not a setting anything else derives from, and a noisy
 			-- write used to reach the theme's config subscription and rebuild the
 			-- entire interface a fifth of a second after the maximise animation.
-			config.set("ui.window.maximised", handle.maximised, { quiet = true })
+			config.set(geometryKey() .. ".maximised", handle.maximised, { quiet = true })
 			updateGrip()
 			handle.layout("maximise")
 		end

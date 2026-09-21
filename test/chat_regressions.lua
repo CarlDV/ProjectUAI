@@ -360,8 +360,9 @@ scenario("composer stays pinned while transcript responds to measured heights", 
 	local middle = harness.byName("TranscriptHolder", chat)
 	local composer = panel.composer.shell
 	local todos = panel.todos.shell
+	local bottomInset = 3 -- The existing desktop gap; mobile uses the panel edge.
 	check("composer is anchored to its bottom edge", composer.AnchorPoint.Y == 1)
-	check("composer is positioned at panel bottom", composer.Position.Y.Scale == 1 and composer.Position.Y.Offset == 0)
+	check("composer preserves its desktop bottom inset", composer.Position.Y.Scale == 1 and composer.Position.Y.Offset == -bottomInset)
 	check("chat does not use a competing flex stack", chat:FindFirstChildOfClass("UIListLayout") == nil)
 	local cases = {
 		{ height = 520, composer = 62, plan = 0 },
@@ -377,9 +378,9 @@ scenario("composer stays pinned while transcript responds to measured heights", 
 		local height = middle.Size.Y.Scale * spec.height + middle.Size.Y.Offset
 		local top = middle.Position.Y.Scale * spec.height + middle.Position.Y.Offset
 		check("transcript begins below plan, case " .. index, top == spec.plan)
-		check("transcript fills remaining height, case " .. index, height == spec.height - spec.plan - spec.composer)
-		check("transcript ends at composer without a dead gap, case " .. index, top + height == spec.height - spec.composer)
-		check("composer stays bottom-pinned, case " .. index, composer.Position.Y.Scale == 1 and composer.Position.Y.Offset == 0)
+		check("transcript fills remaining height, case " .. index, height == spec.height - spec.plan - spec.composer - bottomInset)
+		check("transcript ends at composer without a dead gap, case " .. index, top + height == spec.height - spec.composer - bottomInset)
+		check("composer stays bottom-pinned, case " .. index, composer.Position.Y.Scale == 1 and composer.Position.Y.Offset == -bottomInset)
 	end
 	harness.settle(0.2)
 	check("geometry updates have no thread errors", #harness.errors() == 0)

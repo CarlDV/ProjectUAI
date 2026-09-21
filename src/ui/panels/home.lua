@@ -331,6 +331,7 @@ return function(env)
 	-- column it is being dropped into -- the transcript, in practice.
 	function M.card(parent, order, props)
 		props = props or {}
+		local mobile = responsive.isMobile()
 		local name = "there"
 		local okName, display = pcall(function()
 			return env.plr and env.plr.DisplayName
@@ -346,8 +347,9 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
 			alignX = "Center",
-			gap = theme.space.xl,
-			padding = { top = theme.space.xxl, bottom = theme.space.lg },
+			gap = mobile and theme.space.sm or theme.space.xl,
+			padding = { top = mobile and theme.space.xxs or theme.space.xxl,
+				bottom = mobile and theme.space.sm or theme.space.lg },
 			layoutOrder = order,
 		})
 
@@ -356,19 +358,20 @@ return function(env)
 			size = UDim2.new(1, 0, 0, 0),
 			auto = "Y",
 			alignX = "Center",
-			gap = theme.space.md,
+			gap = mobile and theme.space.xxs or theme.space.md,
 			layoutOrder = 1,
 		})
 		local brandSlot = P.frame(greeting, {
 			name = "HomeBrand",
 			size = UDim2.fromOffset(theme.size.controlLarge, theme.size.controlLarge),
+			visible = not mobile,
 			layoutOrder = 1,
 		})
 		icons.brand(brandSlot, theme.size.controlLarge)
 		P.text(greeting, {
 			name = "GreetingText",
-			text = string.format("What will we create, %s?", name),
-			role = "display",
+			text = mobile and "What will we create?" or string.format("What will we create, %s?", name),
+			role = mobile and "title" or "display",
 			color = theme.color.text,
 			align = "Center",
 			wrap = true,
@@ -376,36 +379,46 @@ return function(env)
 			layoutOrder = 2,
 		})
 
-		P.text(greeting, {
+		local subtitle = P.text(greeting, {
 			name = "GreetingSubtitle", text = "Your ideas. Your game. An agent to help make it happen.",
 			role = "small", color = theme.color.textTertiary, align = "Center", wrap = true,
 			auto = "Y", size = UDim2.new(1, 0, 0, 0), layoutOrder = 3,
 		})
+		subtitle.Visible = not mobile
 		if props.onInsert then
 			local grid = P.frame(holder, {
 				name = "PromptStarters", size = UDim2.new(1, 0, 0, 0),
 				maxSize = Vector2.new(theme.size.statCard, math.huge), layoutOrder = 2,
 			})
 			local cards = {}
+			local minStarterWidth = 0
 			for index, entry in ipairs(env.require("ui/chat/prompts").items) do
+				minStarterWidth = math.max(minStarterWidth, P.measureText(entry.label, { role = "small" }).X
+					+ theme.size.icon + theme.space.xs + theme.space.sm * 2)
 				local card = P.rowButton(grid, {
-					name = "Starter_" .. entry.id, vertical = true, size = UDim2.fromOffset(0, theme.size.promptCard),
-					bg = theme.color.surface, stroke = true, radius = theme.radius.lg, gap = theme.space.xs,
-					padding = theme.space.md, alignX = "Left", alignY = "Top",
+					name = "Starter_" .. entry.id, vertical = not mobile, size = UDim2.fromOffset(0, theme.size.promptCard),
+					bg = not mobile and theme.color.surface or nil, stroke = not mobile,
+					radius = mobile and theme.radius.md or theme.radius.lg, gap = theme.space.xs,
+					padding = mobile and { x = theme.space.sm, y = theme.space.xxs } or theme.space.md,
+					alignX = "Left", alignY = mobile and "Center" or "Top",
 					onClick = function() props.onInsert(entry.text) end,
 				})
 				card.icon(entry.icon, 1, theme.color.accentHot, theme.size.icon)
-				P.text(card.row, { text = entry.label, role = "label", layoutOrder = 2,
-					size = UDim2.new(1, 0, 0, theme.text.label.height), truncate = true })
-				P.text(card.row, { text = entry.detail, role = "caption", color = theme.color.textTertiary,
-					layoutOrder = 3, size = UDim2.new(1, 0, 0, 0), auto = "Y", wrap = true })
+				P.text(card.row, { text = entry.label, role = mobile and "small" or "label", layoutOrder = 2,
+					flex = mobile and "Fill" or nil,
+					size = UDim2.new(mobile and 0 or 1, 0, 0, mobile and theme.text.small.height or theme.text.label.height), truncate = true })
+				if not mobile then
+					P.text(card.row, { text = entry.detail, role = "caption", color = theme.color.textTertiary,
+						layoutOrder = 3, size = UDim2.new(1, 0, 0, 0), auto = "Y", wrap = true })
+				end
 				cards[index] = card.instance
 			end
 			local function fitStarters()
-				local columns = grid.AbsoluteSize.X >= theme.size.promptColumns and 2 or 1
+				local columns = grid.AbsoluteSize.X >= (mobile and minStarterWidth * 2 + theme.space.sm or theme.size.promptColumns) and 2 or 1
 				local gap = theme.space.sm
 				local height = math.max(theme.size.promptCard,
 					theme.size.icon + theme.text.label.height + theme.text.caption.height * 2 + theme.space.md * 2 + theme.space.xs * 2)
+				if mobile then height = math.max(responsive.minTarget(), theme.text.small.height + theme.space.xxs * 2) end
 				for index, card in ipairs(cards) do
 					local col = (index - 1) % columns
 					local row = math.floor((index - 1) / columns)

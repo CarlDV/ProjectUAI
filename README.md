@@ -118,6 +118,13 @@ collapsed; consecutive trace updates share a disclosure until a tool separates t
 The model picker keeps search and selection stable, and its provider selector and
 the composer's model chip size to their actual labels.
 
+**Mobile layout.** A compact header, composer and prompt list leave more room for
+chat while keeping 44px touch targets. Drag the title to move the window anywhere
+inside the device's safe area, including in portrait. The header's resize grip
+adjusts its size; the expand button fills the available screen and restores your
+previous placement. Portrait and landscape layouts remember their positions
+separately, and the keyboard temporarily lifts the panel without overwriting them.
+
 **Managed in-game chat loops.** Ask for a quiz, rotating announcements, or keyword
 replies. `quiz_bot`, `auto_chat`, and `auto_reply` return a background job immediately;
 `chat_loop_status` reports progress and quiz scores, and `chat_loop_stop` stops jobs.
@@ -320,6 +327,7 @@ luajit test/controls_interactions.lua
 luajit test/markdown_regressions.lua
 luajit test/markdown_tables.lua
 luajit test/shared_ui_layout.lua
+luajit test/mobile_ui.lua
 luajit test/panel_layout_regressions.lua
 luajit test/model_picker.lua
 luajit test/chat_loops.lua
@@ -360,6 +368,17 @@ pane builds, and that search finds a conversation by something said inside it.
 luajit test/run.lua identity      # run one scenario
 luajit test/mock/selftest.lua     # check the mocks themselves
 ```
+
+Lune can also compile all source modules and the shipped bundle with the real
+Luau compiler, then run a scenario file through the same offline harness:
+
+```bash
+lune run test/lune_runner.luau test/mobile_ui.lua
+lune run test/lune_runner.luau test/shared_ui_layout.lua
+```
+
+These checks use mocked Roblox services. They verify code, geometry and
+interactions, but do not render native Roblox text or GUI layouts.
 
 ## Public showcase website
 

@@ -487,6 +487,7 @@ function M.build(dt)
 	local function checkType(self, key, value)
 		if value == nil then return end
 		local expected = PROPERTY_TYPES[key]
+		if self.__class == "UIGradient" and key == "Transparency" then expected = "NumberSequence" end
 		if not expected then
 			local geometry = isA(self.__class, "GuiObject") and GUI_GEOMETRY
 				or ((isA(self.__class, "BasePart") or isA(self.__class, "Attachment")) and WORLD_GEOMETRY)

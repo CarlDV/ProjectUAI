@@ -486,10 +486,27 @@ is a plain `Frame` with no group fade; it loses a tenth of a second of fade and 
 legible.
 
 Breakpoints: `xs < 520`, `sm < 900`, `md < 1280`, `lg < 1700`, `xl`. Layout modes:
-`sheet` (xs), `panel` (sm, and any portrait orientation), `window` (md+), plus `tv`
+`sheet` (xs), `panel` (sm, touch-only input, and any portrait orientation), `window` (md+), plus `tv`
 when `GuiService:IsTenFootInterface()`. Minimum touch target is 44px on a touch
 device, 28px with a pointer, 48px on a console. Navigation is reachable in every
 mode: the sidebar in `window`, the app menu in the header everywhere else.
+
+Mobile chrome trims padding rather than touch targets: at default density its
+header is 48px and its collapsed composer is 56px. The welcome view uses compact
+prompt rows and omits the large decorative mark and subtitle. Desktop chrome and
+spacing retain their existing dimensions. Mobile resize lives in the header so
+its touch target cannot cover Send; a separate expand action restores the previous
+size and position. In short keyboard space, multiline input uses one compact row
+without changing the draft or its multiline editing mode.
+
+Sheets, panels and desktop windows can all be moved. Default desktop placement
+avoids CoreGui's top bar, but dragging and restoring a chosen position use the full
+device-safe parent, measured through a transparent frame inside the ScreenGui.
+The top-bar inset is not a physical obstruction across that whole parent. Geometry
+is recorded on release, separately in `ui.window`, `ui.mobilePanel` and
+`ui.mobileSheet`; maximised or keyboard-constrained sizes never overwrite a normal
+placement. Keyboard dismissal restores it. Header controls do not initiate drags,
+and each gesture continues to follow only the input that began it.
 
 Profile avatars start with a readable initial behind a renderable image. A deferred
 worker resolves a ready headshot through `Players:GetUserThumbnailAsync` and calls

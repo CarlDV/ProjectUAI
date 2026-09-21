@@ -17,12 +17,15 @@ return function(env)
 
 	function M.new(parent, props)
 		props = props or {}
+		local mobile = responsive.isMobile()
 
 		local scroll = P.scroll(parent, {
 			name = "Transcript",
 			size = props.size or UDim2.new(1, 0, 1, 0),
-			gap = theme.space.lg,
-			padding = { x = theme.space.lg, top = theme.space.xl, bottom = theme.space.lg },
+			gap = mobile and theme.space.sm or theme.space.lg,
+			padding = { x = mobile and theme.space.sm or theme.space.lg,
+				top = mobile and theme.space.sm or theme.space.xl,
+				bottom = mobile and theme.space.sm or theme.space.lg },
 			fade = false,
 		})
 

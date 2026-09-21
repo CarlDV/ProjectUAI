@@ -274,7 +274,7 @@ return function(env)
 			preferred = Vector2.new(config.get("ui.launcher.x", 0), config.get("ui.launcher.y", 0))
 		end
 		local function positionAt(x, y)
-			local bounds = responsive.usableRect(M.screen, theme.space.xs)
+			local bounds = responsive.usableRect(M.screen, theme.space.xs, false)
 			button.Position = UDim2.fromOffset(
 				math.floor(util.clamp(x, bounds.x, math.max(bounds.x, bounds.x + bounds.width - diameter))),
 				math.floor(util.clamp(y, bounds.y, math.max(bounds.y, bounds.y + bounds.height - diameter))))
@@ -566,6 +566,7 @@ return function(env)
 	-- left a tablet in portrait and a console with no way to change panel at all.
 	function M.buildChrome()
 		local header = M.window.header
+		local mobile = responsive.isMobile()
 		local sidebarWidth = theme.size.sidebar
 		local showSidebar = M.sidebarVisible()
 		local headerHeight = M.window.headerHeight or theme.size.header
@@ -639,6 +640,7 @@ return function(env)
 		local brandSlot = P.frame(left, {
 			name = "HeaderBrand",
 			size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+			visible = not mobile,
 			layoutOrder = 3,
 		})
 		icons.brand(brandSlot, theme.size.icon)
@@ -672,6 +674,7 @@ return function(env)
 			size = UDim2.new(1, 0, 0, math.ceil(theme.text.caption.size * theme.line.tight)),
 			layoutOrder = 2,
 		})
+		M.subtitleLabel.Visible = not mobile
 
 		local right = P.row(header, {
 			name = "Right",
@@ -686,7 +689,25 @@ return function(env)
 			alignX = "Right",
 		})
 
-		if responsive.mode == "window" then
+		if mobile then
+			-- The old 44px corner hit area covered Send on a phone. Put resizing in
+			-- the header so the entire composer remains available for typing/tapping.
+			local grip = M.window.resizeGrip
+			grip.Parent = right
+			grip.AnchorPoint = Vector2.new(0, 0)
+			grip.Position = UDim2.fromOffset(0, 0)
+			grip.LayoutOrder = 1
+			P.iconButton(right, {
+				name = "ExpandPanel",
+				icon = M.window.maximised and "minus" or "windowMaximize",
+				diameter = responsive.minTarget(),
+				layoutOrder = 2,
+				onClick = function(button)
+					M.window.toggleMaximised()
+					button.setIcon(M.window.maximised and "minus" or "windowMaximize")
+				end,
+			})
+		elseif responsive.mode == "window" then
 			local minimize = P.iconButton(right, {
 				name = "Minimize",
 				icon = "minus",
@@ -831,7 +852,7 @@ return function(env)
 		-- Lifted off the panel's bottom edge by the same inset the sidebar gives its
 		-- own bottom row, so the composer's bottom lines up with the profile bar's
 		-- rather than sitting flush against the window edge below it.
-		local BOTTOM_GAP = 3
+		local BOTTOM_GAP = responsive.isMobile() and 0 or 3
 		panel.composer.shell.AnchorPoint = Vector2.new(0, 1)
 		panel.composer.shell.Position = UDim2.new(0, 0, 1, -BOTTOM_GAP)
 

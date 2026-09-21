@@ -64,6 +64,7 @@ return function(env)
 		if forced and forced ~= "auto" then return forced end
 		if M.console then return "tv" end
 		if breakpoint == "xs" then return "sheet" end
+		if M.touch and not M.pointer then return "panel" end
 		if breakpoint == "sm" then return "panel" end
 		if M.orientation == "portrait" then return "panel" end
 		return "window"
@@ -146,7 +147,9 @@ return function(env)
 	-- Continuous changes fire `changed`; a real mode switch also fires
 	-- `modeChanged`, which is the only one that triggers a rebuild.
 	local function refresh(reason)
+		local wasMobile = M.isMobile()
 		local switched = sample()
+		switched = switched or wasMobile ~= M.isMobile()
 		M.changed:fire({ reason = reason, mode = M.mode, breakpoint = M.breakpoint, viewport = M.viewport })
 		if switched then
 			log.debug("responsive", string.format("%s -> %s at %dx%d (%s)",
@@ -165,6 +168,7 @@ return function(env)
 		for _, release in ipairs(releases) do release() end
 		releases = {}
 		if cameraRelease then cameraRelease(); cameraRelease = nil end
+		if M.screenFrame then M.screenFrame:Destroy(); M.screenFrame = nil end
 		M.ready = false
 		M.screen = nil
 	end
@@ -172,6 +176,16 @@ return function(env)
 	function M.init(screenGui)
 		M.destroy()
 		M.screen = screenGui
+		-- Measure the coordinate space children actually occupy. ScreenGui's own
+		-- origin is not a reliable stand-in for its device-safe content origin.
+		local frame = Instance.new("Frame")
+		frame.Name = "Viewport"
+		frame.BackgroundTransparency = 1
+		frame.BorderSizePixel = 0
+		frame.Size = UDim2.fromScale(1, 1)
+		frame.Active = false
+		frame.Parent = screenGui
+		M.screenFrame = frame
 		sample()
 		M.ready = true
 
@@ -191,6 +205,9 @@ return function(env)
 		end
 
 		bindCamera()
+		for _, property in ipairs({ "AbsoluteSize", "AbsolutePosition" }) do
+			watch(frame:GetPropertyChangedSignal(property):Connect(debouncedRefresh))
+		end
 		-- The camera instance itself is replaced on respawn in some games, so the
 		-- workspace is watched too.
 		pcall(function()
@@ -234,6 +251,7 @@ return function(env)
 			generation = generation + 1
 			M.ready = false
 			M.screen = nil
+			M.screenFrame = nil
 		end, "responsive lifetime")
 
 		log.info("responsive", string.format("%s / %s at %dx%d, touch %s, gamepad %s",
@@ -258,6 +276,11 @@ return function(env)
 		return M.mode == "sheet"
 	end
 
+	function M.isMobile()
+		return M.touch and not M.console
+			and (not M.pointer or M.mode == "sheet" or M.mode == "panel")
+	end
+
 	function M.isCompactHeight()
 		return M.viewport.Y < 520 or M.keyboardHeight > 0
 	end
@@ -269,14 +292,15 @@ return function(env)
 		if M.mode == "sheet" then
 			return {
 				width = width,
-				height = math.floor(height * (M.orientation == "portrait" and 0.72 or 0.9)),
+				height = math.floor(height * (M.isMobile() and 0.64 or (M.orientation == "portrait" and 0.72 or 0.9))),
 				anchored = "bottom",
 			}
 		end
 		if M.mode == "panel" then
 			return {
 				width = math.floor(util.clamp(width * 0.52, 320, 460)),
-				height = math.floor(height - M.inset.Y - 24),
+				height = M.isMobile() and math.floor(util.clamp(height * 0.74, 220, 560))
+					or math.floor(height - M.inset.Y - 24),
 				anchored = "right",
 			}
 		end
@@ -300,18 +324,30 @@ return function(env)
 		return math.max(M.keyboardHeight, M.bottomInset)
 	end
 
-	-- Safe bounds in the caller's coordinate space. ScreenGui already removes its
-	-- inset; subtracting it again is what displaced centred surfaces below headers.
-	function M.usableRect(relative, margin)
-		margin = margin or 0
+	function M.parentGeometry(relative)
+		if relative == M.screen and M.screenFrame then relative = M.screenFrame end
 		local origin = relative and relative.AbsolutePosition or Vector2.new(0, 0)
 		local size = relative and relative.AbsoluteSize or M.viewport
 		if size.X <= 0 or size.Y <= 0 then size = M.viewport end
+		return origin, size
+	end
+
+	-- Default placement avoids the top bar. Moving a surface can use the entire
+	-- device-safe parent: GetGuiInset describes CoreGui's reserved band, not a
+	-- physical obstruction across the whole screen. Treating it as a drag limit
+	-- strands both the window and launcher far below the top on some clients.
+	function M.usableRect(relative, margin, avoidTopbar)
+		margin = margin or 0
+		local origin, size = M.parentGeometry(relative)
 		margin = math.max(0, math.min(margin, (math.min(size.X, size.Y) - 1) / 2))
-		local left = math.max(0, M.inset.X - origin.X) + margin
-		local top = math.max(0, M.inset.Y - origin.Y) + margin
-		local right = math.min(size.X, M.viewport.X - origin.X) - margin
-		local bottom = math.min(size.Y, M.viewport.Y - M.bottomObstruction() - origin.Y) - margin
+		local left = (avoidTopbar == false and 0 or math.max(0, M.inset.X - origin.X)) + margin
+		local top = (avoidTopbar == false and 0 or math.max(0, M.inset.Y - origin.Y)) + margin
+		-- Camera.ViewportSize and GUI pixels can differ under client/display scaling.
+		-- Mixing them caps movement at a fraction of the visible screen. Use the
+		-- measured GUI extent for both axes, keeping the camera as a boot fallback.
+		local screenOrigin, screenSize = M.parentGeometry(M.screen)
+		local right = math.min(size.X, screenOrigin.X + screenSize.X - origin.X) - margin
+		local bottom = math.min(size.Y, screenOrigin.Y + screenSize.Y - M.bottomObstruction() - origin.Y) - margin
 		return { x = left, y = top, width = math.max(1, right - left), height = math.max(1, bottom - top) }
 	end
 

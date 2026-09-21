@@ -67,6 +67,16 @@ end)
 sched.advance(0)
 check("defer runs after the current thread", table.concat(order, " "), "inline deferred")
 
+local ui = require("env").new()
+local gradient = ui.Instance.new("UIGradient")
+gradient.Transparency = ui.dt.NumberSequence.new(0.5)
+check("gradient transparency accepts a NumberSequence", #ui.instanceState.typeErrors, 0)
+gradient.Transparency = 0.5
+check("gradient transparency rejects a scalar", #ui.instanceState.typeErrors, 1)
+local stroke = ui.Instance.new("UIStroke")
+stroke.Transparency = 0.5
+check("stroke transparency still accepts a scalar", #ui.instanceState.typeErrors, 1)
+
 print(("-"):rep(60))
 print(failures == 0 and "mock selftest: all checks passed" or ("mock selftest: " .. failures .. " failure(s)"))
 os.exit(failures > 0 and 1 or 0)

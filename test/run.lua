@@ -5428,8 +5428,8 @@ scenario("mobile panel can be moved and resized, and burger menu stays within sc
 	harness.drag(harness.byName("Header"), 600, 30, 450, 60)
 	harness.settle(4)
 	truthy("dragging header moves the mobile panel horizontally", window.root.Position.X.Offset ~= startPosX)
-	local safe = responsive.usableRect(window.root.Parent, handle.env.require("ui/theme").space.sm)
-	truthy("full-height panel stays inside safe vertical bounds", window.root.Position.Y.Offset >= safe.y
+	local safe = responsive.usableRect(window.root.Parent, handle.env.require("ui/theme").space.sm, false)
+	truthy("mobile panel stays inside device-safe vertical bounds", window.root.Position.Y.Offset >= safe.y
 		and window.root.Position.Y.Offset + window.root.Size.Y.Offset <= safe.y + safe.height)
 	truthy("panel geometry saved to mobilePanel", config.get("ui.mobilePanel.placed", false))
 	check("desktop window geometry was not touched", config.get("ui.window.placed", false), false)
@@ -5445,7 +5445,7 @@ scenario("mobile panel can be moved and resized, and burger menu stays within sc
 	truthy("panel stays on screen", window.root.Position.Y.Offset >= 0)
 	local beforeY = window.root.Position.Y.Offset
 	local headerPos = window.header.AbsolutePosition
-	harness.drag(window.header, headerPos.X + 30, headerPos.Y + 20, headerPos.X + 10, headerPos.Y + 45)
+	harness.drag(window.header, headerPos.X + 96, headerPos.Y + 20, headerPos.X + 76, headerPos.Y + 45)
 	harness.settle(1)
 	truthy("shorter panel can move vertically", window.root.Position.Y.Offset ~= beforeY)
 
