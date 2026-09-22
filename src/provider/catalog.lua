@@ -63,6 +63,9 @@ return function(env)
 			-- Keep the existing OpenCode request compatibility headers, scoped to the
 			-- official host, without mixing in the Claude Code identity.
 			claudeUa = false,
+			-- Featured alongside HCNSEC: OpenCode's own relay, with free-tier models
+			-- and the compatibility headers the official client sends.
+			featured = true,
 			note = "OpenCode's relay with OpenCode-compatible request headers. Use your Zen key, fetch current models, and select a model supported by the configured API protocol.",
 		},
 		{

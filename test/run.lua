@@ -5859,6 +5859,7 @@ scenario("a first-run client is pointed at the featured provider", function()
 	local featured = harness.byName("Featured")
 	truthy("the featured card is shown", featured ~= nil, harness.dump())
 	check("naming HCNSEC", harness.byName("FeaturedName").Text, "HCNSEC")
+	check("both featured providers get a card", #harness.allByName("Featured"), 2)
 
 	-- The referral link, rendered in full and exactly as the catalog carries it.
 	local url = harness.byName("FeaturedUrl")
@@ -5874,6 +5875,11 @@ scenario("a first-run client is pointed at the featured provider", function()
 	check("pointing at the api host", preset.baseUrl, "https://api.hcnsec.cn/v1")
 	check("with the sign-up page as its docs", preset.docs, "https://api.hcnsec.cn/sign-up?aff=drd9")
 	check("and marked featured", preset.featured, true)
+
+	-- The second featured road: OpenCode Zen, catalog-ordered after HCNSEC.
+	local zen = catalog.get("zen")
+	check("OpenCode Zen is featured too", zen and zen.featured, true)
+	check("pointing at the Zen relay", zen.baseUrl, "https://opencode.ai/zen/v1")
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)

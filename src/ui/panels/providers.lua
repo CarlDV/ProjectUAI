@@ -736,134 +736,141 @@ return function(env)
 		M.editor(registry.blank("custom"), onSaved)
 	end
 
-	-- The featured provider card.
+	-- The featured provider cards.
 	--
-	-- One recommended place to start, shown to a client with no provider configured:
+	-- Recommended places to start, shown to a client with no provider configured:
 	-- the name, the sign-up address (selectable and copyable -- a client GUI cannot
 	-- open a browser, so the address has to be readable text, not a hidden
 	-- destination), and one button that opens the editor seeded from the preset.
 	-- The link keeps its referral parameter exactly as the catalog carries it.
+	-- Every preset marked featured gets its own card, in catalog order.
 	function M.featuredCard(parent, onSetup, nextOrder)
-		local featured
-		for _, preset in ipairs(catalog.presets) do
-			if preset.featured then featured = preset break end
-		end
-		if not featured then return nil end
+		local built = nil
 
-		local card = P.card(parent, {
-			name = "Featured",
-			gap = theme.space.sm,
-			layoutOrder = type(nextOrder) == "function" and nextOrder() or 1,
-			-- The accent border is the one thing that says "start here" on a panel
-			-- that is otherwise all neutral surfaces; P.card has already drawn a
-			-- border, so this recolours it rather than adding a second stroke.
-			strokeColor = theme.color.accentBorder,
-		})
-
-		local head = P.row(card, {
-			name = "FeaturedHead",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			gap = theme.space.xs,
-			layoutOrder = 1,
-		})
-		local headText = P.column(head, {
-			name = "HeadText",
-			size = UDim2.new(0, 0, 0, 0),
-			auto = "Y",
-			flex = "Fill",
-			gap = 0,
-			layoutOrder = 1,
-		})
-		P.text(headText, {
-			name = "FeaturedTitle",
-			text = "Featured",
-			role = "overline",
-			color = theme.color.accent,
-			size = UDim2.new(1, 0, 0, theme.text.overline.height),
-			layoutOrder = 1,
-		})
-		P.text(headText, {
-			name = "FeaturedName",
-			text = tostring(featured.label),
-			truncate = true,
-			role = "title",
-			color = theme.color.text,
-			size = UDim2.new(1, 0, 0, theme.text.title.height),
-			layoutOrder = 2,
-		})
-
-		if featured.note then
-			local note = P.text(card, {
-				name = "FeaturedNote",
-				text = tostring(featured.note),
-				role = "small",
-				color = theme.color.textSecondary,
-				wrap = true,
-				auto = "Y",
-				layoutOrder = 2,
+		local function build(featured)
+			local card = P.card(parent, {
+				name = "Featured",
+				gap = theme.space.sm,
+				layoutOrder = type(nextOrder) == "function" and nextOrder() or 1,
+				-- The accent border is the one thing that says "start here" on a panel
+				-- that is otherwise all neutral surfaces; P.card has already drawn a
+				-- border, so this recolours it rather than adding a second stroke.
+				strokeColor = theme.color.accentBorder,
 			})
-			note.Size = UDim2.new(1, 0, 0, 0)
-		end
 
-		-- The sign-up address. Copyable with one press, and visible in full so it
-		-- can be selected by hand or read onto another device.
-		if featured.docs then
-			local linkRow = P.row(card, {
-				name = "FeaturedLink",
+			local head = P.row(card, {
+				name = "FeaturedHead",
 				size = UDim2.new(1, 0, 0, 0),
 				auto = "Y",
 				gap = theme.space.xs,
-				layoutOrder = 3,
-			})
-			local linkText = P.text(linkRow, {
-				name = "FeaturedUrl",
-				text = tostring(featured.docs),
-				role = "small",
-				color = theme.color.accent,
-				wrap = true,
-				auto = "Y",
-				size = UDim2.new(0, 0, 0, 0),
-				flex = "Fill",
 				layoutOrder = 1,
 			})
-			if caps.clipboard then
-				P.iconButton(linkRow, {
-					name = "CopyFeaturedLink",
-					icon = "copy",
-					diameter = theme.size.controlSmall,
+			local headText = P.column(head, {
+				name = "HeadText",
+				size = UDim2.new(0, 0, 0, 0),
+				auto = "Y",
+				flex = "Fill",
+				gap = 0,
+				layoutOrder = 1,
+			})
+			P.text(headText, {
+				name = "FeaturedTitle",
+				text = "Featured",
+				role = "overline",
+				color = theme.color.accent,
+				size = UDim2.new(1, 0, 0, theme.text.overline.height),
+				layoutOrder = 1,
+			})
+			P.text(headText, {
+				name = "FeaturedName",
+				text = tostring(featured.label),
+				truncate = true,
+				role = "title",
+				color = theme.color.text,
+				size = UDim2.new(1, 0, 0, theme.text.title.height),
+				layoutOrder = 2,
+			})
+
+			if featured.note then
+				local note = P.text(card, {
+					name = "FeaturedNote",
+					text = tostring(featured.note),
+					role = "small",
+					color = theme.color.textSecondary,
+					wrap = true,
+					auto = "Y",
 					layoutOrder = 2,
-					onClick = function()
-						local ok = pcall(caps.fn.clipboard, tostring(featured.docs))
-						overlay.toast(ok and "Link copied" or "Could not reach the clipboard",
-							ok and "good" or "warn", 2)
-					end,
 				})
+				note.Size = UDim2.new(1, 0, 0, 0)
 			end
+
+			-- The sign-up address. Copyable with one press, and visible in full so it
+			-- can be selected by hand or read onto another device.
+			if featured.docs then
+				local linkRow = P.row(card, {
+					name = "FeaturedLink",
+					size = UDim2.new(1, 0, 0, 0),
+					auto = "Y",
+					gap = theme.space.xs,
+					layoutOrder = 3,
+				})
+				local linkText = P.text(linkRow, {
+					name = "FeaturedUrl",
+					text = tostring(featured.docs),
+					role = "small",
+					color = theme.color.accent,
+					wrap = true,
+					auto = "Y",
+					size = UDim2.new(0, 0, 0, 0),
+					flex = "Fill",
+					layoutOrder = 1,
+				})
+				if caps.clipboard then
+					P.iconButton(linkRow, {
+						name = "CopyFeaturedLink",
+						icon = "copy",
+						diameter = theme.size.controlSmall,
+						layoutOrder = 2,
+						onClick = function()
+							local ok = pcall(caps.fn.clipboard, tostring(featured.docs))
+							overlay.toast(ok and "Link copied" or "Could not reach the clipboard",
+								ok and "good" or "warn", 2)
+						end,
+					})
+				end
+			end
+
+			local actions = P.row(card, {
+				name = "FeaturedActions",
+				size = UDim2.new(1, 0, 0, 0),
+				auto = "Y",
+				gap = theme.space.sm,
+				layoutOrder = 4,
+			})
+			P.button(actions, {
+				name = "FeaturedSetup",
+				text = "Set up " .. tostring(featured.label),
+				variant = "primary",
+				size = "sm",
+				fill = true,
+				layoutOrder = 1,
+				onClick = function()
+					local preset = catalog.get(featured.id)
+					if not preset then return end
+					M.editor(registry.blank(preset.id), onSetup)
+				end,
+			})
+
+			return card
 		end
 
-		local actions = P.row(card, {
-			name = "FeaturedActions",
-			size = UDim2.new(1, 0, 0, 0),
-			auto = "Y",
-			gap = theme.space.sm,
-			layoutOrder = 4,
-		})
-		P.button(actions, {
-			name = "FeaturedSetup",
-			text = "Set up " .. tostring(featured.label),
-			variant = "primary",
-			size = "sm",
-			fill = true,
-			layoutOrder = 1,
-			onClick = function()
-				local preset = catalog.get(featured.id)
-				if not preset then return end
-				M.editor(registry.blank(preset.id), onSetup)
-			end,
-		})
-
-		return card
+		for _, preset in ipairs(catalog.presets) do
+			if preset.featured then
+				local card = build(preset)
+				if not built then built = card end
+			end
+		end
+		return built
 	end
 
 	-- List and detail ---------------------------------------------------------
@@ -1139,10 +1146,11 @@ return function(env)
 			panel.__order = 0
 			local record = selected and registry.get(selected) or nil
 			if not record then
-				-- The featured card, shown only on a client with nothing configured:
-				-- one recommended provider, its sign-up address, and one button that
-				-- starts the setup. After the first provider exists the rail is the
-				-- interface and this stops being the loudest thing on the panel.
+				-- The featured cards, shown only on a client with nothing configured:
+				-- the recommended providers, each with its sign-up address and one
+				-- button that starts the setup. After the first provider exists the
+				-- rail is the interface and this stops being the loudest thing on the
+				-- panel.
 				if registry.count() == 0 then
 					M.featuredCard(detail.instance, function(id)
 						panel.select(id)

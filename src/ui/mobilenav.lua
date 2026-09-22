@@ -167,12 +167,14 @@ return function(env)
 					{ label = "Search message history", value = "search", icon = "search" },
 					{ label = "Settings", value = "settings", icon = "gear" },
 					{ label = "About UAI", value = "about", icon = "document" },
+					{ label = "Join Discord", value = "discord", icon = "globe" },
 					{ label = "Unload UAI", value = "unload", icon = "signOut", tone = "bad" },
 				}, onSelect = function(value)
 					dialog.close()
 					if value == "search" then app.showSearch()
 					elseif value == "settings" then app.showSettingsDialog()
 					elseif value == "about" then app.showAbout()
+					elseif value == "discord" then app.joinDiscord()
 					elseif value == "unload" then
 						overlay.confirm({ title = "Unload UAI?", description = "Saves your settings and removes the interface.",
 							confirmText = "Unload", danger = true, onConfirm = function()

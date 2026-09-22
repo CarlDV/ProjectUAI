@@ -44,6 +44,19 @@ return function(env)
 
 	local M = { panel = "chat", built = false, history = { entries = {}, index = 0 } }
 
+	local DISCORD_INVITE = "https://discord.gg/9xYyyYuKap"
+
+	-- A client GUI cannot open external links, so the invite goes to the clipboard
+	-- and a toast confirms it. Without a clipboard, the toast shows the link itself.
+	function M.joinDiscord()
+		if caps.clipboard then
+			local ok = pcall(caps.fn.clipboard, DISCORD_INVITE)
+			overlay.toast(ok and "Discord invite copied" or DISCORD_INVITE, ok and "good" or "info", ok and 2 or 4)
+		else
+			overlay.toast(DISCORD_INVITE, "info", 4)
+		end
+	end
+
 	-- Where a client GUI can live. gethui is the sturdiest under an executor
 	-- (nothing in the game can see it); CoreGui is next; PlayerGui always works but
 	-- is wiped on respawn, so it is the last resort.
@@ -1217,6 +1230,7 @@ return function(env)
 				{ divider = true },
 				{ label = env.require("ui/changelog").menuLabel(), value = "changelog", icon = "spark" },
 				{ label = "About this build", value = "about", icon = "book" },
+				{ label = "Join Discord", value = "discord", icon = "globe" },
 				{ divider = true },
 				{ label = "Unload UAI", value = "unload", icon = "signOut", tone = "bad" },
 			},
@@ -1229,6 +1243,8 @@ return function(env)
 					M.showChangelog()
 				elseif value == "about" then
 					M.showAbout()
+				elseif value == "discord" then
+					M.joinDiscord()
 				elseif value == "unload" then
 					overlay.confirm({
 						title = "Unload UAI?",
@@ -1293,10 +1309,17 @@ return function(env)
 		-- The other half of this modal's job: what this version changed, one tap
 		-- away. Closes About first so two modals never stack on the same scrim.
 		P.button(modal.footer, {
-				text = "What's new",
+				text = "Discord",
 				variant = "secondary",
 				size = "sm",
 				layoutOrder = 2,
+				onClick = function() M.joinDiscord() end,
+			})
+		P.button(modal.footer, {
+				text = "What's new",
+				variant = "secondary",
+				size = "sm",
+				layoutOrder = 3,
 				onClick = function()
 					modal.close()
 					M.showChangelog()
@@ -1306,7 +1329,7 @@ return function(env)
 			text = "Close",
 			variant = "primary",
 			size = "sm",
-			layoutOrder = 3,
+			layoutOrder = 4,
 			onClick = function() modal.close() end,
 			})
 		return modal
