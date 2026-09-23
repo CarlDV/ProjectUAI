@@ -1,5 +1,9 @@
 # Changelog
 
+## Documentation — September 23, 2026
+
+- Expand `CODE_WORKSPACE_PLAN.md` with the native Dex/Explorer and SimpleSpy/Remotes implementation plan: upstream provenance, shared services, UI and AI controls, capture/replay behavior, capability fallbacks, phased delivery, and verification. These integrations remain planned; the released 1.6.0 client is unchanged.
+
 ## 1.6.0 — September 23, 2026
 
 - Save inputs over 8,000 bytes intact as verified files in `UAI/pastes/`, up to 2 MiB each. Send a compact file reference instead of copying the source into the conversation. Short inputs remain inline.
