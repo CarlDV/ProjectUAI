@@ -31,7 +31,11 @@ Use gravity_shapes(name=...) to inspect actual keys and stored value ranges.
 Optional flags: ContinuousMotion adds a real-time x6.motion_offset that the
 plugin must add to its target; NoBlend opts interactive/physics-mutating shapes
 out of blending; AlwaysProcess bypasses distance culling, not processing buckets.
-For uneven debris, use compact silhouettes and handle low/variable part counts.
+FrameTracking evaluates every held part each physics frame and drives it straight
+to its exact target through the velocity constraint, with global/per-part speed
+limits, bypassing the usual damping, smoothing and integral feedback that distort
+rapid rigid orbits. Pair it with NoBlend and continuous targets; it costs a full
+part sweep each frame. For uneven debris, use compact silhouettes and handle low/variable part counts.
 
 Natural release: d.free_physics=true disables actuators and restores normal
 physics while retaining the record. Clear to nil to regrab. With free_physics,

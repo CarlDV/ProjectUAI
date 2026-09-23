@@ -163,6 +163,7 @@ return function(env)
 			return { name = name, active = context.x1.k6 == name, favorite = context.favorites and context.favorites[name] == true or false, controls = controls, totalControls = #all,
 				nextOffset = offset + limit <= #all and offset + limit or nil,
 				continuousMotion = mod.ContinuousMotion == true, noBlend = mod.NoBlend == true,
+				frameTracking = mod.FrameTracking == true,
 				testing = mod.Testing == true, mobileControls = type(mod.MobileControls) == "table" }
 		end
 		local names, results = {}, {}
@@ -441,6 +442,50 @@ return function(env)
 			x1.TgtActive = #x1.Targets > 0
 		end
 		return { mode = mode, player = found and found.Name, note = M.refresh(context, false) }
+	end
+
+	-- The published loader. Fetched through net/http so it inherits the transport
+	-- fallback, request history and abort the rest of the client's traffic gets,
+	-- then compiled locally. Browser identity: raw.githubusercontent answers 403
+	-- to some CLI agent strings. Gravity's own submodule fetches use its own
+	-- HttpGet once it is running.
+	M.LOADER_URL = "https://raw.githubusercontent.com/CarlDV/Project-Gravity-02/refs/heads/main/main.lua"
+
+	function M.launch(args, ctx)
+		args = args or {}
+		-- Re-running the loader tears the current session down first, so a live
+		-- connection is left alone unless the caller asks to reload it.
+		local existing = M.current()
+		if existing and not args.force then
+			return { available = true, alreadyRunning = true,
+				note = "Project Gravity is already connected. Pass force=true to run the loader again, which reloads it and releases held parts.",
+				status = M.status() }
+		end
+		if not caps.fn.loadstring then return nil, caps.reason("exec") end
+		if not caps.has("http") then return nil, caps.reason("http") end
+		local http = env.require("net/http")
+		local clock = env.require("runtime/clock")
+		local res, err = http.send({ url = M.LOADER_URL, method = "GET", identity = "browser",
+			tag = "gravity", timeout = 30000, attempts = 2, aborted = ctx and ctx.aborted })
+		if not res then return nil, "could not fetch the Project Gravity loader: " .. tostring(err) end
+		if res.status ~= 200 then return nil, string.format("the Project Gravity download answered HTTP %d", res.status) end
+		local source = tostring(res.body or "")
+		if #source < 2000 then return nil, "the download was too small to be the Project Gravity loader" end
+		if ctx and ctx.aborted and ctx.aborted() then return nil, "Project Gravity launch cancelled" end
+		local fn, compileErr = caps.fn.loadstring(source, "ProjectGravity")
+		if not fn then return nil, "the Project Gravity loader did not compile: " .. tostring(compileErr) end
+		local ok, runErr = pcall(fn)
+		if not ok then return nil, "the Project Gravity loader raised: " .. tostring(runErr) end
+		-- The loader runs synchronously through its own fetches and publishes the
+		-- context on success; on an internal abort it warns and returns without one.
+		-- Confirm through the adapter, allowing a slow host a brief grace period.
+		local started = clock.ms()
+		while not M.current() and clock.since(started) < 2000 do clock.wait(0.1) end
+		if not M.current() then
+			return { available = false, launched = true,
+				note = "The Project Gravity loader ran but no live context is visible. If it is still loading, wait and read gravity_status; otherwise the loader aborted -- check its in-game warnings." }
+		end
+		return { available = true, launched = true, reloaded = existing ~= nil, status = M.status() }
 	end
 
 	return M

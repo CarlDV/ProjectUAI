@@ -13,6 +13,11 @@ return function(env)
 	return {
 		{ name = "gravity_status", risk = "read", description = "Inspect the connected Project Gravity engine, selected shape, targets, held part count and settings. Reports when Gravity is not loaded.",
 			parameters = { type = "object", properties = {}, required = {} }, run = function() return result(gravity.status()) end },
+		{ name = "gravity_launch", risk = "danger", needs = { "http", "exec" }, timeout = 60,
+			description = "Download and run the official Project Gravity loader in this client, then report the live status. Use this when gravity_status shows Gravity is not loaded. If Gravity is already connected this reports that without reloading; pass force=true to re-run the loader, which reloads Gravity and releases held parts. This fetches and executes remote code from the Project Gravity repository.",
+			parameters = { type = "object", properties = {
+				force = { type = "boolean", description = "Run the loader even when Gravity is already connected. Reloads the session and releases held parts." },
+			}, required = {} }, run = function(args, ctx) return result(gravity.launch(args, ctx)) end },
 		{ name = "gravity_shapes", risk = "read", needs = { "gravity" },
 			description = "List the live Gravity shape catalog, or pass name to inspect a shape's real control keys, values, buttons and stored-unit slider ranges. No hardcoded catalog.",
 			parameters = { type = "object", properties = {

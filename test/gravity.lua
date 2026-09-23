@@ -80,6 +80,49 @@ scenario("connection follows startup, replacement and unload", function()
 	check("status stays available without Gravity", registry.get("gravity_status") ~= nil)
 end)
 
+scenario("gravity_launch fetches and runs the loader, then reports the live status", function()
+	local h, env, context, _, run = fixture()
+	h.sandbox._GRAVITY_CONTEXT = nil
+	h.sandbox.__gravity_ctx = context
+	local http = env.require("net/http")
+	local requests, lastUrl = 0, nil
+	http.send = function(opts)
+		requests = requests + 1; lastUrl = opts.url
+		return { status = 200, body = ("-- Project Gravity loader\n"):rep(200) .. "getgenv()._GRAVITY_CONTEXT = getgenv().__gravity_ctx\n" }
+	end
+	check("not connected before launch", run("gravity_status").data.available == false)
+	local launched = run("gravity_launch")
+	check("loader ran and Gravity connected", launched.ok and launched.data.launched and launched.data.available and requests == 1)
+	check("the published CarlDV loader URL was fetched", has(lastUrl, "Project-Gravity-02") and has(lastUrl, "main.lua"))
+	check("status now reports the live engine", run("gravity_status").data.available == true)
+	local again = run("gravity_launch")
+	check("an already-connected launch does not refetch", again.ok and again.data.alreadyRunning and requests == 1)
+	local forced = run("gravity_launch", { force = true })
+	check("force re-runs the loader against the live session", forced.ok and forced.data.reloaded and requests == 2)
+end)
+
+scenario("gravity_launch reports fetch failures and loaders that never connect", function()
+	local h, env, _, _, run = fixture()
+	h.sandbox._GRAVITY_CONTEXT = nil
+	local http = env.require("net/http")
+	http.send = function() return { status = 404, body = "404: Not Found" } end
+	check("an HTTP error is a tool failure", not run("gravity_launch").ok)
+	http.send = function() return nil, "network down" end
+	check("a transport error is reported", not run("gravity_launch").ok)
+	http.send = function() return { status = 200, body = "return" } end
+	check("a body too small to be the loader is refused", not run("gravity_launch").ok)
+	http.send = function() return { status = 200, body = "-- ran without publishing a context\n" .. ("-- pad\n"):rep(400) } end
+	local ran = run("gravity_launch", nil, 5)
+	check("a loader that does not connect is reported, not crashed", ran.ok and ran.data.launched and ran.data.available == false)
+end)
+
+scenario("shape inspection reports the FrameTracking flag", function()
+	local _, _, context, _, run = fixture()
+	check("a plain shape reports no frame tracking", run("gravity_shapes", { name = "Preset" }).data.frameTracking == false)
+	context.loaded_shapes.Preset.FrameTracking = true
+	check("a frame-tracking shape reports it", run("gravity_shapes", { name = "Preset" }).data.frameTracking == true)
+end)
+
 scenario("engine changes validate together and call native lifecycle handlers", function()
 	local _, env, context, calls, run = fixture()
 	check("invalid settings are rejected", not run("gravity_configure", { values = { MaxSpeed = 700, Damping = -1 } }).ok)

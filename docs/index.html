@@ -96,7 +96,7 @@
 
     <div class="container">
       <dl class="capability-strip" aria-label="Current release capabilities">
-        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->112<!-- site:tool-count:end --></dd></div>
+        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->113<!-- site:tool-count:end --></dd></div>
         <div><dt>Tool groups</dt><dd><!-- site:group-count:start -->20<!-- site:group-count:end --></dd></div>
         <div><dt>Files per batch read</dt><dd>12</dd></div>
         <div><dt>Edits in one write</dt><dd>20</dd></div>
@@ -197,10 +197,10 @@
         </div>
         <div class="catalog-toolbar" id="toolFilters" role="search" aria-label="Search the tool catalog" hidden>
           <div class="search-field"><label for="toolSearch">Find a tool</label><input type="search" id="toolSearch" placeholder="Try files, raycast, or Luau" autocomplete="off" spellcheck="false" aria-controls="toolCatalog"></div>
-          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (12)</option><option value="script">Code (4)</option><option value="fs">Files (9)</option><option value="agentself">Agent (10)</option><option value="character">Character (4)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (10)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="gravity">Project Gravity (12)</option><option value="remotes">Remotes (5)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
+          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (12)</option><option value="script">Code (4)</option><option value="fs">Files (9)</option><option value="agentself">Agent (10)</option><option value="character">Character (4)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (10)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="gravity">Project Gravity (13)</option><option value="remotes">Remotes (5)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
           <button class="button button-outline clear-filters" type="button" id="clearFilters" disabled>Clear filters</button>
         </div>
-        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->112<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->20<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.6.0<!-- site:version:end --></span></div>
+        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->113<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->20<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.6.0<!-- site:version:end --></span></div>
         <noscript><p class="catalog-help">Open a category to browse its tools. Enable JavaScript to search and filter.</p></noscript>
         <div id="toolCatalog" class="tool-catalog">
           <!-- site:catalog:start -->
@@ -573,7 +573,7 @@
             </ul>
           </details>
           <details class="tool-group" data-group="gravity">
-            <summary><span class="tool-group-label">Project Gravity</span><span class="tool-group-count">12 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
+            <summary><span class="tool-group-label">Project Gravity</span><span class="tool-group-count">13 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
             <ul class="tool-list">
               <li class="tool-row" data-tool-name="gravity_configure">
                 <div class="tool-row-heading"><code>gravity_configure</code><span class="risk risk-write">Write</span></div>
@@ -590,6 +590,10 @@
               <li class="tool-row" data-tool-name="gravity_keybind">
                 <div class="tool-row-heading"><code>gravity_keybind</code><span class="risk risk-write">Write</span></div>
                 <p>Set or clear one native Gravity hotkey on desktop or mobile. Provide action or shape, and a Roblox KeyCode name (e.g. E, F5); key=&quot;&quot; unbinds it. Refuses conflicts with other core/shape bindings. Read current keybinds in gravity_status.</p><span class="tool-needs">Requires gravity</span>
+              </li>
+              <li class="tool-row" data-tool-name="gravity_launch">
+                <div class="tool-row-heading"><code>gravity_launch</code><span class="risk risk-danger">High impact</span></div>
+                <p>Download and run the official Project Gravity loader in this client, then report the live status. Use this when gravity_status shows Gravity is not loaded. If Gravity is already connected this reports that without reloading; pass force=true to re-run the loader, which reloads Gravity and releases held parts. This fetches and executes remote code from the Project Gravity repository.</p><span class="tool-needs">Requires http, exec</span>
               </li>
               <li class="tool-row" data-tool-name="gravity_part_control">
                 <div class="tool-row-heading"><code>gravity_part_control</code><span class="risk risk-write">Write</span></div>

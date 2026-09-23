@@ -86,7 +86,8 @@ provider-specific file API.
 
 **Project Gravity.** Run the updated [Project Gravity](https://github.com/Project-Ptolemy/Project-Gravity-02)
 loader and open its **PROJECT UAI** button. Both desktop and mobile pass their live
-context; UAI can also discover Gravity when either application starts first.
+context; UAI can also discover Gravity when either application starts first, or run
+the loader itself with `gravity_launch` when Gravity is not already present.
 `gravity_status` and `gravity_shapes` inspect the real engine and shape controls.
 `gravity_control`, `gravity_configure`, `gravity_shape`, and `gravity_target` use
 Gravity's native handlers for physics, settings, shape switching, buttons, and

@@ -35,6 +35,7 @@ return function(env)
 					"Gravity Part Control lists held parts with session-scoped IDs, selects and moves groups, assigns pin/manual/shape modes, changes ride and physics overrides, and releases selected or all overrides.",
 					"Gravity keybinds, favorites, settings reset, manual Slingshot controls, interface, visual performance, FPS, core color and ignore tags use native handlers. Key conflicts and stale part IDs are refused.",
 					"gravity_plugin_read provides the guide, template and real source. gravity_plugin_write saves verified files from source or a saved path, validates setup once, and registers custom shapes with reload cleanup.",
+					"gravity_launch downloads and runs the official Project Gravity loader when it is not already connected, reports the live status, and reloads on force. Shape inspection and the plugin guide cover the FrameTracking flag.",
 				} },
 				{ category = "improved", items = {
 					"The prompt asks for successive batches of normally 1–4 independent tool calls. Tool-call limits and concurrency settings are unchanged.",
