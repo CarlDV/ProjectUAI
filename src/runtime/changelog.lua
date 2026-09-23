@@ -23,6 +23,34 @@ return function(env)
 
 	local ENTRIES = {
 		{
+			version = "1.6.0",
+			date = "September 23, 2026",
+			title = "File attachments and Project Gravity",
+			highlights = "Long inputs become real files with compact references. Control Gravity's engine, parts, settings, shortcuts and plugins. The agent works in small tool batches.",
+			sections = {
+				{ category = "added", items = {
+					"Inputs over 8,000 bytes are saved intact to UAI/pastes/ as verified files, up to 2 MiB. Short messages stay inline; long source is not copied into the prompt.",
+					"Browser uploads use separate ordered chunks. Both composers support attachment-only sends and retain drafts after a failed upload or send.",
+					"Project Gravity tools inspect shapes and settings, control the engine, target players, adjust formations and control values, and invoke real shape buttons on desktop and mobile.",
+					"Gravity Part Control lists held parts with session-scoped IDs, selects and moves groups, assigns pin/manual/shape modes, changes ride and physics overrides, and releases selected or all overrides.",
+					"Gravity keybinds, favorites, settings reset, manual Slingshot controls, interface, visual performance, FPS, core color and ignore tags use native handlers. Key conflicts and stale part IDs are refused.",
+					"gravity_plugin_read provides the guide, template and real source. gravity_plugin_write saves verified files from source or a saved path, validates setup once, and registers custom shapes with reload cleanup.",
+				} },
+				{ category = "improved", items = {
+					"The prompt asks for successive batches of normally 1–4 independent tool calls. Tool-call limits and concurrency settings are unchanged.",
+					"Landscape touch layout uses a compact multiline composer, searchable conversation navigation, full-width settings and a bounded attachment strip.",
+					"Drafts, attachments, open forms and orientation-specific placement survive rotation. Mobile Enter adds a line; Send submits. Desktop placement stays independent.",
+				} },
+				{ category = "fixed", items = {
+					"A failed file save never falls back to sending the entire long input. Missing attachments or disabled file tools leave the draft available for correction.",
+					"Saved-paste reads preserve UTF-8 and continuation offsets, with at most 6,000 source bytes per slice. Searches accept pastes/ paths and explicit scopes cannot be shadowed by workspace names.",
+					"Gravity connections follow the current runtime after reload and stop using an unloaded session.",
+					"Gravity's companion update adds mobile shape/hotkey parity, restores visual effects and bindings on reset, and refreshes Part Control sliders and toggles after external changes.",
+					"Loaded plugin callbacks stay usable after setup and retain explicit task cancellation. Failed plugin writes verify restored source before reporting recovery.",
+				} },
+			},
+		},
+		{
 			version = "1.5.0",
 			date = "September 20, 2026",
 			title = "IY controls and executor timeout recovery",

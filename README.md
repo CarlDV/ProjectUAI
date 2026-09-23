@@ -69,6 +69,53 @@ dispatch.
 **Batch inspection and file workflows.** Prefer a combined query or batch when
 the work is independent; this reduces model round trips and unnecessary local
 scanning without changing the inference provider's speed.
+The prompt asks for successive batches of normally 1–4 independent calls, with
+results inspected between batches. Tool-call limits and concurrency stay unchanged.
+
+**Long inputs are files.** Inputs over 8,000 UTF-8 bytes are saved intact under
+`UAI/pastes/`, up to 2 MiB per file. The AI receives a compact path reference and
+reads relevant sections with `file_read`, `file_read_many`, or `file_search`.
+Saved-paste reads return at most 6,000 source bytes per slice with continuation
+offsets. Ordinary messages stay inline. A large paste becomes an attachment while
+keeping the text already around it editable, and an attachment can be sent by
+itself. The browser transfers large files in separate chunks before sending the
+message. Saving must succeed and the Files tools must be available; failures keep
+the draft instead of sending the full source. These are files in the executor's
+workspace, so the workflow works across inference providers without requiring a
+provider-specific file API.
+
+**Project Gravity.** Run the updated [Project Gravity](https://github.com/Project-Ptolemy/Project-Gravity-02)
+loader and open its **PROJECT UAI** button. Both desktop and mobile pass their live
+context; UAI can also discover Gravity when either application starts first.
+`gravity_status` and `gravity_shapes` inspect the real engine and shape controls.
+`gravity_control`, `gravity_configure`, `gravity_shape`, and `gravity_target` use
+Gravity's native handlers for physics, settings, shape switching, buttons, and
+player targets. The Project Gravity tool group uses UAI's normal permissions.
+
+`gravity_parts` pages through held parts with session-scoped IDs and their current
+selection, targets, and overrides. Use those IDs with `gravity_part_control` to
+select parts, pin them, assign a shape, move a group while preserving its spacing,
+set rideability or physics, and release overrides. `clear` deselects;
+`release_all` clears overrides even on unselected parts. Selection follows
+Gravity's native 512-part ceiling. Read fresh IDs after Gravity reloads.
+
+`gravity_keybind` sets core or shape shortcuts and rejects conflicting keys;
+an empty key clears a binding. `gravity_favorite` manages the native favorites
+list. `gravity_configure` also exposes interface and visual performance settings,
+FPS (when supported), RGB core color, ignore tags, and Part Control panel defaults.
+`gravity_control` supports `reset_settings` and manual Slingshot `launch`/`charge`.
+The companion Gravity update applies settings to the live world and interface,
+restores reset effects and bindings, and supplies the same shape/hotkey handlers
+on desktop and mobile. Check `gravity_status.capabilities` after reloading it.
+
+For custom shapes, read the guide with `gravity_plugin_read`, or request
+`section="template"`. Pass `plugin="My Shape", path="pastes/..."` to
+`gravity_plugin_write` to reuse uploaded source without copying it into tool
+arguments. It verifies the file in `GravityShapes/`, validates setup once, and
+registers it with the running Gravity session. Select an inactive shape explicitly
+with `gravity_shape`; replacing an existing shape requires `overwrite=true`.
+`load=false` checks syntax and saves without executing the source. Gravity's live
+physics and mobile touch behavior still need in-game testing.
 
 | Tool | Use |
 | --- | --- |
@@ -84,8 +131,9 @@ names that contain punctuation. Query pages inspect at most 20,000 nodes; narrow
 the root if a scan is incomplete. Traversal offsets describe the live tree, so
 restart after it changes.
 
-File searches stay in `UAI/files/`, excluding client configuration and
-conversations. They skip binary files and files over 2 MB, bound inventories to
+File searches default to `UAI/files/`; pass an explicit `pastes/` path to search
+saved inputs. Both scopes exclude client configuration and conversations.
+Searches skip binary files and files over 2 MB, bound inventories to
 128 directories, 1,000 files, and 6,000 entries, and process at most 8 MB and 50,000
 new lines per page. The read budget counts skipped data too and is checked between
 whole-file reads; the host must read a file before its size is known.
@@ -327,6 +375,8 @@ luajit test/config_transfer.lua
 luajit test/build_reload.lua
 luajit test/audit_regressions.lua
 luajit test/execution_tools.lua
+luajit test/attachments.lua
+luajit test/gravity.lua
 luajit test/tool_workflows.lua
 luajit test/execution_ui.lua
 luajit test/controls_loading.lua

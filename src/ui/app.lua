@@ -857,9 +857,9 @@ return function(env)
 		if env.onMountPhase then env.onMountPhase("building the composer") end
 		panel.composer = env.require("ui/chat/composer").new(column, {
 			layoutOrder = 3,
-			onSend = function(text)
+			onSend = function(text, files)
 				local session = sessions.current()
-				local ok, reason = session.send(text)
+				local ok, reason = session.send(text, nil, files)
 				if not ok then overlay.toast(tostring(reason), "warn", 2) end
 				return ok
 			end,

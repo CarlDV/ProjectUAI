@@ -68,9 +68,10 @@ return function(env)
 				-- The tools' own scope first, then pastes: a pasted block is the one file
 				-- the user places rather than the agent, so it is reachable by the bare
 				-- name the toast showed without the agent having to know where it lives.
-				local content, err = W.read(args.path)
+				local content, err, resolved = W.read(args.path)
 				if not content then return H.fail(err) end
-				return H.readSlice(args.path, content, args, READ_CAP)
+				local budget = resolved and util.startsWith(resolved, "pastes/") and (READ_CAP + 220) or nil
+				return H.readSlice(args.path, content, args, READ_CAP, budget)
 			end,
 		},
 		{

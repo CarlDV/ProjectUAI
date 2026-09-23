@@ -21,15 +21,16 @@ return function(env)
 			local request = args.reads[index]
 			local budget = math.min(remaining - 12, math.max(256, math.floor(remaining / (#args.reads - index + 1)) - 12))
 			local cached = cache[request.path]
-			local content, err
-			if cached then content, err = cached.content, cached.error
+			local content, err, resolved
+			if cached then content, err, resolved = cached.content, cached.error, cached.resolved
 			else
-				content, err = W.read(request.path)
+				content, err, resolved = W.read(request.path)
 				if cachedBytes + #(content or "") <= W.MAX_BYTES then
-					cache[request.path] = { content = content, error = err }
+					cache[request.path] = { content = content, error = err, resolved = resolved }
 					cachedBytes = cachedBytes + #(content or "")
 				end
 			end
+			if resolved and util.startsWith(resolved, "pastes/") then budget = math.min(budget, 6220) end
 			local slice
 			if content and #content > W.MAX_BYTES then
 				slice = H.fail("this file exceeds the 2 MB batch limit; use file_read")
@@ -88,7 +89,9 @@ return function(env)
 				nextCursor, limited = { path = path, line = 1 }, "read budget"
 				break
 			end
-			local content, err = fsx.read(path, W.scope)
+			local content, err
+			if inventory.explicit then content, err = W.read(path)
+			else content, err = fsx.read(path, W.scope) end
 			-- Hosts expose whole-file reads, not stat/range APIs. Count skipped
 			-- data too, so large or binary files cannot bypass the page budget.
 			if content then bytesRead = bytesRead + #content end
@@ -180,10 +183,10 @@ return function(env)
 	return {
 		{
 			name = "file_search", risk = "read", needs = { "fs" },
-			description = "Find literal text across workspace files in one call. Returns matching lines, byte offsets and a continuation cursor. Searches subfolders; skips binary/files over 2 MB. Bounds directory, file and byte scans.",
+			description = "Find literal text across workspace files or saved pastes in one call. Returns matching lines, byte offsets and a continuation cursor. Searches subfolders; skips binary/files over 2 MB. Bounds directory, file and byte scans.",
 			parameters = { type = "object", properties = {
 				query = { type = "string", minLength = 1, maxLength = 256, description = "Single-line literal; not a regex." },
-				path = { type = "string", description = "Workspace file or directory. Default workspace root." },
+				path = { type = "string", description = "Workspace file/directory or an explicit pastes/ path. Default workspace root." },
 				glob = { type = "string", maxLength = 128, description = "Filename glob at any depth, e.g. *.lua. Default *." },
 				case_sensitive = { type = "boolean", description = "Default false." },
 				limit = { type = "integer", minimum = 1, maximum = 100, description = "Matching lines per page. Default 20." },

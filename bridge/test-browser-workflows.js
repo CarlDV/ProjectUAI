@@ -55,12 +55,28 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     await switchTo('s1');
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const errors = [], commands = [], receipts = new Map();
+    const errors = [], commands = [], receipts = new Map(), stagedUploads = new Map(), uploadResponses = new Map();
+    let holdUploads = false, rejectUploads = false;
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/api/command', async route => {
       const command = route.request().postDataJSON();
       commands.push(command);
-      const result = command.type === 'send' ? null : { ok: true, data: { ok: true, text: 'Fixture execution result.' } };
+      let result = command.type === 'send' ? null : { ok: true, data: { ok: true, text: 'Fixture execution result.' } };
+      if (command.type === 'attachment:upload') {
+        if (rejectUploads) result = { ok: false, error: 'Fixture file storage failure' };
+        else {
+          const before = stagedUploads.get(command.uploadId) || '';
+          assert.equal(command.offset, Buffer.byteLength(before));
+          assert.ok(Buffer.byteLength(command.content) <= 128 * 1024);
+          const text = before + command.content;
+          stagedUploads.set(command.uploadId, text);
+          result = { ok: true, data: command.final ? { path: `pastes/${command.uploadId}.txt`, name: command.name,
+            bytes: Buffer.byteLength(text), reference: `[Attached file: ${command.name}]\nPath: pastes/${command.uploadId}.txt\nUse file_read to read this file.` }
+            : { received: Buffer.byteLength(text) } };
+        }
+        uploadResponses.set(command.commandId, result);
+        if (holdUploads) result = null;
+      }
       receipts.set(command.commandId, result);
       await route.fulfill({ json: { id: command.commandId } });
     });
@@ -158,13 +174,67 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await page.locator('#input').inputValue(), 'Draft prompt');
     console.log('Composer: IME, send acknowledgements, newer drafts and attachments, asynchronous file reads');
 
+    while (await page.locator('#attachments button').count()) await page.locator('#attachments button').first().click();
+    const longInput = 'LONG_SOURCE_START\r\n' + 'local text = "界🙂"\r\n'.repeat(6000) + 'LONG_SOURCE_END\r\n';
+    const surrounding = 'Review this:\n\nKeep the final instructions.';
+    await page.locator('#input').fill(surrounding);
+    await page.locator('#input').evaluate((input, text) => {
+      input.setSelectionRange(13, 13);
+      const clipboardData = new DataTransfer(); clipboardData.setData('text/plain', text);
+      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+    }, longInput);
+    assert.equal(await page.locator('#input').inputValue(), surrounding);
+    assert.equal(await page.locator('#attachments button').count(), 1);
+    const startUpload = commands.length;
+    holdUploads = true;
+    await page.locator('#send').click();
+    const firstChunk = await waitCommands(startUpload + 1);
+    assert.equal(firstChunk.type, 'attachment:upload');
+    await switchTo('s2');
+    await page.waitForFunction(() => document.querySelector('#input').value === '');
+    await page.locator('#input').fill('Keep this other conversation draft');
+    holdUploads = false;
+    receipts.set(firstChunk.commandId, uploadResponses.get(firstChunk.commandId));
+    let longSend;
+    const uploadDeadline = Date.now() + 10000;
+    while (!longSend && Date.now() < uploadDeadline) {
+      longSend = commands.slice(startUpload).find(c => c.type === 'send');
+      if (!longSend) await sleep(50);
+    }
+    assert.ok(longSend, 'upload must finish before sending a compact message');
+    assert.equal(longSend.sessionId, 's1');
+    assert.ok(longSend.text.length < 1000);
+    assert.ok(!longSend.text.includes('LONG_SOURCE_'));
+    assert.ok(longSend.text.includes('Keep the final instructions.'));
+    assert.equal(longSend.files.length, 1);
+    assert.equal(longSend.files[0].bytes, Buffer.byteLength(longInput));
+    assert.equal(stagedUploads.get(firstChunk.uploadId), longInput);
+    assert.ok(commands.slice(startUpload).filter(c => c.type === 'attachment:upload').length > 1);
+    assert.ok(commands.slice(startUpload).every(c => c.sessionId === 's1'));
+    receipts.set(longSend.commandId, { ok: true });
+    await page.waitForFunction(() => !document.querySelector('#send').disabled);
+    assert.equal(await page.locator('#input').inputValue(), 'Keep this other conversation draft');
+    await switchTo('s1');
+    await page.waitForFunction(() => document.querySelector('#input').value === '');
+    assert.equal(await page.locator('#attachments button').count(), 0);
+    rejectUploads = true;
+    const failedInput = 'Keep this unsent source.\n'.repeat(400);
+    await page.locator('#input').fill(failedInput);
+    const beforeFailure = commands.filter(c => c.type === 'send').length;
+    await page.locator('#send').click();
+    await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('Fixture file storage failure'));
+    assert.equal(await page.locator('#input').inputValue(), failedInput);
+    assert.equal(commands.filter(c => c.type === 'send').length, beforeFailure);
+    rejectUploads = false;
+    console.log('Attachments: exact Unicode chunks, compact file references, conversation switches, failed uploads retain drafts');
+
     await page.evaluate(() => {
       window.originalSetItem = Storage.prototype.setItem;
       Storage.prototype.setItem = function() { throw new DOMException('Quota reached', 'QuotaExceededError'); };
     });
     await page.locator('#input').fill('Storage fallback draft');
     await switchTo('s2');
-    await page.waitForFunction(() => document.querySelector('#input').value === '');
+    await page.waitForFunction(() => document.querySelector('#input').value === 'Keep this other conversation draft');
     await switchTo('s1');
     await page.waitForFunction(() => document.querySelector('#input').value === 'Storage fallback draft');
     await page.evaluate(() => { Storage.prototype.setItem = window.originalSetItem; });

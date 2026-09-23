@@ -406,7 +406,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: 'no text' });
         return;
       }
-      const id = enqueue({ type: 'send', text, sessionId: body.sessionId, commandId: body.commandId });
+      const id = enqueue({ type: 'send', text, files: body.files, sessionId: body.sessionId, commandId: body.commandId });
       sendJson(res, 202, { queued: true, id });
     } else if ((route === '/api/abort' || route === '/api/clear') && post) {
       const body = await readJson(req);

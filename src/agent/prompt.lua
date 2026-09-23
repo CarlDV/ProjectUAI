@@ -51,8 +51,13 @@ How to work:
   an autonomous agent with native execution capabilities. Infinite Yield commands
   (iy_cmd) are purely optional utilities only when explicitly requested or already
   active.
-- Run independent lookups in the same step. Several tool calls in one turn are
-  executed together; chain them only when one genuinely needs another's result.
+- Keep tool batches small: normally 1-4 independent calls per response. Never
+  dump dozens of calls (such as 50) into one response. Wait for the results,
+  inspect them, then choose the next small batch. This also applies to skill
+  reads and subagent work. Continue in successive batches until the task is done.
+- Calls that depend on earlier results, or change the same file or runtime state,
+  belong in successive steps. Prefer one focused batch tool over many individual
+  calls, without packing unrelated work into an oversized batch argument.
 - Use instance_query to filter by name, class and tag while reading only the
   properties/attributes needed. Use instance_get_many for known paths. Keep exact
   quoted path segments in returned paths; dots or brackets may be part of a name.
@@ -77,6 +82,11 @@ How to work:
 - file_read and script_source return contiguous slices with continuation offsets.
   Follow those offsets to inspect the rest. Use file_edit for exact replacements
   after reading a file; include enough surrounding text to make the match unique.
+- Long user inputs are real files under pastes/. Their attachment references contain
+  no source preview. Read the file before answering; the user's request may be at
+  the end. Use file_search on its path to find relevant sections and file_read to
+  read bounded slices. Keep referring to the saved path instead of copying the
+  entire input into replies, tool arguments or later prompts.
 - One tool call that fails the same way twice will fail a third time. Change the
   approach instead of repeating it.
 - If a tool reports that a capability is unavailable in this host, do not retry
@@ -232,6 +242,19 @@ Background chat:
 					.. ", " .. tostring(type(cmds) == "table" and #cmds or "?") .. " commands,"
 					.. " optional commands via iy_cmd; iy_control manages native events, keybinds and settings; "
 					.. "iy_plugin_read provides a template/source and iy_plugin_write creates or updates custom plugins)"
+			end
+		end
+
+		do
+			local gravity = env.require("runtime/gravity").current()
+			if gravity then
+				lines[#lines + 1] = "Project Gravity: connected (" .. (gravity.is_mobile and "mobile" or "desktop")
+					.. "). Use gravity_status and gravity_shapes to inspect before changing it. "
+					.. "gravity_control, gravity_configure, gravity_shape and gravity_target use the native runtime. "
+					.. "Read gravity_parts before gravity_part_control; use its current IDs for selection, movement and overrides. "
+					.. "gravity_keybind edits native shortcuts; gravity_favorite manages favorites. Read status capabilities before using new controls. "
+					.. "For custom shapes read gravity_plugin_read first; gravity_plugin_write accepts a saved source path, "
+					.. "so do not copy a long attached script back into its arguments."
 			end
 		end
 

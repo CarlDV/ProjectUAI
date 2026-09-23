@@ -16,6 +16,7 @@ return function(env)
 	local config = env.require("runtime/config")
 	local caps = env.require("runtime/caps")
 	local fsx = env.require("runtime/fsx")
+	local attachments = env.require("runtime/attachments")
 	local place = env.require("runtime/place")
 	local theme = env.require("ui/theme")
 	local responsive = env.require("ui/responsive")
@@ -43,10 +44,6 @@ return function(env)
 		end
 		return false
 	end
-
-	-- How much of an attached file travels with the message. The agent can read the
-	-- rest with its own tools; this is context, not a transfer.
-	local ATTACH_CAP = 4000
 
 	function M.new(parent, props)
 		props = props or {}
@@ -94,7 +91,7 @@ return function(env)
 		local function syncSend()
 			if alive() and sendButton then
 				sendButton.setEnabled(not pendingSends[draftId] and (composer.busy
-					or (composer.field and util.trim(composer.field.get()) ~= "")))
+					or #composer.attachments > 0 or (composer.field and util.trim(composer.field.get()) ~= "")))
 			end
 		end
 
@@ -324,6 +321,7 @@ return function(env)
 			fitAttachments()
 			if resizeComposer then resizeComposer() end
 			saveDraft()
+			syncSend()
 		end
 
 		local function attachMenu(target)
@@ -362,22 +360,16 @@ return function(env)
 					if not alive() then return end
 					local function attachFile(path)
 						if not alive() then return end
-						-- The agent's workspace first, then pastes, so a path the toast
-						-- just showed ("pastes/composer-...") is attachable as-is.
-						local body, err = fsx.read(path, { scope = "files" })
-						if not body then
-							body, err = fsx.read(path, { scope = "pastes" })
-						end
+						local body, err, resolved = fsx.readUser(path)
 						if not body then
 							overlay.toast(tostring(err), "warn", 3)
 							return
 						end
-						composer.attachments[#composer.attachments + 1] = {
-							label = path,
-							path = path,
-							text = util.truncate(body, ATTACH_CAP, "attach a narrower slice if you need the rest"),
-						}
+						local entry = attachments.describe(resolved, body, path)
+						if #body <= attachments.INLINE_LIMIT then entry.file, entry.text = nil, body end
+						composer.attachments[#composer.attachments + 1] = entry
 						renderAttachments()
+						syncSend()
 					end
 					if util.startsWith(tostring(value), "file:") then
 						attachFile(tostring(value):sub(6))
@@ -391,7 +383,7 @@ return function(env)
 					elseif value == "path" then
 						overlay.prompt({
 							title = "Attach a file",
-						description = "A path inside " .. fsx.root .. "/files. Its contents travel with the message.",
+							description = "A file inside " .. fsx.root .. "/files or pastes/. Long files are attached by reference.",
 							placeholder = "notes/plan.txt",
 							confirmText = "Attach",
 							onConfirm = function(path)
@@ -453,10 +445,13 @@ return function(env)
 			if #composer.attachments == 0 then return text end
 			local parts = {}
 			for _, entry in ipairs(composer.attachments) do
-				parts[#parts + 1] = string.format("<attached name=\"%s\">\n%s\n</attached>",
-					tostring(entry.label), tostring(entry.text))
+				if entry.file then parts[#parts + 1] = attachments.reference(entry)
+				else
+					parts[#parts + 1] = string.format("<attached name=\"%s\">\n%s\n</attached>",
+						tostring(entry.label), tostring(entry.text))
+				end
 			end
-			parts[#parts + 1] = text
+			parts[#parts + 1] = text ~= "" and text or "Please read the attached input."
 			return table.concat(parts, "\n\n")
 		end
 
@@ -464,8 +459,8 @@ return function(env)
 			if not alive() or composer.busy or not draftId or pendingSends[draftId] then return false end
 			local id = draftId
 			if not sessions.threads[id] or sessions.current().id ~= id then return false end
-			local text = util.trim(composer.field.get())
-			if text == "" then return end
+			local text = composer.field.get()
+			if util.trim(text) == "" and #composer.attachments == 0 then return end
 			local payload = compose(text)
 			if not props.onSend then return false end
 			saveDraft()
@@ -474,7 +469,9 @@ return function(env)
 			syncSend()
 			-- The callback may yield, switch conversations, or destroy and replace
 			-- this composer before it returns. Settle against the session's draft.
-			local ok, accepted = pcall(props.onSend, payload)
+			local files = {}
+			for _, entry in ipairs(sent.attachments) do if entry.file then files[#files + 1] = entry end end
+			local ok, accepted = pcall(props.onSend, payload, files)
 			local live = draftViews[id]
 			if live then live.capture() end
 			if ok and accepted ~= false and sessions.threads[id] and drafts[id] then
@@ -543,7 +540,7 @@ return function(env)
 			return math.max(theme.size.control, theme.text.body.height, responsive.minTarget())
 		end
 		local function buildField(carried)
-			local previousLength = #(carried or "")
+			local previousText = carried or ""
 			return P.field(fieldHolder, {
 				name = "Prompt",
 				bare = true,
@@ -564,24 +561,21 @@ return function(env)
 					syncSend()
 					saveDraft()
 					if mobile and resizeComposer then resizeComposer() end
-					if restoring then previousLength = #text; return end
-					local cap = sessions.PASTE_CAP
-					local jumped = #text > cap and (#text - previousLength) > cap
-					previousLength = #text
-					if not (jumped and fsx.enabled) then return end
-					local stamp = os.date("!%Y%m%d-%H%M%S")
-					local path = "composer-" .. stamp .. "-" .. util.uid("p") .. ".txt"
-					if fsx.write(path, text, { scope = "pastes" }) then
-						composer.attachments[#composer.attachments + 1] = {
-							label = "pastes/" .. path .. " (" .. tostring(#text) .. " chars)",
-							path = path,
-							text = util.truncate(text, ATTACH_CAP, "the full text is in this file; read it with file_read"),
-						}
-						renderAttachments()
-						composer.field.clear()
-						previousLength = 0
-						overlay.toast("Long paste saved to pastes/" .. path .. " and attached", "good", 3)
-					end
+					if restoring then previousText = text; return end
+					local inserted, remainder = attachments.inserted(previousText, text)
+					previousText = text
+					if not inserted then return end
+					local target = draftId
+					local entry, err = attachments.save(inserted)
+					if not entry then overlay.toast(tostring(err), "warn", 4); return end
+					-- A yielding host must not clear a newer draft or another chat.
+					if not alive() or draftId ~= target or composer.field.get() ~= text then return end
+					composer.attachments[#composer.attachments + 1] = entry
+					composer.field.set(remainder)
+					renderAttachments()
+					saveDraft()
+					syncSend()
+					overlay.toast("Attached " .. entry.name .. " · " .. tostring(entry.bytes) .. " bytes", "good", 3)
 				end,
 				onSubmit = function()
 					if not mobile and not composer.expanded then submit() end

@@ -299,6 +299,29 @@ scenario("late callbacks keep managed cancellation after a successful run", func
 	check("late callbacks never revert to unsafe native cancellation", nativeCalls == 0 and h.sandbox.lateCancelRan == nil and #h.sched.errors == 0)
 end)
 
+scenario("returned plugin callbacks keep explicit cancellation after setup", function()
+	local h, env, _, _, ctx = fixture()
+	h.sandbox.engineWait = function() h.sched.wait(0.1) end
+	local result, callback
+	h.sched.spawn(function()
+		result = env.require("tools/execution").run({ code = [[return function()
+			local child = task.spawn(function()
+				engineWait()
+				for index = 1, 1000 do _G.cancelledPluginRan = true end
+			end)
+			task.wait(0.01)
+			task.cancel(child)
+		end]] }, ctx, function(value) callback = value end)
+	end)
+	h.sched.advance(0.2)
+	check("setup returns a live callback", result and result.ok and type(callback) == "function")
+	h.sched.advance(12)
+	h.sched.spawn(callback)
+	h.sched.advance(0.3)
+	check("released plugin loops respect cancelled tasks", h.sandbox.cancelledPluginRan == nil)
+	check("late cancellation leaves no scheduler errors", #h.sched.errors == 0)
+end)
+
 scenario("stopped long delays drain promptly without native cancellation", function()
 	local h, env, registry, run, ctx = fixture()
 	local stopped, nativeCalls = false, 0

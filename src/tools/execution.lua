@@ -194,7 +194,7 @@ return function(env)
 		return M.check(code)
 	end
 
-	function M.run(args, ctx)
+	function M.run(args, ctx, onReturn)
 		local code, sourceErr = sourceFor(args)
 		if not code then return { ok = false, text = sourceErr } end
 		local checked = M.check(code)
@@ -250,7 +250,10 @@ return function(env)
 		end
 		local function capture(prefix, ...)
 			check()
-			if released then return end
+			if released then
+				if onReturn then if prefix == "[warn]" then warn(...) else print(...) end end
+				return
+			end
 			if #logs >= OUTPUT_LINES or bytes >= OUTPUT_BYTES then truncated = true; return end
 			local parts = { prefix }
 			for index = 1, math.min(select("#", ...), 32) do
@@ -280,6 +283,7 @@ return function(env)
 		end
 		local ticks, lastYield = 0, started
 		local function checkpoint()
+			if released and onReturn then check(); return end
 			ticks = ticks + 1
 			if ticks % 128 ~= 0 then return end
 			check()
@@ -377,6 +381,9 @@ return function(env)
 		if #logs > 0 then output[#output + 1] = "Output:\n" .. table.concat(logs, "\n") end
 		if truncated then output[#output + 1] = "(output truncated to the capture limit)" end
 		released = status == "completed"
+		-- Internal callers can consume a validated module table without serialising
+		-- its closures. Future plugin callbacks use ordinary, released execution.
+		if released and onReturn and returns then onReturn(unpack(returns, 2, returns.n)) end
 		return { ok = status == "completed", text = table.concat(output, "\n"),
 			data = { status = status, ms = clock.since(started), outputTruncated = truncated } }
 	end

@@ -6082,8 +6082,7 @@ scenario("a long paste becomes a file, not a wall of context", function()
 	-- A short message is untouched.
 	handle.sessions.current().send("quick one")
 	harness.settle(6)
-	falsy("a short message goes whole",
-		tostring(sent[1].messages[2].content):find("was long, so it was saved", 1, true) ~= nil)
+	check("a short message goes whole", sent[1].messages[2].content, "quick one")
 
 	-- A long one: the script ends up on disk, the conversation carries a pointer,
 	-- and the file tools can read it back by the name the pointer gave.
@@ -6096,8 +6095,9 @@ scenario("a long paste becomes a file, not a wall of context", function()
 	harness.settle(6)
 
 	local carried = tostring(sent[2].messages[#sent[2].messages].content)
-	contains("the conversation says where it went", carried, "was long, so it was saved")
+	contains("the conversation says where it went", carried, "[Attached file:")
 	contains("naming the file", carried, "pastes/")
+	falsy("the reference has no source preview", carried:find("what is wrong with this script?", 1, true) ~= nil)
 	falsy("and does not carry the whole script",
 		carried:find("local value500", 1, true) ~= nil)
 
@@ -6127,7 +6127,7 @@ scenario("a long paste becomes a file, not a wall of context", function()
 	-- the point is that the whole body is reachable, and the file reports its full
 	-- size on the first line.
 	contains("with the body", read.text, "local value50")
-	contains("and its true size stated", read.text, "of 18739;")
+	contains("and its true size stated", read.text, "of " .. tostring(#long) .. ";")
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)

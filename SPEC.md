@@ -164,6 +164,25 @@ error, not a crash. Returning `{ ok = false, text = "..." }` reports a semantic
 failure without raising. Dispatch rechecks disabled groups and the session's tool
 filters before execution, including after a pending approval resolves.
 
+The prompt asks for successive batches of normally 1–4 independent calls, waits
+for their results, and discourages dozens of calls in one response. Dependent
+calls and changes to the same file or runtime state run in successive steps.
+This is prompt guidance only; tool-call limits and concurrency are unchanged.
+
+Inputs over 8,000 UTF-8 bytes become verified files in `UAI/pastes/`, with a
+2 MiB maximum per file. Preserve the original bytes, including whitespace, and
+send only a compact path/size/line-count reference without a source preview.
+Short messages stay inline. The native composer separates a large inserted
+block from the surrounding editable text; attachment-only sends are valid.
+The browser transfers long text through ordered `attachment:upload` commands
+before `send`, with conversation ownership, byte offsets and idempotent retries.
+Only a verified final write produces a usable reference. Failed saves, missing
+files or unavailable file tools leave the draft intact and never send the long
+source inline. These are executor workspace files, not provider-specific uploads.
+Explicit `files/` and `pastes/` paths resolve before bare-name fallbacks; client
+configuration is never a fallback scope. Saved-paste slices return at most 6,000
+source bytes with UTF-8-safe continuation offsets, including batch reads.
+
 `run_luau` uses a separate managed executor with a default 10-second deadline
 (configurable to 1–60 seconds), cooperative loop checkpoints, bounded output, and
 capture of multiple returns. Functions scheduled through its task wrappers share
@@ -202,6 +221,51 @@ budget. Restricted subagent presets include the skills group and explicitly excl
 its write/install/delete tools. Disabled skills remain unreadable; denied or
 unavailable reads do not require retries. Changed skills and bodies lost through
 compaction must be read again.
+
+The Project Gravity tool group resolves the live `_GRAVITY_CONTEXT` for each
+action, falling back to `env.context.gravity`. Desktop and mobile Gravity
+launchers pass that context explicitly. Initialization publishes the handle;
+teardown clears only its own handle. Reloaded or torn-down contexts cannot be
+used for a pending mutation. `gravity_status` is available without a connection;
+engine and shape operations use the dynamic `gravity` capability and normal
+permissions. Shape catalogs and control metadata come from the live runtime and
+paginate; controls use their real keys and stored slider units, including `Div`,
+`IntOnly` and the native speed-range extension. Setting batches validate before
+mutation, preserve table identities, and invoke the relevant native handlers.
+
+`gravity_parts` lists the authoritative held-part map in claim-ID order, with
+filters, continuation offsets and at most 25 records per call. IDs include the
+Gravity session ID; stale or cross-session IDs cannot select a new part.
+`gravity_part_control` uses the native selection/assignment/ride/physics/release
+handlers, requires the guarded Part Control API, and honors the native 512-part
+selection ceiling. Shape loads recheck cancellation, session identity and the
+entire selected-record snapshot before assignment. Group movement preserves
+spacing, using current pin/manual targets or the parts' world positions.
+Selection clearing retains overrides; `release_all` includes unselected ride and
+physics overrides even without a mode. Per-part overrides are session state.
+
+Engine configuration also covers UI scale, HUD, visual performance, FPS, core RGB
+color, ignore tags and Part Control panel defaults. FPS requires native executor
+support. Typed batches validate before mutation and restore previous settings
+when a native effect fails, reporting an incomplete restoration when necessary.
+Part Control defaults are separate from assigning overrides to a selection.
+`gravity_keybind` rebinds native core/shape shortcuts after rejecting collisions;
+`gravity_favorite` changes the native favorites table and selector. A settings
+reset uses Gravity's complete reset hook, including visual restoration, hotkeys,
+control refresh and post-startup plugin defaults. `persist=false` avoids requesting
+a save for settings, keybindings, favorites, shape selection and reset. Manual
+Slingshot launch/charge requires that shape and its manual-control mode.
+
+`gravity_plugin_read` supplies the module guide, template or bounded local/official
+source slices. `gravity_plugin_write` accepts source or a saved file path, checks
+syntax, verifies the real `GravityShapes/` file, and requires `overwrite=true` for
+replacement. Default loading runs setup once under the existing execution deadline,
+validates the returned module and controls, cleans up a previous module and
+preserves compatible settings. An inactive shape is not selected automatically.
+`load=false` saves syntax-checked source without executing it. Replacements check
+for file/runtime changes during setup; failed verification restores the previous
+file where possible. Released plugin callbacks have no setup deadline but retain
+explicit task cancellation; persistent callbacks require plugin-owned cleanup.
 
 Infinite Yield tools read the running engine's environment, for both an ambient
 IY and a captured internal load. `iy_cmds` joins the executable command registry
@@ -260,7 +324,8 @@ their members.
   cooperatively, and inspect at most 20,000 nodes. Query offsets refer to the
   current traversal order; restart if the tree changes. An incomplete scan must
   never be presented as proof of absence.
-- `file_search` searches single-line literals in the files scope, supporting
+- `file_search` searches single-line literals in the files scope or an explicit
+  `pastes/` path, supporting
   filename globs and a case-sensitive option. Its inventory caps are 128
   directories, 1,000 files, and 6,000 entries. It skips binary files and files
   over 2 MB and scans at most 8 MB and 50,000 new lines per page. The read budget
@@ -556,6 +621,11 @@ luajit test/check.lua        # lint, parse and link every module
 luajit test/run.lua          # load dist/uai.lua against the mock client, run scenarios
 luajit test/iy_control.lua   # IY selectors, native configuration and plugin contracts
 luajit test/tool_workflows.lua # batch tools, pagination, scopes, cancellation
+luajit test/attachments.lua    # exact saved inputs, compact payloads, upload recovery
+luajit test/gravity.lua        # live adapter and plugin registration contracts
+luajit test/execution_tools.lua # managed execution and released callback cancellation
+node --test bridge/test-runtime.js
+node bridge/test-browser-workflows.js # requires Playwright
 node tools/build_site.js      # actual tool catalog and root/docs site copies
 node tools/build_site.js --check
 python test/site_static.py    # structural checks; no browser or image loading

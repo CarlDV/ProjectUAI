@@ -126,6 +126,7 @@ return function(env)
 	-- before dispatch so an unavailable tool reports a clear reason to the model
 	-- instead of erroring somewhere inside a nil call.
 	function M.has(key)
+		if key == "gravity" then return env.require("runtime/gravity").current() ~= nil end
 		return M.available[key] == true
 	end
 
@@ -137,6 +138,7 @@ return function(env)
 		clipboard = "this host has no clipboard function",
 		hooks = "this host does not expose signal introspection (getconnections)",
 		ua = "this host cannot set a custom User-Agent",
+		gravity = "Project Gravity is not connected; run the updated Gravity loader and open its PROJECT UAI button",
 	}
 
 	function M.reason(key)

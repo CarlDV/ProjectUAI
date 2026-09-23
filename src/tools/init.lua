@@ -28,6 +28,7 @@ local GROUPS = {
 	"templates",
 	"screen",
 	"iy",
+	"gravity",
 	"skills",
 }
 

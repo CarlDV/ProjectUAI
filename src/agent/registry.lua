@@ -92,6 +92,7 @@ return function(env)
 		templates = "Templates",
 		screen = "Screen & aiming",
 		iy = "Infinite Yield",
+		gravity = "Project Gravity",
 		skills = "Skills",
 	}
 

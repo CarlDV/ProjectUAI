@@ -17,13 +17,7 @@ return function(env)
 	end
 
 	function M.read(path)
-		local content, err = fsx.read(path, M.scope)
-		if content ~= nil or fsx.exists(path, M.scope) then return content, err end
-		local paste = tostring(path):gsub("\\", "/")
-		local prefix = fsx.root .. "/pastes/"
-		if util.startsWith(paste, prefix) then paste = paste:sub(#prefix + 1)
-		elseif util.startsWith(paste, "pastes/") then paste = paste:sub(8) end
-		return fsx.read(paste, { scope = "pastes" })
+		return fsx.readUser(path)
 	end
 
 	-- Greedy glob matching avoids Lua pattern backtracking on inputs such as
@@ -50,15 +44,17 @@ return function(env)
 
 	function M.files(root, ctx)
 		root = util.trim(root):gsub("\\", "/"):gsub("/+$", "")
+		local scope, prefix = M.scope, ""
 		if root ~= "" then
-			local clean, err = fsx.sanitise(root)
+			local clean, explicit, err = fsx.userPath(root)
 			if not clean then return nil, err end
 			root = clean
+			if explicit then scope = { scope = explicit }; prefix = explicit .. "/" end
 		end
-		if root ~= "" and fsx.exists(root, M.scope) then return { root }, { errors = {}, complete = true } end
+		if root ~= "" and fsx.exists(root, scope) then return { prefix .. root }, { errors = {}, complete = true, explicit = prefix ~= "" } end
 		local paths, seenFiles, seenDirs = {}, {}, {}
 		local queue, at = { root }, 1
-		local report = { errors = {}, complete = true }
+		local report = { errors = {}, complete = true, explicit = prefix ~= "" }
 		local inspected = 0
 		while at <= #queue do
 			if M.stopped(ctx) then report.complete, report.reason = false, "aborted"; break end
@@ -66,7 +62,7 @@ return function(env)
 			local dir = queue[at]
 			at = at + 1
 			seenDirs[dir] = true
-			local entries, err = fsx.list(dir, M.scope)
+			local entries, err = fsx.list(dir, scope)
 			if err then
 				report.complete = false
 				report.errors[#report.errors + 1] = { path = dir, error = util.ellipsis(err, 200) }
@@ -81,14 +77,14 @@ return function(env)
 				if path and path ~= dir and dir ~= "" and not path:find("/", 1, true) then path = dir .. "/" .. path end
 				local inRoot = path and (root == "" or path == root or util.startsWith(path, root .. "/"))
 				if inRoot then
-					if entry.isDir or fsx.isDir(path, M.scope) then
+					if entry.isDir or fsx.isDir(path, scope) then
 						if not seenDirs[path] then
 							seenDirs[path] = true
 							queue[#queue + 1] = path
 						end
 					elseif not seenFiles[path] then
 						seenFiles[path] = true
-						paths[#paths + 1] = path
+						paths[#paths + 1] = prefix .. path
 					end
 				end
 			end

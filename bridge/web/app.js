@@ -50,8 +50,9 @@ function renderAttachments(){
     const remove=button(file.name+' ×',()=>{uploads.splice(index,1);renderAttachments();saveDraft();});
     remove.title='Remove '+file.name;remove.setAttribute('aria-label',remove.title);$('attachments').append(remove);
   });
+  setBusy(busy);
 }
-function setBusy(value){busy=!!value;$('stop').hidden=!busy;$('send').hidden=busy;$('send').disabled=sending||!connected||!$('input').value.trim();$('transcript').setAttribute('aria-busy',String(busy));}
+function setBusy(value){busy=!!value;$('stop').hidden=!busy;$('send').hidden=busy;$('send').disabled=sending||!connected||(!$('input').value.trim()&&!uploads.length);$('transcript').setAttribute('aria-busy',String(busy));}
 function stick(){const t=$('transcript');return t.scrollHeight-t.scrollTop-t.clientHeight<120;}
 function append(node){const pinned=stick();$('transcript').querySelector('.welcome')?.remove();$('transcript').append(node);if(pinned)$('transcript').scrollTop=$('transcript').scrollHeight;}
 function message(who,text,model){const node=el('article','message '+who);const byline=el('div','byline');if(who==='agent'){const icon=el('img');icon.src='icon.svg';icon.alt='';byline.append(icon);}byline.append(el('span',null,who==='user'?(state.player||'you'):'Assistant'),el('small',null,model||''));const body=el('div','body');if(who==='user')body.textContent=text;else body.innerHTML=md(text);node.append(byline,body);append(node);return {node,body};}
@@ -248,14 +249,21 @@ renderPanel=function(){const root=$('panel'),position=root.scrollTop;const open=
 }for(const details of root.querySelectorAll('details'))if(open.has(details.querySelector('summary')?.textContent))details.open=true;root.scrollTop=position;};
 async function submit(){
   if(sending||busy||!connected)return;
-  const text=$('input').value.trim();if(!text)return;
+  const text=$('input').value;if(!text.trim()&&!uploads.length)return;
   saveDraft();
   const original=$('input').value,files=uploads.slice(),sentSession=sessionId,sentVersion=drafts[sessionId]?.version;
-  const payload=text+files.map(f=>`\n\n[Attached: ${f.name}]\n${f.text}`).join('');
-  if(new TextEncoder().encode(JSON.stringify({text:payload})).length>950*1024){toast('Message and attachments exceed 950 KB. Remove an attachment or shorten the message.');return;}
   sending=true;setBusy(busy);
   try{
-    await command('send',{text:payload});
+    const encode=new TextEncoder(),limit=state.attachments?.inlineLimit||8000;
+    const parts=[],references=[];
+    const attach=async(text,name)=>{const file=await uploadText(text,name,sentSession);references.push({path:file.path,bytes:file.bytes});return file.reference;};
+    if(encode.encode(text).length>limit)parts.push(await attach(text,'pasted-input.txt'),'Read the file for the complete user input, including any request at the end.');
+    else parts.push(text.trim()||'Please read the attached input.');
+    for(const file of files){
+      if(encode.encode(file.text).length>limit)parts.push(await attach(file.text,file.name));
+      else parts.push(`[Attached: ${file.name}]\n${file.text}`);
+    }
+    await command('send',{text:parts.join('\n\n'),files:references,sessionId:sentSession});
     if(sessionId===sentSession)saveDraft();
     const current=drafts[sentSession]||{},sentIds=new Set(files.map(f=>f.id));
     const clear=current.version===sentVersion&&current.text===original;
@@ -265,19 +273,41 @@ async function submit(){
   }catch(e){toast(e.message);}
   finally{sending=false;setBusy(busy);}
 }
+async function uploadText(text,name,target){
+  const encode=new TextEncoder(),max=state.attachments?.maxBytes||2*1024*1024;
+  if(encode.encode(text).length>max)throw Error(name+' exceeds 2 MiB. Split it into smaller files.');
+  const uploadId=uuid();let offset=0,result;
+  for(let at=0;at<text.length;){
+    let end=Math.min(at+32768,text.length);
+    if(end<text.length&&text.charCodeAt(end-1)>=0xd800&&text.charCodeAt(end-1)<=0xdbff)end--;
+    const content=text.slice(at,end);
+    result=await command('attachment:upload',{sessionId:target,uploadId,name,offset,content,final:end===text.length});
+    offset+=encode.encode(content).length;at=end;
+  }
+  if(!result?.reference||!result.path||result.bytes!==offset)throw Error('The saved attachment could not be verified. Your draft was kept.');
+  return result;
+}
+function pasteInput(event){
+  const text=event.clipboardData?.getData('text/plain');
+  if(!text||!sessionId||new TextEncoder().encode(text).length<=(state.attachments?.inlineLimit||8000))return;
+  event.preventDefault();
+  if(new TextEncoder().encode(text).length>(state.attachments?.maxBytes||2*1024*1024)){toast('This paste exceeds 2 MiB. Split it into smaller files.');return;}
+  const input=$('input');input.setRangeText('',input.selectionStart,input.selectionEnd,'end');
+  uploads.push({id:uuid(),name:'pasted-input.txt',text});renderAttachments();grow();
+}
 async function attachFiles(){
   const selected=Array.from($('fileInput').files),target=sessionId;
   $('fileInput').value='';
   if(!target){toast('Connect to Roblox before attaching files.');return;}
   saveDraft();
   for(const file of selected){
-    if(file.size>512000){toast(file.name+' exceeds 500 KB');continue;}
+    if(file.size>(state.attachments?.maxBytes||2*1024*1024)){toast(file.name+' exceeds 2 MiB');continue;}
     if(/^(image|audio|video)\//.test(file.type)){toast(file.name+': attach a text or code file.');continue;}
     try{
       const text=await file.text();
       if(text.includes('\0')){toast(file.name+': binary files are not supported.');continue;}
       const item={id:uuid(),name:file.name,text};
-      if(sessionId===target){uploads.push(item);renderAttachments();saveDraft();}
+      if(sessionId===target){uploads.push(item);renderAttachments();saveDraft();setBusy(busy);}
       else{const draft=drafts[target]||{text:'',version:0,uploads:[]};drafts[target]={...draft,uploads:[...(draft.uploads||[]),item]};persistDrafts();}
     }catch(err){toast('Could not read '+file.name+': '+err.message);}
   }
@@ -285,6 +315,7 @@ async function attachFiles(){
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=el('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 $('send').onclick=submit;$('stop').onclick=()=>action('abort');$('clear').onclick=()=>{if(confirm('Clear this conversation?'))action('clear');};
 $('input').oninput=grow;
+$('input').onpaste=pasteInput;
 $('input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();submit();}};
 $('newThread').onclick=$('newConversation').onclick=()=>action('thread:new');$('modelButton').onclick=models;
 $('attach').onclick=()=>$('fileInput').click();$('fileInput').onchange=attachFiles;

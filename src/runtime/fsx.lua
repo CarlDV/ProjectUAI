@@ -121,6 +121,32 @@ return function(env)
 		return true, full
 	end
 
+	-- Explicit user-file prefixes always win, even if a workspace file has the
+	-- same name. Client state under the app root is never a fallback scope.
+	function M.userPath(path)
+		local clean, err = M.sanitise(path)
+		if not clean then return nil, nil, err end
+		if util.startsWith(clean, M.root .. "/") then clean = clean:sub(#M.root + 2) end
+		for _, scope in ipairs({ "pastes", "files" }) do
+			if clean == scope then return "", scope end
+			if util.startsWith(clean, scope .. "/") then return clean:sub(#scope + 2), scope end
+		end
+		return clean
+	end
+
+	function M.readUser(path)
+		local name, scope, err = M.userPath(path)
+		if not name then return nil, err end
+		if scope then
+			local content, why = M.read(name, { scope = scope })
+			return content, why, scope .. "/" .. name
+		end
+		local content, why = M.read(name, { scope = "files" })
+		if content ~= nil or M.exists(name, { scope = "files" }) then return content, why, "files/" .. name end
+		content, why = M.read(name, { scope = "pastes" })
+		return content, why, "pastes/" .. name
+	end
+
 	function M.append(path, content, opts)
 		if not M.enabled then return false, caps.reason("fs") end
 		local full, err = M.resolve(path, opts)

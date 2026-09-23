@@ -9,6 +9,7 @@ return function(env)
 	local config = env.require("runtime/config")
 	local clock = env.require("runtime/clock")
 	local fsx = env.require("runtime/fsx")
+	local attachments = env.require("runtime/attachments")
 	local log = env.require("runtime/log")
 	local signal = env.require("runtime/signal")
 	local context = env.require("agent/context")
@@ -56,7 +57,7 @@ return function(env)
 	-- the body goes to pastes/ and the conversation carries a pointer -- the user's
 	-- words plus "the code is in this file" -- which is the same information for a
 	-- fraction of the context.
-	local PASTE_CAP = 8000
+	local PASTE_CAP = attachments.INLINE_LIMIT
 
 	local function transcriptOf(session)
 		local durable = {}
@@ -209,27 +210,42 @@ return function(env)
 		--
 		-- Two conversations may run at once, though -- that is the point of threads --
 		-- so everything in here that reaches outside the session has to name it.
-		function session.send(text, onDone)
+		function session.send(text, onDone, files)
+			text = tostring(text or "")
 			local clean = util.trim(text)
 			if clean == "" then return false, "nothing to send" end
-			if session.busy then return false, "already working" end
+			if session.busy or session.preparing then return false, "already working" end
+			if session.removed then return false, "conversation no longer exists" end
+			files = files or {}
+			if type(files) ~= "table" or not util.isArray(files) or #files > 32 then return false, "invalid attachment list" end
 
-			-- A message pasted in whole -- a script, a log, a config -- over the paste
-			-- cap becomes a file and a pointer. The user's own words are never the part
-			-- that overflows: the cap is on the whole message, but the tail that crosses
-			-- it is nearly always the pasted block, so the head (what they typed around
-			-- it) stays in the conversation and the block goes to disk where the tools
-			-- can read it properly.
-			if #clean > PASTE_CAP and fsx.enabled then
-				local stamp = os.date("!%Y%m%d-%H%M%S")
-				local path = session.id .. "-" .. stamp .. ".txt"
-				local ok = fsx.write(path, clean, { scope = "pastes" })
-				if ok then
-					clean = string.format(
-						"%s\n\n[The rest of this message was long, so it was saved to %s/pastes/%s. Read it with file_read when you need it.]",
-						util.ellipsis(clean, 400), fsx.root, path)
-					session.emit("status", { text = "Long message saved to pastes/" .. path })
-				end
+			local title = util.ellipsis(clean, 42)
+			-- This boundary also covers Quick Chat, bridge clients and host scripts.
+			-- Never turn a failed upload into an enormous inference request.
+			if #text > PASTE_CAP or #files > 0 then
+				local preparation = {}
+				session.preparing = preparation
+				local ok, prepared, why = pcall(function()
+					local readable = false
+					for _, tool in ipairs(env.require("agent/registry").definitions({ only = session.toolFilter,
+						groups = session.toolGroups, exclude = session.toolExclude })) do
+						if tool["function"].name == "file_read" then readable = true; break end
+					end
+					if not readable then return nil, "Enable the Files tools and file storage to send long inputs as files." end
+					for _, file in ipairs(files) do
+						if type(file) ~= "table" or type(file.path) ~= "string" or type(file.bytes) ~= "number" then return nil, "invalid attachment reference" end
+						local content, err = fsx.readUser(file.path)
+						if not content or #content ~= file.bytes then return nil, "attachment is missing or changed: " .. file.path .. ". " .. tostring(err or "Attach it again.") end
+					end
+					if #text <= PASTE_CAP then return clean end
+					local entry, err = attachments.save(text)
+					if not entry then return nil, err end
+					return attachments.reference(entry) .. "\n\nRead this file for the user's complete input, including any request at the end."
+				end)
+				if session.preparing ~= preparation then return false, "message preparation was cancelled; your draft was kept" end
+				session.preparing = nil
+				if not ok or not prepared then return false, ok and why or tostring(prepared) end
+				clean = prepared
 			end
 
 			session.busy = true
@@ -237,7 +253,7 @@ return function(env)
 			session.turns = session.turns + 1
 			session.toolEpoch = {}
 			if session.title == "New chat" and not session.named then
-				session.title = util.ellipsis(clean, 42)
+				session.title = title
 			end
 			session.emit("user", { text = clean })
 			-- The list is where "this one is still working" is visible while you are
@@ -273,6 +289,7 @@ return function(env)
 		end
 
 		function session.abort()
+			if session.preparing then session.preparing = nil; return true end
 			local loops = env.loadedModules and env.loadedModules["runtime/chatloops"]
 			local stoppedLoops = loops and loops.stop(nil, session) or 0
 			if not session.busy then return stoppedLoops > 0 end
@@ -284,6 +301,8 @@ return function(env)
 		end
 
 		function session.clear()
+			session.preparing = nil
+			attachments.clearUploads(session.id)
 			session.ctx.clear()
 			session.log = {}
 			session.turns = 0
@@ -456,6 +475,8 @@ return function(env)
 	function M.remove(id)
 		local session = M.threads[id]
 		if not session then return false end
+		session.preparing, session.removed = nil, true
+		attachments.clearUploads(id)
 		if session.busy then session.abort() end
 		M.threads[id] = nil
 		if fsx.enabled then fsx.delete(THREAD_DIR .. "/" .. id .. ".json") end

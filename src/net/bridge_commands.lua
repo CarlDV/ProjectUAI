@@ -8,7 +8,11 @@ return function(env)
 		local kind = command.type
 		local session = command.sessionId and sessions.threads[command.sessionId] or sessions.current()
 		if not session then error("Conversation no longer exists", 0) end
-		if kind == "runtime" then
+		if kind == "attachment:upload" then
+			local result, err = env.require("runtime/attachments").upload(session.id, command)
+			if not result then error(err, 0) end
+			return result
+		elseif kind == "runtime" then
 			if #sessions.busy() > 0 or #env.require("agent/subagent").running() > 0
 				or #env.require("runtime/chatloops").running() > 0 then error("Stop running work before switching runtime", 0) end
 			if command.value ~= "game" and command.value ~= "web" then error("Unknown runtime", 0) end
