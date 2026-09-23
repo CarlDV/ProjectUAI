@@ -39,6 +39,8 @@ return function(env)
 				} },
 				{ category = "improved", items = {
 					"The prompt asks for successive batches of normally 1–4 independent tool calls. Tool-call limits and concurrency settings are unchanged.",
+					"Automatic compaction sizes itself to the model's context window (Compact at, 80% by default), with the Context budget as a hard ceiling, and measures pressure against the prompt tokens the provider actually reports. Compact now, in the composer's message-options menu, folds older turns on demand.",
+					"A live context-window counter sits beside the model in the composer, and the agent can review earlier conversations with conversation_list (triage by opening request) and conversation_read (a condensed digest by default, or verbatim with full=true).",
 					"Landscape touch layout uses a compact multiline composer, searchable conversation navigation, full-width settings and a bounded attachment strip.",
 					"Drafts, attachments, open forms and orientation-specific placement survive rotation. Mobile Enter adds a line; Send submits. Desktop placement stays independent.",
 				} },

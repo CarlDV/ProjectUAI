@@ -300,6 +300,30 @@ return function(env)
 			return true
 		end
 
+		-- Fold older turns into the summary now, on the user's command, without
+		-- starting a turn. Reuses the busy interlock so a send cannot interleave with
+		-- the mutation, and persists the trimmed conversation when it changes.
+		function session.compact(onDone)
+			if session.busy or session.preparing then return false, "already working" end
+			if session.removed then return false, "conversation no longer exists" end
+			session.busy = true
+			session.abortFlag = false
+			session.emit("status", { text = "Compacting" })
+			M.listChanged:fire()
+			task.spawn(function()
+				local ok, summary = pcall(function()
+					return env.require("agent/loop").compact(session)
+				end)
+				session.busy = false
+				session.emit("status", { text = "Ready" })
+				if not ok then log.error("session", "manual compaction crashed", summary) end
+				if ok and summary then M.persist(session) end
+				M.listChanged:fire()
+				if onDone then pcall(onDone, ok and summary ~= nil, ok and summary or nil) end
+			end)
+			return true
+		end
+
 		function session.clear()
 			session.preparing = nil
 			attachments.clearUploads(session.id)

@@ -199,13 +199,17 @@ return function(env)
 
 			session.emit("status", { text = turn == 1 and "Thinking" or ("Working (step " .. turn .. ")") })
 
+			local record = providers.active()
 			local before = ctx.tokens()
-			local summary = ctx.compact(summariser(session), { tokenLimit = config.get("agent.contextTokens", 24000) })
+			-- The "Summarise old turns" switch gates the paid summary call, not the
+			-- trimming: a live conversation is always kept inside the window, but with
+			-- the switch off the dropped turns leave a plain note rather than an
+			-- LLM-written summary. The budget adapts to the model's own context window.
+			local summarise = config.get("agent.compaction", true) ~= false and summariser(session) or nil
+			local summary = ctx.compact(summarise, { model = record and record.model })
 			if summary then
 				session.emit("compact", { summary = summary, before = before, after = ctx.tokens() })
 			end
-
-			local record = providers.active()
 			-- A session may carry its own brief. A subagent does: it answers to the
 			-- parent agent rather than to the user, so inheriting the main prompt
 			-- would have it write a chat reply instead of a report.
@@ -245,7 +249,7 @@ return function(env)
 				return failed(session, "I could not reach a provider. " .. tostring(err))
 			end
 
-			usage.record(result.usage, result.model or (record and record.model), {
+			local spent = usage.record(result.usage, result.model or (record and record.model), {
 				prompt = usage.estimateMessages(request.messages),
 				completion = usage.estimateText(result.content) + usage.estimateText(result.reasoning),
 			}, record)
@@ -258,6 +262,11 @@ return function(env)
 				session.emit("assistant:text", { text = result.content, final = #result.toolCalls == 0, requestId = result.requestId })
 			end
 
+			-- Calibrate the context estimate against what the provider actually
+			-- counted for this prompt, before the reply is stored: the real figure
+			-- includes the system prompt and tool schemas the message estimate omits,
+			-- so the next compaction check measures true window pressure.
+			if spent and not spent.estimated then ctx.calibrate(spent.prompt) end
 			ctx.pushAssistant(result)
 
 			if #result.toolCalls == 0 then
@@ -353,6 +362,22 @@ return function(env)
 		session.emit("turn:end", { text = finalText })
 		session.emit("status", { text = "Ready" })
 		return finalText
+	end
+
+	-- Compact on demand, outside a turn -- the composer's Compact now action. Uses
+	-- the same summariser as the automatic path and forces a pass even when the
+	-- conversation is under budget, so an explicit request always folds whatever
+	-- history there is. Returns the summary (or nil when there was nothing to fold)
+	-- and the before/after token estimates.
+	function M.compact(session)
+		local ctx = session.ctx
+		local record = providers.active()
+		local before = ctx.tokens()
+		local summary = ctx.compact(summariser(session), { model = record and record.model, force = true })
+		if summary then
+			session.emit("compact", { summary = summary, before = before, after = ctx.tokens(), manual = true })
+		end
+		return summary, before, ctx.tokens()
 	end
 
 	return M

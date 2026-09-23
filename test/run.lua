@@ -6168,6 +6168,37 @@ scenario("conversation_search reads other threads", function()
 	} }, context)
 	truthy("a miss is reported, not an error", none.ok, none.text)
 	contains("saying nothing was found", none.text, "No other conversation or paste")
+
+	local listed = handle.tools.dispatch({ id = "l", ["function"] = {
+		name = "conversation_list",
+		arguments = json.encode({}),
+	} }, context)
+	truthy("listing other conversations succeeds", listed.ok, listed.text)
+	contains("the list names the older thread", listed.text, "The raft job")
+	contains("and marks the current one", listed.text, "(this conversation)")
+	contains("the list previews the opening request", listed.text, "raft spawns at the wrong place")
+
+	local readBack = handle.tools.dispatch({ id = "r", ["function"] = {
+		name = "conversation_read",
+		arguments = json.encode({ id = first.id }),
+	} }, context)
+	truthy("reading a thread by id succeeds", readBack.ok, readBack.text)
+	contains("the transcript carries the matching line", readBack.text, "SpawnLocation")
+	contains("labelled with the conversation it came from", readBack.text, "The raft job")
+	contains("the review is condensed by default", readBack.text, "condensed")
+
+	local fullRead = handle.tools.dispatch({ id = "rf", ["function"] = {
+		name = "conversation_read",
+		arguments = json.encode({ id = first.id, full = true }),
+	} }, context)
+	truthy("a verbatim read succeeds", fullRead.ok, fullRead.text)
+	contains("the verbatim read is labelled full", fullRead.text, "(full)")
+
+	local missing = handle.tools.dispatch({ id = "m", ["function"] = {
+		name = "conversation_read",
+		arguments = json.encode({ id = "s_not_a_real_id" }),
+	} }, context)
+	falsy("an unknown id is a clean failure, not a crash", missing.ok)
 end)
 
 -- The subagent's own catalogue must not contain ask_user, and its brief has to say

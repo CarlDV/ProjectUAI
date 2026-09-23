@@ -41,7 +41,8 @@ return function(env)
 				["agent.toolConcurrency"] = { 1, 8 }, ["agent.maxTurns"] = { 1, 1000 },
 				["agent.toolTimeout"] = { 1, 86400 }, ["agent.requestTimeout"] = { 1, 86400 },
 				["bridge.requestTimeout"] = { 10, 86400 }, ["agent.retries"] = { 1, 10 },
-				["agent.contextTokens"] = { 1000, 2000000 }, ["agent.maxTokens"] = { 1, 1000000 } }
+				["agent.contextTokens"] = { 1000, 2000000 }, ["agent.contextFraction"] = { 0.3, 0.95 },
+				["agent.maxTokens"] = { 1, 1000000 } }
 			local range = ranges[path]
 			if range and (command.value < range[1] or command.value > range[2]) then error("Setting is outside its supported range", 0) end
 			config.set(path, command.value)

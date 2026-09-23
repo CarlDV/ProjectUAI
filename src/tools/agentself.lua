@@ -14,6 +14,71 @@ return function(env)
 	-- arrives during work they are already watching.
 	local ASK_TIMEOUT = 600
 
+	-- A previous conversation rendered for review by the agent. Built from the
+	-- durable transcript (the full persisted history), falling back to the model
+	-- context for a thread that predates stored logs. Condensed by default: long
+	-- turns are shortened and tool runs collapsed, so a whole conversation fits in
+	-- one bounded read; full=true returns every turn verbatim for byte-sliced paging.
+	local REVIEW_USER_CAP, REVIEW_REPLY_CAP = 500, 900
+	local function turnText(text, full, limit)
+		text = util.trim(tostring(text or ""))
+		if full or #text <= limit then return text end
+		return util.ellipsis(text, limit)
+	end
+	local function readableTranscript(session, full)
+		local parts = {}
+		if session.ctx.summary and util.trim(session.ctx.summary) ~= "" then
+			parts[#parts + 1] = "[earlier turns, summarised: " .. util.trim(session.ctx.summary) .. "]"
+		end
+		local tools = {}
+		local function flush()
+			if #tools > 0 then parts[#parts + 1] = "[ran " .. table.concat(tools, ", ") .. "]"; tools = {} end
+		end
+		for _, event in ipairs(session.log or {}) do
+			local kind = event.kind
+			if kind == "user" then
+				flush(); parts[#parts + 1] = "User: " .. turnText(event.text, full, REVIEW_USER_CAP)
+			elseif kind == "assistant:text" then
+				flush()
+				local text = turnText(event.text, full, REVIEW_REPLY_CAP)
+				if text ~= "" then parts[#parts + 1] = "Assistant: " .. text end
+			elseif kind == "tool:call" then
+				tools[#tools + 1] = tostring(event.name or "tool")
+			elseif kind == "compact" then
+				flush(); parts[#parts + 1] = "[conversation compacted here]"
+			elseif kind == "error" then
+				flush(); parts[#parts + 1] = "[error: " .. util.ellipsis(tostring(event.message or ""), 160) .. "]"
+			end
+		end
+		flush()
+		if #parts == 0 then
+			for _, message in ipairs(session.ctx.messages or {}) do
+				if message.role == "user" then
+					parts[#parts + 1] = "User: " .. turnText(message.content, full, REVIEW_USER_CAP)
+				elseif message.role == "assistant" and util.trim(tostring(message.content or "")) ~= "" then
+					parts[#parts + 1] = "Assistant: " .. turnText(message.content, full, REVIEW_REPLY_CAP)
+				end
+			end
+		end
+		return table.concat(parts, "\n\n")
+	end
+
+	-- The opening request of a thread, for list previews and triage. A thread with
+	-- no user message has nothing to review, and returns nil so the list can skip it.
+	local function openingLine(session)
+		for _, event in ipairs(session.log or {}) do
+			if event.kind == "user" and type(event.text) == "string" and util.trim(event.text) ~= "" then
+				return util.ellipsis(util.trim(event.text), 140)
+			end
+		end
+		for _, message in ipairs(session.ctx.messages or {}) do
+			if message.role == "user" and util.trim(tostring(message.content or "")) ~= "" then
+				return util.ellipsis(util.trim(tostring(message.content)), 140)
+			end
+		end
+		return nil
+	end
+
 	return {
 		{
 			name = "todo_write",
@@ -67,7 +132,7 @@ return function(env)
 			-- ones on disk as well as the live ones.
 			name = "conversation_search",
 			risk = "read",
-			description = "Search this user's other conversations for something they or the agent said earlier. Use it when the current request refers to earlier work -- 'like last time', 'the script you fixed', 'my usual setup' -- and the facts are not in this conversation. Returns the matching lines with which conversation they came from. This conversation is not searched; you already have it.",
+			description = "Search this user's other conversations for something they or the agent said earlier. Use it when the current request refers to earlier work -- 'like last time', 'the script you fixed', 'my usual setup' -- and the facts are not in this conversation. Returns the matching lines with which conversation they came from and its [id]; read the whole thread with conversation_read. This conversation is not searched; you already have it.",
 			parameters = {
 				type = "object",
 				properties = {
@@ -146,8 +211,8 @@ return function(env)
 								-- lead, not six results.
 								if seen[session.id] then break end
 								seen[session.id] = true
-								lines[#lines + 1] = string.format('%s in "%s": %s',
-									entry.role, session.title,
+								lines[#lines + 1] = string.format('%s in "%s" [%s]: %s',
+									entry.role, session.title, session.id,
 									util.ellipsis(entry.text:sub(math.max(at - 60, 1)), 320))
 								break
 							end
@@ -159,8 +224,103 @@ return function(env)
 				if #lines == 0 then
 					return string.format("No other conversation or paste mentions '%s'. The user may be thinking of something from before this client kept threads, or of work in this conversation.", tostring(args.query))
 				end
-				return string.format("%d match%s elsewhere:\n%s",
+				return string.format("%d match%s elsewhere (read a full thread with conversation_read using its [id]):\n%s",
 					#lines, #lines == 1 and "" or "es", table.concat(lines, "\n"))
+			end,
+		},
+		{
+			-- The survey: what conversations exist, with the ids the reader needs.
+			name = "conversation_list",
+			risk = "read",
+			description = "List this user's other conversations for review, most recent first, each with its id, title, place, age, size and opening request. Use it to triage which past thread is relevant, then read that one with conversation_read. Untouched empty chats are omitted; the current conversation is marked and does not need reading. Query filters on the title or the opening request.",
+			parameters = {
+				type = "object",
+				properties = {
+					query = { type = "string", description = "Optional: only conversations whose title or opening request contains this text." },
+					offset = { type = "integer", minimum = 1 },
+					limit = { type = "integer", minimum = 1, maximum = 30, description = "Maximum rows. Default 10." },
+				},
+				required = {},
+			},
+			run = function(args, ctx)
+				local sessions = env.require("agent/session")
+				local current = ctx and ctx.session or nil
+				local needle = util.trim(tostring(args.query or "")):lower()
+				local all = {}
+				for _, session in ipairs(sessions.list()) do
+					if not session.headless then
+						local preview = openingLine(session)
+						-- A thread with no user message is an untouched chat: nothing to review.
+						if preview and (needle == "" or tostring(session.title):lower():find(needle, 1, true)
+							or preview:lower():find(needle, 1, true)) then
+							all[#all + 1] = { session = session, preview = preview }
+						end
+					end
+				end
+				if #all == 0 then
+					return needle == "" and "This client has no other conversations to review yet."
+						or ("Nothing matches '" .. tostring(args.query) .. "' in other conversations.")
+				end
+				local offset = math.max(1, math.floor(tonumber(args.offset) or 1))
+				local limit = util.clamp(tonumber(args.limit) or 10, 1, 30)
+				local now = clock.ms()
+				local lines, shown = {}, {}
+				for index = offset, math.min(#all, offset + limit - 1) do
+					local session, preview = all[index].session, all[index].preview
+					local ago = session.updatedAt and (util.formatDuration(math.max(now - session.updatedAt, 0)) .. " ago") or "unknown age"
+					lines[#lines + 1] = string.format('%s [%s]%s -- %s, %s%s\n    %s',
+						session.title, session.id,
+						session.placeName and (" in " .. session.placeName) or "",
+						util.pluralise(session.turns or 0, "turn"), ago,
+						session == current and " (this conversation)" or "", preview)
+					shown[#shown + 1] = { id = session.id, title = session.title, turns = session.turns or 0,
+						place = session.placeName, current = session == current, preview = preview }
+				end
+				local nextOffset = offset + limit <= #all and offset + limit or nil
+				local header = string.format("%d conversation%s%s. Read one with conversation_read [id] (add full=true for verbatim text):",
+					#all, #all == 1 and "" or "s",
+					nextOffset and (", showing " .. offset .. "-" .. (offset + #lines - 1)) or "")
+				return { text = header .. "\n" .. table.concat(lines, "\n"),
+					data = { total = #all, conversations = shown, nextOffset = nextOffset } }
+			end,
+		},
+		{
+			-- Reading a whole thread, not just a search snippet. This is what turns
+			-- "the user mentioned a build last week" into the actual decisions taken.
+			name = "conversation_read",
+			risk = "read",
+			description = "Read one of this user's other conversations by id (from conversation_list or conversation_search). Condensed by default: the whole thread with long turns shortened and tool runs collapsed, so a review costs one bounded read. Pass full=true for the verbatim transcript in UTF-8-safe byte slices, following nextOffset for the rest. Use it after a list or search points at a relevant thread, so you carry forward what was decided instead of re-deriving or re-asking it.",
+			parameters = {
+				type = "object",
+				properties = {
+					id = { type = "string", description = "The conversation id, as shown in [brackets] by conversation_list or conversation_search." },
+					full = { type = "boolean", description = "Return every turn verbatim instead of the condensed review. Use only when you need exact wording; it costs more slices." },
+					offset = { type = "integer", minimum = 1, description = "Byte offset to continue from; use the nextOffset from the previous read." },
+					limit = { type = "integer", minimum = 200, maximum = 6000, description = "Maximum bytes to return in this slice." },
+				},
+				required = { "id" },
+			},
+			run = function(args, ctx)
+				local sessions = env.require("agent/session")
+				local id = util.trim(tostring(args.id or ""))
+				if id == "" then return H.fail("a conversation id is required; list them with conversation_list") end
+				local session = sessions.threads[id]
+				if not session then
+					for _, candidate in ipairs(sessions.list()) do
+						if candidate.title == args.id then session = candidate; break end
+					end
+				end
+				if not session then return H.fail("no conversation with id '" .. id .. "'. Use conversation_list for current ids.") end
+				if session.headless then return H.fail("that id is an internal subagent session, not a conversation.") end
+				local full = args.full == true
+				local body = readableTranscript(session, full)
+				if util.trim(body) == "" then body = "(this conversation has no readable messages yet)" end
+				if not full then
+					body = "(condensed: long turns are shortened and tool runs collapsed; call again with full=true for verbatim text)\n\n" .. body
+				end
+				local label = string.format('Conversation "%s" [%s]%s (%s)', session.title, session.id,
+					session.placeName and (" in " .. session.placeName) or "", full and "full" or "condensed")
+				return H.readSlice(label, body, args, 4000)
 			end,
 		},
 		{

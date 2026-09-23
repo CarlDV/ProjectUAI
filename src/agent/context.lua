@@ -23,6 +23,10 @@ return function(env)
 			summary = nil,
 			compactions = 0,
 			dropped = 0,
+			-- The tokens a request spends beyond the message estimate: the system
+			-- prompt and tool schemas ctx.tokens() does not see. Learned from what the
+			-- provider actually counted, so the budget check reflects the real prompt.
+			overhead = 0,
 		}
 
 		function ctx.push(message)
@@ -88,6 +92,34 @@ return function(env)
 			return total
 		end
 
+		-- The whole-prompt token budget at which older turns get summarised. The
+		-- manual "Context budget" setting is a hard ceiling; when the model's own
+		-- context window is known, compaction starts at a fraction of it, so a small-
+		-- window model compacts on its own without the user tuning a number for it.
+		function ctx.limitFor(model)
+			local configured = math.max(tonumber(config.get("agent.contextTokens", 24000)) or 24000, 1000)
+			local window = model and env.require("provider/traits").contextWindow(model) or nil
+			if not window then return configured end
+			local fraction = tonumber(config.get("agent.contextFraction", 0.8)) or 0.8
+			fraction = math.max(0.3, math.min(fraction, 0.95))
+			return math.max(1000, math.min(configured, math.floor(window * fraction)))
+		end
+
+		-- What the next request is expected to actually cost the window: the message
+		-- estimate plus the measured overhead of the system prompt and tool schemas.
+		function ctx.pressure()
+			return ctx.tokens() + math.max(ctx.overhead or 0, 0)
+		end
+
+		-- Fold the provider's reported prompt-token count for the request just sent
+		-- into the overhead estimate. Called before the reply is stored, so
+		-- ctx.tokens() still reflects exactly what was on the wire.
+		function ctx.calibrate(promptTokens)
+			local real = tonumber(promptTokens)
+			if not real or real <= 0 then return end
+			ctx.overhead = math.max(0, real - ctx.tokens())
+		end
+
 		function ctx.stats()
 			local counts = { user = 0, assistant = 0, tool = 0 }
 			for _, message in ipairs(ctx.messages) do
@@ -96,6 +128,8 @@ return function(env)
 			return {
 				messages = #ctx.messages,
 				tokens = ctx.tokens(),
+				pressure = ctx.pressure(),
+				overhead = ctx.overhead or 0,
 				turns = counts.user,
 				toolResults = counts.tool,
 				compactions = ctx.compactions,
@@ -106,12 +140,12 @@ return function(env)
 		-- Removes whole blocks from the front until the estimate fits, always
 		-- keeping the most recent `keep` blocks. Returns the removed messages so a
 		-- caller can summarise them.
-		function ctx.trim(tokenLimit, keepBlocks)
+		function ctx.trim(tokenLimit, keepBlocks, force)
 			local limit = tokenLimit or config.get("agent.contextTokens", 24000)
 			local keep = math.max(keepBlocks or 2, 1)
 			local removed = {}
 
-			while ctx.tokens() > limit do
+			while force or ctx.tokens() > limit do
 				local starts = blockStarts()
 				if #starts <= keep then break end
 				local cutTo = starts[2] and (starts[2] - 1) or 0
@@ -129,8 +163,10 @@ return function(env)
 
 			-- A single block can exceed the budget on its own -- one enormous tool
 			-- result will do it. Shrink the oldest tool results in place rather than
-			-- dropping the block and losing the user's actual question.
-			if ctx.tokens() > limit then
+			-- dropping the block and losing the user's actual question. A forced pass
+			-- (Compact now) skips this: it is folding history, not rescuing a request,
+			-- and must not gut the recent turns it deliberately keeps.
+			if not force and ctx.tokens() > limit then
 				for _, message in ipairs(ctx.messages) do
 					if message.role == "tool" and #tostring(message.content) > 400 then
 						message.content = util.truncate(message.content, 400, "trimmed to fit the context budget")
@@ -152,10 +188,14 @@ return function(env)
 		-- module stays free of provider knowledge and stays testable.
 		function ctx.compact(summarise, opts)
 			opts = opts or {}
-			local limit = opts.tokenLimit or config.get("agent.contextTokens", 24000)
-			if ctx.tokens() <= limit then return nil end
+			local budget = opts.tokenLimit or ctx.limitFor(opts.model)
+			local force = opts.force == true
+			-- Messages are the trimmable part; the measured overhead is not, so the
+			-- message budget is the whole-prompt budget minus that fixed overhead.
+			local msgLimit = math.max(1000, budget - math.max(ctx.overhead or 0, 0))
+			if not force and ctx.tokens() <= msgLimit then return nil end
 
-			local removed = ctx.trim(limit, opts.keepBlocks or 2)
+			local removed = ctx.trim(force and 0 or msgLimit, opts.keepBlocks or 2, force)
 			if #removed == 0 then return nil end
 
 			if type(summarise) ~= "function" then
@@ -300,6 +340,7 @@ return function(env)
 			ctx.summary = nil
 			ctx.compactions = 0
 			ctx.dropped = 0
+			ctx.overhead = 0
 		end
 
 		-- Persistence keeps the fields a reload needs and drops the derived ones.

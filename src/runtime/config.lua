@@ -93,6 +93,10 @@ return function(env)
 			-- Large contexts increase upload and prefill time under executor HTTP
 			-- deadlines; lower this budget when even short replies time out.
 			contextTokens = 1000000,
+			-- The share of a model's known context window at which older turns are
+			-- summarised. contextTokens above is the hard ceiling; this is what makes
+			-- compaction adapt to a small-window model without retuning that number.
+			contextFraction = 0.8,
 			keepTurns = 14,
 			compaction = true,
 			stream = true,

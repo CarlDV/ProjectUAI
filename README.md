@@ -63,8 +63,8 @@ reach the wire rather than pretending it did.
 properties with type-aware conversion, bounded Luau execution, files, HTTP, web
 search and page reading, players, your character, raycasts and lighting and the
 camera, remotes (discover, fire, watch), on-screen interfaces, diagnostics, place
-and account metadata, plus the agent's own task list, memory and subagent
-dispatch.
+and account metadata, plus the agent's own task list, memory, searching and
+reading its earlier conversations, and subagent dispatch.
 
 **Batch inspection and file workflows.** Prefer a combined query or batch when
 the work is independent; this reduces model round trips and unnecessary local
@@ -607,6 +607,18 @@ on that provider record for the current model. Minimal requests and cancelled
 requests are not retried this way. Large prompts can still spend the request
 window uploading and prefilling; `agent.contextTokens` remains 1,000,000 by
 default and can be lowered when short replies also time out.
+
+Automatic compaction summarises the oldest turns before a request would cross the
+budget, and the budget adapts to the model: when its context window is known,
+compaction starts at **Compact at** (`agent.contextFraction`, 80% by default) of
+that window, with `agent.contextTokens` as the hard ceiling. The pressure it
+measures is calibrated against the prompt-token count each provider actually
+reports, so the system prompt and tool schemas are counted rather than estimated.
+**Compact now**, in the composer's message-options menu, folds older turns on
+demand; the **Summarise old turns** switch turns the paid summary off while the
+conversation is still trimmed to fit. The composer shows a live context-window
+counter beside the model -- the share of that budget the next request is expected
+to spend -- so the pressure is visible before a compaction happens.
 
 `check_luau` checks syntax without executing code. Both it and `run_luau` accept
 either inline `code` or a saved file `path`. Use `check_luau` with

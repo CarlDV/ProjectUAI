@@ -1179,8 +1179,11 @@ return function(env)
 			"How many levels of subagent are allowed. A subagent given the full tool set can dispatch its own; at 0 the agent cannot dispatch at all and does the work in the conversation instead. The Subagents panel lists what is running under these limits.",
 			"agent.subagentDepth", 0, 4, 1)
 		R.number(agent, "Context budget",
-			"Estimated tokens kept before older turns are summarised. Set it against the model's own window, not this client: a million-token model can hold the whole session.",
+			"Hard ceiling on tokens kept before older turns are summarised. When the model's context window is known, compaction begins at the Compact-at fraction of it, so this mainly caps models with very large or unknown windows.",
 			"agent.contextTokens", BUDGET_STOPS)
+		R.number(agent, "Compact at",
+			"Share of the model's context window at which older turns are summarised, when the window is known. Lower compacts sooner and cheaper; higher keeps more history in view. The Context budget above is still a hard ceiling.",
+			"agent.contextFraction", 0.5, 0.95, 0.05)
 		R.number(agent, "Reply ceiling",
 			"max_tokens sent with each request. A value above the model's own limit is lowered to whatever the provider names in its refusal, once, and remembered.",
 			"agent.maxTokens", REPLY_STOPS)

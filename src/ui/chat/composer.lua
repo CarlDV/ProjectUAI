@@ -624,7 +624,13 @@ return function(env)
 		local contextDot = P.statusDot(modelChip.row, {
 			diameter = theme.size.dot, color = theme.color.textTertiary, layoutOrder = 1,
 		})
-		modelChip.icon("chevron", 3, theme.color.textTertiary, theme.size.icon)
+		-- A live context-window counter beside the pressure dot: the share of the
+		-- budget the next request is expected to spend, coloured like the dot.
+		local contextLabel = P.text(modelChip.row, {
+			name = "ContextPct", text = "", role = "caption", color = theme.color.textTertiary,
+			auto = "X", size = UDim2.new(0, 0, 0, theme.text.caption.height), layoutOrder = 3,
+		})
+		modelChip.icon("chevron", 4, theme.color.textTertiary, theme.size.icon)
 		local function promptMenu(target)
 			local options = {}
 			for _, entry in ipairs(env.require("ui/chat/prompts").items) do
@@ -658,6 +664,15 @@ return function(env)
 				if statusLabel.Text ~= "" then
 					options[#options + 1] = { label = "Usage and status", detail = statusLabel.Text, value = "status" }
 				end
+				local convo = sessions.current()
+				if convo and #(convo.ctx.messages or {}) > 0 then
+					local rec = providers.active()
+					local win = math.max(convo.ctx.limitFor(rec and rec.model), 1)
+					local pct = math.floor(util.clamp(convo.ctx.pressure() / win, 0, 1) * 100 + 0.5)
+					options[#options + 1] = { label = "Compact now",
+						detail = string.format("Context about %d%% full -- summarise older turns", pct),
+						value = "compact", icon = "sliders" }
+				end
 				options[#options + 1] = { divider = true }
 				options[#options + 1] = { label = "Clear conversation", value = "clear", icon = "trash", tone = "bad" }
 				overlay.menu({ target = handle.instance, title = "Message options", options = options, onSelect = function(value)
@@ -690,6 +705,15 @@ return function(env)
 						resizeComposer()
 					elseif value == "expand" then composer.setExpanded(not composer.expanded)
 					elseif value == "status" then overlay.toast(statusLabel.Text, "info", 5)
+					elseif value == "compact" then
+						local convo = sessions.current()
+						local ok, err = convo.compact(function(done)
+							if not alive() then return end
+							composer.syncContext()
+							overlay.toast(done and "Conversation compacted." or "Nothing to compact yet.",
+								done and "info" or "warn", 4)
+						end)
+						if not ok then overlay.toast(err or "Could not compact right now.", "warn", 4) end
 					elseif value == "clear" and props.onClear then props.onClear() end
 				end })
 			end,
@@ -704,7 +728,8 @@ return function(env)
 			local right = controlHeight + chipHeight + controlGap * 2
 			-- Size to the actual label, not a permanent 144px slot around 'big-pickle'.
 			local measured = math.max(P.measureText(modelLabel.Text, { role = "caption" }).X, modelLabel.TextBounds.X)
-			local wanted = math.ceil(measured) + theme.size.dot + theme.size.icon + theme.space.xs * 4
+			local wanted = math.ceil(measured) + theme.size.dot + theme.size.icon
+				+ math.ceil(contextLabel.TextBounds.X) + theme.space.xs * 5
 			local available = width - left - right - (expanded and 0 or theme.size.composerFieldMin)
 			local modelWidth = math.max(0, math.min(wanted, theme.size.composerModel, available))
 			if mobile and not expanded then modelWidth = 0 end
@@ -813,11 +838,12 @@ return function(env)
 				end
 			end
 
-			-- Context pressure, from the conversation the composer is attached to.
+			-- Context pressure, from the conversation the composer is attached to,
+			-- measured against the budget compaction actually uses: a fraction of the
+			-- model's window when it is known, otherwise the configured cap.
 			local session = sessions.current()
-			local stats = session.ctx.stats()
-			local budget = math.max(tonumber(config.get("agent.contextTokens", 24000)) or 24000, 1)
-			local share = util.clamp(stats.tokens / budget, 0, 1)
+			local budget = math.max(session.ctx.limitFor(record and record.model), 1)
+			local share = util.clamp(session.ctx.pressure() / budget, 0, 1)
 			composer.contextShare = share
 			local tone = theme.color.success
 			if share > 0.85 then
@@ -826,7 +852,10 @@ return function(env)
 				tone = theme.color.warn
 			end
 			contextDot.BackgroundColor3 = tone
-			if not record or util.trim(tostring(record.model or "")) == "" then
+			local hasModel = record and util.trim(tostring(record.model or "")) ~= ""
+			contextLabel.Text = hasModel and (math.floor(share * 100 + 0.5) .. "%") or ""
+			contextLabel.TextColor3 = tone
+			if not hasModel then
 				contextDot.BackgroundColor3 = theme.color.warn
 			end
 			fitLabels()
@@ -947,7 +976,8 @@ return function(env)
 		end)
 		local unsubscribeConfig = config.changed:connect(function(path)
 			if path == nil or path == "agent" or path == "agent.effort"
-				or path == "agent.forceReasoning" or path == "agent.forceContext" or path == "agent.contextTokens" then
+				or path == "agent.forceReasoning" or path == "agent.forceContext"
+				or path == "agent.contextTokens" or path == "agent.contextFraction" then
 				composer.syncContext()
 			end
 		end)
