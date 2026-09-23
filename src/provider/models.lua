@@ -121,6 +121,7 @@ return function(env)
 			method = "GET",
 			headers = headers,
 			identity = registry.identityFor(record),
+			identityRequired = registry.requiresClaude(record),
 			attempts = 2,
 			tag = "models:" .. record.id,
 		})

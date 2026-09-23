@@ -34,6 +34,14 @@ run several at a time, token and cost accounting, abort, and a request log. Ever
 stage emits an event, and the interface is a subscriber -- the loop never touches a
 GUI.
 
+Context windows are learned automatically from provider context-length errors and
+saved per model. A rejected turn compacts older history and retries once before
+falling back. Repeated compactions merge the previous summary, and a failed summary
+request preserves earlier facts. Open **Message options → Context breakdown** for a
+colored usage bar, category totals, model window, and compaction point. Compaction
+notices show the estimated token reduction. Individual saved facts can be deleted
+in **Settings → Skills → Memory**.
+
 A turn stops after twenty-four tool rounds by default, which is there to catch a
 runaway rather than to end the work; **Unlimited tool calls** in Settings removes
 that ceiling and the fifteen-minute turn deadline with it, leaving the repeat
@@ -44,11 +52,15 @@ too, so a delegated job runs until it answers instead of coming back with "I rea
 this session's step limit before finishing".
 
 **Any provider.** A provider is a base URL, an auth style, a key and a model.
-Presets exist for the common hosts -- with HCNSEC and OpenCode Zen featured as
+Presets exist for the common hosts -- with HCNSEC, AgentRouter, and OpenCode Zen featured as
 starting points in the providers panel -- and "Custom endpoint" takes anything
 that speaks `/v1/chat/completions` -- a relay, a self-hosted vLLM, Ollama on
 localhost. Model lists are never guessed: they come from `GET /v1/models` or from
 you typing one in.
+
+AgentRouter uses the Anthropic Messages API and always sends its required Claude
+Code identity. Registration requires a GitHub account at least one year old; its
+recommended model is `deepseek-v4-flash`.
 
 **The Claude Code identity.** Providers that enable this compatibility identity carry
 `User-Agent: claude-cli/<version> (external, cli)`, `x-app: cli` and the

@@ -28,6 +28,21 @@ return function(env)
 			note = "An OpenAI-compatible relay. Featured because it is the recommended starting point: create an account, paste the key, fetch models.",
 		},
 		{
+			id = "agentrouter",
+			label = "AgentRouter",
+			-- The normaliser adds /v1; the Messages adapter appends /messages.
+			baseUrl = "https://agentrouter.org",
+			authStyle = "x-api-key",
+			keyHint = "AgentRouter API key",
+			docs = "https://agentrouter.org/register?aff=4pqF",
+			api = "anthropic",
+			headers = { ["anthropic-version"] = "2023-06-01" },
+			featured = true,
+			requiresClaude = true,
+			note = "An Anthropic Messages gateway that routes to Claude, DeepSeek and more, and requires the Claude Code identity on every request -- which this client always sends here. Registration needs a GitHub account at least 1 year old. Recommended model: deepseek-v4-flash.",
+			noteHighlight = "a GitHub account at least 1 year old",
+		},
+		{
 			id = "openai",
 			label = "OpenAI",
 			baseUrl = "https://api.openai.com/v1",

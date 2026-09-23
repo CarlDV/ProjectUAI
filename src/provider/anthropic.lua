@@ -512,6 +512,7 @@ return function(env)
 				headers = headers,
 				body = util.encode(payload),
 				identity = registry.identityFor(record),
+				identityRequired = registry.requiresClaude(record),
 				attempts = request.attempts or config.get("agent.retries", 5),
 				skipStatus = skip429,
 				aborted = request.aborted,
@@ -556,7 +557,7 @@ return function(env)
 		-- a second refusal is a different problem and belongs in the transcript.
 		if res and res.status == 400 and tonumber(body.max_tokens) then
 			local message = M.errorText(res, nil)
-			if tostring(message):lower():find("max_tokens", 1, true) then
+			if not openai.contextWindowFromMessage(message) and tostring(message):lower():find("max_tokens", 1, true) then
 				local allowed = openai.ceilingFromMessage(message, body.max_tokens)
 				if allowed and allowed < body.max_tokens then
 					local note = string.format("lowered max_tokens from %d to %d", body.max_tokens, allowed)
@@ -589,6 +590,7 @@ return function(env)
 		end
 
 		if not res or not res.ok then
+			openai.learnContextWindow(record, res)
 			local message = M.errorText(res, err)
 			registry.markFail(record, message)
 			return nil, message, res

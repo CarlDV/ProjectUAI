@@ -80,9 +80,13 @@ return function(env)
 		if opts.timeout then
 			headers["X-Stainless-Timeout"] = tostring(math.floor(opts.timeout))
 		end
+		local protected = {}
+		if opts.required then
+			for key in pairs(headers) do protected[key:lower()] = true end
+		end
 		local config = env.require("runtime/config")
 		for key, value in pairs(config.get("identity.extraHeaders", {}) or {}) do
-			if type(key) == "string" and type(value) == "string" and value ~= "" then
+			if type(key) == "string" and type(value) == "string" and value ~= "" and not protected[key:lower()] then
 				headers[key] = value
 			end
 		end

@@ -1,5 +1,14 @@
 # Changelog
 
+## Context and provider improvements — September 23, 2026
+
+- Learn model context windows from provider refusals, persist them in `agent.forceContext`, and compact then retry the same turn once before provider fallback.
+- Merge previous rolling summaries with newer history, preserving earlier facts if a summary request fails.
+- Add **Message options → Context breakdown** with distinct colors for system prompt and tools, messages, rolling summary, and unused space, plus the model window and compaction point.
+- Show before/after token estimates in compaction notices and align their status dots with the text.
+- Add a delete button for each saved memory while retaining **Forget everything** and live list updates.
+- Feature AgentRouter with its registration requirement highlighted, the Anthropic Messages protocol, and its required Claude Code identity enforced for requests and model discovery.
+
 ## Documentation — September 23, 2026
 
 - Expand `CODE_WORKSPACE_PLAN.md` with the native Dex/Explorer and SimpleSpy/Remotes implementation plan: upstream provenance, shared services, UI and AI controls, capture/replay behavior, capability fallbacks, phased delivery, and verification. These integrations remain planned; the released 1.6.0 client is unchanged.

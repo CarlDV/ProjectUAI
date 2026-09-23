@@ -47,7 +47,7 @@ return function(env)
 	-- so a rate-limited primary does not end the turn. Only when every candidate
 	-- has failed does the turn fail, and the message names the first failure --
 	-- which is almost always the informative one.
-	local function complete(session, request)
+	local function complete(session, request, recoverContext)
 		local chain = providers.chain()
 		if #chain == 0 then
 			return nil, "No provider is configured. Open the Providers panel and add one."
@@ -64,64 +64,74 @@ return function(env)
 				})
 			end
 
-			local payload = { record = record, request = request, session = session }
-			hooks.run("preRequest", payload)
+			local recovered = false
+			while true do
+				if session.aborted() then return nil, "aborted" end
+				local payload = { record = record, request = request, session = session }
+				hooks.run("preRequest", payload)
 
-			session.emit("request:start", {
-				provider = record.label,
-				providerId = record.id,
-				model = record.model,
-				attempt = index,
-				messages = #request.messages,
-				stream = request.stream,
-			})
+				session.emit("request:start", {
+					provider = record.label,
+					providerId = record.id,
+					model = record.model,
+					attempt = index,
+					messages = #payload.request.messages,
+					stream = payload.request.stream,
+				})
 
-			local started = clock.ms()
-			local result, err, response = chat.complete(record, {
-				sessionId = not session.headless and session.id or nil, session = session,
-				messages = payload.request.messages,
-				tools = payload.request.tools,
-				toolChoice = payload.request.toolChoice,
-				stream = payload.request.stream,
-				temperature = payload.request.temperature,
-				maxTokens = payload.request.maxTokens,
-				extra = payload.request.extra,
-				aborted = session.aborted,
-				onRetry = function(info)
-					session.emit("request:retry", {
+				local started = clock.ms()
+				local result, err, response = chat.complete(record, {
+					sessionId = not session.headless and session.id or nil, session = session,
+					messages = payload.request.messages,
+					tools = payload.request.tools,
+					toolChoice = payload.request.toolChoice,
+					stream = payload.request.stream,
+					temperature = payload.request.temperature,
+					maxTokens = payload.request.maxTokens,
+					extra = payload.request.extra,
+					aborted = session.aborted,
+					onRetry = function(info)
+						session.emit("request:retry", {
+							provider = record.label,
+							attempt = info.attempt,
+							attempts = info.attempts,
+							wait = info.wait,
+							status = info.status,
+							reason = info.reason,
+						})
+					end,
+					onFrame = request.onFrame,
+				})
+
+				if result then
+					session.emit("request:done", {
 						provider = record.label,
-						attempt = info.attempt,
-						attempts = info.attempts,
-						wait = info.wait,
-						status = info.status,
-						reason = info.reason,
+						model = result.model or record.model,
+						ms = clock.since(started),
+						streamed = result.streamed,
+						via = result.via,
 					})
-				end,
-				onFrame = request.onFrame,
-			})
+					local after = { result = result, record = record, session = session }
+					hooks.run("postResponse", after)
+					return after.result, nil, record
+				end
 
-			if result then
 				session.emit("request:done", {
 					provider = record.label,
-					model = result.model or record.model,
+					model = record.model,
 					ms = clock.since(started),
-					streamed = result.streamed,
-					via = result.via,
+					error = err,
 				})
-				local after = { result = result, record = record, session = session }
-				hooks.run("postResponse", after)
-				return after.result, nil, record
+				if err == "aborted" or session.aborted() then return nil, "aborted" end
+				if response and response.terminal then return nil, err end
+				-- Recover against the provider that actually refused the prompt, before
+				-- failover. A smaller fallback model can have a different window.
+				if recovered or not chat.contextOverflow(err) or not recoverContext or not recoverContext(record) then
+					firstError = firstError or err
+					break
+				end
+				recovered = true
 			end
-
-			firstError = firstError or err
-			session.emit("request:done", {
-				provider = record.label,
-				model = record.model,
-				ms = clock.since(started),
-				error = err,
-			})
-			if err == "aborted" then return nil, "aborted" end
-			if response and response.terminal then return nil, err end
 		end
 
 		return nil, firstError or "every provider failed"
@@ -140,7 +150,7 @@ return function(env)
 					{ role = "user", content = transcript },
 				},
 				temperature = 0,
-				maxTokens = 400,
+				maxTokens = 512,
 				attempts = 1,
 				aborted = session.aborted,
 			})
@@ -239,7 +249,16 @@ return function(env)
 				onFrame = session.onFrame,
 			}
 
-			local result, err = complete(session, request)
+			local result, err, usedRecord = complete(session, request, function(refusedRecord)
+				if session.aborted() then return false end
+				local prior = ctx.tokens()
+				local folded = ctx.compact(summarise, { model = refusedRecord.model, force = true })
+				if not folded then return false end
+				session.emit("compact", { summary = folded, before = prior, after = ctx.tokens() })
+				request.messages = ctx.wire(systemText)
+				return true
+			end)
+			record = usedRecord or record
 
 			if not result then
 				if err == "aborted" then

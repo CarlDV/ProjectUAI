@@ -461,5 +461,93 @@ scenario("new assistant activity does not yank an older scroll position", functi
 	check("scroll flow has no thread errors", #harness.errors() == 0)
 end)
 
+scenario("context breakdown shows live colored categories across screen sizes", function()
+	for _, size in ipairs({ { 1280, 720, false }, { 1194, 834, true }, { 390, 844, true }, { 844, 390, true } }) do
+		local harness = envMock.new()
+		local uis = harness.services.UserInputService
+		uis.TouchEnabled, uis.MouseEnabled, uis.KeyboardEnabled = size[3], not size[3], not size[3]
+		harness.setViewport(size[1], size[2])
+		local handle = assert(harness.boot())
+		harness.settle(1)
+		local composer = handle.app.chatPanel.composer
+		local session = handle.sessions.current()
+		composer.field.set("Keep this draft")
+		harness.click(harness.byName("ComposerOptions", composer.shell))
+		harness.click(harness.byName("Option_context_inspect"))
+		local inspector = assert(harness.byName("ContextInspector"), "context inspector did not open")
+		check("empty context explains missing measurement", harness.textOf(inspector):find("After first reply", 1, true))
+		check("an unknown model is not given an invented window", harness.textOf(inspector):find("Model window: unknown", 1, true))
+		local record = handle.providers.blank("custom")
+		record.label, record.baseUrl, record.model, record.apiKey = "Context test", "https://context.test/v1", "context-test", "test-key"
+		assert(handle.providers.save(record))
+		handle.config.set("agent.forceContext", { ["context-test"] = 12000 })
+		session.ctx.pushUser(("question "):rep(400))
+		session.ctx.pushAssistant({ content = ("answer "):rep(300) })
+		session.ctx.summary = ("earlier fact "):rep(100)
+		session.ctx.calibrate(session.ctx.tokens() + 1200)
+		session.emit("status", { text = "Ready" })
+		harness.settle(1)
+		local util = handle.env.require("runtime/util")
+		check("the total uses the compaction pressure", harness.byName("ContextTotal", inspector).Text:find(util.formatNumber(session.ctx.pressure()), 1, true))
+		local colors, spans = {}, 0
+		for _, id in ipairs({ "system", "messages", "summary" }) do
+			local segment = assert(harness.byName("ContextSegment_" .. id, inspector))
+			check(id .. " has a visible segment", segment.Visible and segment.Size.X.Scale > 0)
+			check(id .. " is placed after the preceding categories", math.abs(segment.Position.X.Scale - spans) < 0.00001)
+			spans = spans + segment.Size.X.Scale
+			colors[segment.BackgroundColor3:ToHex()] = true
+		end
+		local colorCount = 0
+		for _ in pairs(colors) do colorCount = colorCount + 1 end
+		check("each used category has a distinct color", colorCount == 3)
+		check("bar shares use the model window", math.abs(spans - session.ctx.pressure() / 12000) < 0.00001)
+		check("compaction marker matches the configured fraction", harness.byName("CompactionMarker", inspector).Position.X.Scale == 0.8)
+		handle.config.set("agent.contextFraction", 0.5)
+		harness.settle(0.2)
+		check("open inspector tracks budget changes", harness.byName("CompactionMarker", inspector).Position.X.Scale == 0.5)
+		local available = handle.env.require("ui/responsive").usableRect(handle.env.require("ui/overlay").layer, 0)
+		check("inspector fits the viewport", inspector.Size.X.Offset <= available.width and inspector.Size.Y.Offset <= available.height)
+		check("long details have a scrolling body", harness.byName("BodyScroll", inspector).ScrollingEnabled ~= false)
+		harness.click(harness.byName("Close", inspector))
+		check("closing preserves the prompt", composer.field.get() == "Keep this draft")
+		session.emit("status", { text = "Ready" })
+		harness.settle(0.3)
+		check("inspector bindings clean up", #harness.errors() == 0)
+		check("inspector uses valid Roblox properties", #harness.instanceState.typeErrors == 0)
+	end
+end)
+
+scenario("memory settings remove individual facts and stay synchronized", function()
+	local harness, handle = boot()
+	local state = handle.env.require("agent/state")
+	assert(state.remember("first", "Keep the lighthouse"))
+	assert(state.remember("second", "Build the dock"))
+	local dialog = handle.env.require("ui/panels/settingsdialog").open("skills")
+	harness.settle(1)
+	local list = assert(harness.byName("MemoryEntries", dialog.card))
+	check("each saved fact has its own delete control", #harness.allByName("ForgetOne", list) == 2)
+	harness.click(harness.byName("ForgetOne", harness.byName("MemoryEntry_first", list)))
+	check("only the chosen fact is deleted", state.recall("first") == nil and state.recall("second") == "Build the dock")
+	check("the list immediately reflects deletion", #harness.allByName("ForgetOne", list) == 1)
+	assert(state.remember("third", "Use warm lights"))
+	harness.settle(0.2)
+	check("external memory changes refresh the open pane", #harness.allByName("ForgetOne", list) == 2)
+	harness.click(harness.byName("ForgetEverything", dialog.card))
+	local overlays = handle.env.require("ui/overlay").open
+	local confirmation = overlays[#overlays]
+	local clearButton = harness.find(confirmation.footer, function(node)
+		return node:IsA("TextButton") and harness.textOf(node) == "Clear"
+	end)[1]
+	assert(clearButton, "clear confirmation missing")
+	harness.click(clearButton)
+	check("forget everything still clears all facts", #state.memoryList() == 0)
+	check("empty memory has readable feedback", harness.textOf(list):find("Nothing stored.", 1, true))
+	dialog.close()
+	harness.settle(0.3)
+	state.remember("after-close", "No stale listener")
+	harness.settle(0.3)
+	check("memory bindings clean up", #harness.errors() == 0)
+end)
+
 print(string.format("chat regressions: %d checks passed, %d scenarios failed", passed, failed))
 if failed > 0 then os.exit(1) end

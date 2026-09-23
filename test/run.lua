@@ -2693,6 +2693,134 @@ scenario("a Claude request omits what Claude rejects and asks for a depth", func
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
+scenario("context overflow recovers the same turn on both wire protocols", function()
+	for _, api in ipairs({ "openai", "anthropic" }) do
+		local main, summaries = {}, {}
+		local function response(text)
+			return api == "openai" and chatBody({ content = text }) or messagesBody({ text = text })
+		end
+		local harness, handle = bootWith({ preset = api == "anthropic" and "anthropic-messages" or "custom",
+			model = "Relayed-Unknown", handler = function(entry)
+				if not entry.body then return { StatusCode = 404, Body = "{}" } end
+				local body = json.decode(entry.body)
+				if body.max_tokens == 512 then
+					summaries[#summaries + 1] = body
+					return { StatusCode = 200, Body = response("Keep the lighthouse; the dock is unfinished.") }
+				end
+				main[#main + 1] = body
+				if #main == 1 then
+					local message = api == "openai"
+						and "maximum context length is 12000 tokens; requested 30000 tokens including max_tokens 8192"
+						or "prompt is too long: 30000 tokens > 12000 maximum (max_tokens 8192)"
+					return { StatusCode = 400, Body = json.encode({ error = { message = message } }) }
+				end
+				return { StatusCode = 200, Body = response("Recovered in the same turn.") }
+			end,
+		})
+		local session = handle.sessions.current()
+		for index = 1, 20 do
+			session.ctx.pushUser(("old question "):rep(100))
+			session.ctx.pushAssistant({ content = ("old answer "):rep(100) })
+		end
+		session.send("Finish the dock")
+		harness.settle(20)
+		check(api .. " learns the real context window", handle.config.get("agent.forceContext")["relayed-unknown"], 12000)
+		check(api .. " retries the main request once", #main, 2)
+		check(api .. " makes a separate summary request", #summaries, 1)
+		truthy(api .. " the retry has less history", main[2] and #main[2].messages < #main[1].messages)
+		contains(api .. " the retry includes the rolling summary", main[2] and json.encode(main[2]), "Keep the lighthouse")
+		contains(api .. " the latest question survives", main[2] and json.encode(main[2]), "Finish the dock")
+		check(api .. " context errors do not learn an output cap", handle.providers.active().maxTokensCap, nil)
+		contains(api .. " the turn finishes successfully", harness.textOf(), "Recovered in the same turn.")
+		check(api .. " compaction is counted", session.ctx.compactions, 1)
+		check(api .. " no thread errors", #harness.errors(), 0)
+	end
+end)
+
+	scenario("context recovery is bounded and still permits provider fallback", function()
+	local attempts = {}
+	local harness, handle = bootWith({ handler = function(entry)
+		if not entry.body then return { StatusCode = 404, Body = "{}" } end
+		local body = json.decode(entry.body)
+		if body.max_tokens == 512 then return { StatusCode = 200, Body = chatBody({ content = "Earlier facts" }) } end
+		attempts[body.model] = (attempts[body.model] or 0) + 1
+		if body.model == "fallback" then return { StatusCode = 200, Body = chatBody({ model = "fallback", content = "Fallback answered" }) } end
+		return { StatusCode = 400, Body = json.encode({ error = { message = "maximum context length is 12000 tokens" } }) }
+	end })
+	local primary = handle.providers.active()
+	handle.config.set("agent.fallback", true)
+	local fallback = handle.providers.blank("custom")
+	fallback.label, fallback.baseUrl, fallback.model = "Fallback", "https://fallback.test/v1", "fallback"
+	fallback.apiKey = "test-key"
+	assert(handle.providers.save(fallback))
+	handle.providers.setActive(primary.id)
+	local session = handle.sessions.current()
+	for index = 1, 8 do session.ctx.pushUser("question"); session.ctx.pushAssistant({ content = "answer" }) end
+	session.send("continue")
+	harness.settle(20)
+	check("a repeated refusal gets only one context retry", attempts[primary.model], 2)
+	check("then the next provider is tried", attempts.fallback, 1)
+	contains("fallback completes the turn", harness.textOf(), "Fallback answered")
+	check("no thread errors", #harness.errors(), 0)
+end)
+
+scenario("context recovery learns and retries a smaller fallback model", function()
+	local attempts = {}
+	local harness, handle = bootWith({ handler = function(entry)
+		if not entry.body then return { StatusCode = 404, Body = "{}" } end
+		local body = json.decode(entry.body)
+		if body.max_tokens == 512 then return { StatusCode = 200, Body = chatBody({ content = "Remember the lighthouse" }) } end
+		attempts[body.model] = (attempts[body.model] or 0) + 1
+		if body.model == "harness-model" then return { StatusCode = 401, Body = '{"error":"primary unavailable"}' } end
+		if attempts[body.model] == 1 then
+			return { StatusCode = 400, Body = '{"error":{"message":"maximum context length is 12000 tokens"}}' }
+		end
+		return { StatusCode = 200, Body = chatBody({ model = "small-fallback", content = "The smaller model recovered" }) }
+	end })
+	local primary = handle.providers.active()
+	local fallback = handle.providers.blank("custom")
+	fallback.label, fallback.baseUrl, fallback.model, fallback.apiKey = "Small fallback", "https://small.test/v1", "small-fallback", "test-key"
+	assert(handle.providers.save(fallback))
+	handle.providers.setActive(primary.id)
+	handle.config.set("agent.fallback", true)
+	local session = handle.sessions.current()
+	for index = 1, 8 do session.ctx.pushUser("question"); session.ctx.pushAssistant({ content = "answer" }) end
+	session.send("continue")
+	harness.settle(10)
+	check("the primary is not retried for a fallback overflow", attempts[primary.model], 1)
+	check("the smaller fallback is retried once", attempts["small-fallback"], 2)
+	check("only the refusing model learns a window", handle.config.get("agent.forceContext")["small-fallback"], 12000)
+	check("the primary window is not changed", handle.config.get("agent.forceContext")[primary.model], nil)
+	contains("fallback recovery finishes the same turn", harness.textOf(), "The smaller model recovered")
+	check("no thread errors", #harness.errors(), 0)
+end)
+
+scenario("context recovery stops on cancellation or uncompactable history", function()
+	for _, cancel in ipairs({ false, true }) do
+		local main, summaries, session = 0, 0, nil
+		local harness, handle = bootWith({ handler = function(entry)
+			if not entry.body then return { StatusCode = 404, Body = "{}" } end
+			local body = json.decode(entry.body)
+			if body.max_tokens == 512 then
+				summaries = summaries + 1
+				session.abortFlag = true
+				return { StatusCode = 200, Body = chatBody({ content = "summary" }) }
+			end
+			main = main + 1
+			return { StatusCode = 400, Body = '{"error":{"message":"maximum context length is 12000 tokens"}}' }
+		end })
+		session = handle.sessions.current()
+		if cancel then
+			for index = 1, 8 do session.ctx.pushUser("old question"); session.ctx.pushAssistant({ content = "answer" }) end
+		end
+		session.send("continue")
+		harness.settle(10)
+		check("no extra main request without a usable recovery", main, 1)
+		check("only removable history triggers a summary", summaries, cancel and 1 or 0)
+		check("no thread errors", #harness.errors(), 0)
+	end
+end)
+
 scenario("an over-large reply ceiling is lowered to what the model allows", function()
 	local _, handle = bootWith({ provider = false })
 	local openai = handle.env.require("provider/openai")
@@ -5504,6 +5632,78 @@ end)
 -- OpenCode Zen retains its existing request compatibility headers.
 -- Exact-host matching and suppression of competing Claude headers apply to
 -- preset and manually entered records alike.
+scenario("AgentRouter is featured and its required identity survives every switch", function()
+	local sent = {}
+	local harness, handle = bootWith({ preset = "agentrouter", baseUrl = "https://agentrouter.org", model = "deepseek-v4-flash",
+		handler = function(entry)
+			if not entry.url:find("https://agentrouter.org/", 1, true) then return { StatusCode = 404, Body = "{}" } end
+			sent[#sent + 1] = entry
+			if entry.method == "GET" then
+				return { StatusCode = 200, Body = json.encode({ data = { { id = "deepseek-v4-flash" } } }) }
+			end
+			return { StatusCode = 200, Body = messagesBody({ text = "Connected to AgentRouter" }) }
+		end,
+	})
+	local registry, record = handle.providers, handle.providers.active()
+	local preset = handle.env.require("provider/catalog").get("agentrouter")
+	truthy("the preset is featured", preset.featured)
+	check("registration keeps the requested address", preset.docs, "https://agentrouter.org/register?aff=4pqF")
+	check("the Messages protocol is selected", record.api, "anthropic")
+	check("the endpoint is normalized once", handle.env.require("provider/chat").endpointOf(record), "https://agentrouter.org/v1/messages")
+	for _, base in ipairs({ "https://agentrouter.org", "HTTPS://AGENTROUTER.ORG/v1", "https://api.agentrouter.org:443/v1" }) do
+		check("required identity applies to " .. base, registry.identityFor({ baseUrl = base, claudeUa = false }), "claude")
+	end
+	for _, base in ipairs({ "https://agentrouter.org.evil.test", "https://evil.test/agentrouter.org", "https://evil.test?host=agentrouter.org", "https://notagentrouter.org" }) do
+		check("unrelated hosts retain their own preference", registry.identityFor({ baseUrl = base, claudeUa = false }), "none")
+	end
+	handle.config.set("identity.claudeUa", false)
+	handle.config.set("identity.extraHeaders", { ["user-agent"] = "global override", ["x-app"] = "other", ["X-Project"] = "kept" })
+	record.claudeUa = false
+	record.headers["user-agent"], record.headers["X-App"] = "override", "override"
+	truthy("a completion succeeds with the global and record switches off", providerCall(harness, handle.env.require("provider/anthropic"), record))
+	local discovered
+	harness.sched.spawn(function() discovered = handle.env.require("provider/models").discover(record, { force = true }) end)
+	harness.sched.advance(0.5)
+	check("model discovery uses the same required identity", discovered and discovered[1], "deepseek-v4-flash")
+	check("both requests reached the endpoint", #sent, 2)
+	for _, entry in ipairs(sent) do
+		contains("the required User-Agent reaches the wire", entry.headers["User-Agent"], "claude-cli/")
+		check("the client identity reaches the wire", entry.headers["x-app"], "cli")
+		truthy("Stainless metadata reaches the wire", entry.headers["X-Stainless-Lang"] ~= nil)
+		check("custom case variants cannot replace the required identity", entry.headers["user-agent"], nil)
+		check("unrelated extra headers are preserved", entry.headers["X-Project"], "kept")
+		check("the Anthropic version is present", entry.headers["anthropic-version"], "2023-06-01")
+		truthy("the API key is sent", entry.headers["x-api-key"] ~= nil)
+	end
+	assert(registry.save(record))
+	check("saved AgentRouter records retain the required preference", record.claudeUa, true)
+	handle.app.show("providers")
+	harness.settle(0.5)
+	truthy("the provider detail explains the identity requirement", harness.byName("ClaudeUaRequired") ~= nil)
+	falsy("the provider does not offer an identity toggle", harness.byName("ClaudeUa"))
+	local featured = handle.env.require("ui/primitives").column(handle.app.screen, {})
+	handle.env.require("ui/panels/providers").featuredCard(featured, function() end)
+	local highlighted = false
+	for _, note in ipairs(harness.allByName("FeaturedNote", featured)) do
+		if note.Text:find("a GitHub account at least 1 year old", 1, true) then
+			highlighted = note.RichText and note.Text:find("<b><font", 1, true) ~= nil
+		end
+	end
+	truthy("the signup restriction is highlighted", highlighted)
+	featured:Destroy()
+	local socketHeaders
+	handle.env.require("runtime/caps").ws = true
+	record.api, record.stream, record.wsUrl = "openai", true, "wss://agentrouter.org/stream"
+	handle.env.require("net/ws").stream = function(spec)
+		socketHeaders = spec.headers
+		return chatBody({ content = "Socket response" })
+	end
+	truthy("the optional socket completion succeeds", providerCall(harness, handle.env.require("provider/openai"), record))
+	contains("the socket envelope retains the required identity", socketHeaders and socketHeaders["User-Agent"], "claude-cli/")
+	check("socket custom headers cannot turn it off", socketHeaders and socketHeaders["user-agent"], nil)
+	check("no thread errors", #harness.errors(), 0)
+end)
+
 scenario("an OpenCode Zen record preserves its request compatibility headers", function()
 	local requests = {}
 	local harness, handle = bootWith({
@@ -5859,7 +6059,7 @@ scenario("a first-run client is pointed at the featured provider", function()
 	local featured = harness.byName("Featured")
 	truthy("the featured card is shown", featured ~= nil, harness.dump())
 	check("naming HCNSEC", harness.byName("FeaturedName").Text, "HCNSEC")
-	check("both featured providers get a card", #harness.allByName("Featured"), 2)
+	check("all three featured providers get a card", #harness.allByName("Featured"), 3)
 
 	-- The referral link, rendered in full and exactly as the catalog carries it.
 	local url = harness.byName("FeaturedUrl")
@@ -5876,7 +6076,7 @@ scenario("a first-run client is pointed at the featured provider", function()
 	check("with the sign-up page as its docs", preset.docs, "https://api.hcnsec.cn/sign-up?aff=drd9")
 	check("and marked featured", preset.featured, true)
 
-	-- The second featured road: OpenCode Zen, catalog-ordered after HCNSEC.
+	-- OpenCode Zen remains featured alongside HCNSEC and AgentRouter.
 	local zen = catalog.get("zen")
 	check("OpenCode Zen is featured too", zen and zen.featured, true)
 	check("pointing at the Zen relay", zen.baseUrl, "https://opencode.ai/zen/v1")

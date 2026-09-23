@@ -483,6 +483,64 @@ return function(env)
 		registry.save(record, { force = true })
 	end
 
+	-- Read the window named by a context refusal, never the request size or the
+	-- output budget beside it. A max_tokens refusal alone cannot teach a window.
+	function M.contextWindowFromMessage(message)
+		local text = tostring(message or ""):lower()
+		local isContext = text:find("context length", 1, true)
+			or text:find("context window", 1, true)
+			or text:find("context_length_exceeded", 1, true)
+			or text:find("prompt is too long", 1, true)
+			or text:find("maximum context", 1, true)
+			or text:find("too many tokens", 1, true)
+			or text:find("reduce the length of the messages", 1, true)
+		if not isContext then return nil end
+		-- Some gateways format limits as 128,000 or 1,048,576.
+		text = text:gsub("(%d),(%d%d%d)", "%1%2"):gsub("(%d),(%d%d%d)", "%1%2")
+		local patterns = {
+			"maximum context length is%s*(%d+)",
+			"maximum context length of%s*(%d+)",
+			"maximum context window is%s*(%d+)",
+			"context length of%s*(%d+)",
+			"context window of%s*(%d+)",
+			"context length%s*[:=]%s*(%d+)",
+			"context window%s*[:=]%s*(%d+)",
+			">%s*(%d+)%s*maximum",
+			"maximum of%s*(%d+)%s*tokens",
+			"at most%s*(%d+)%s*tokens",
+		}
+		for _, pattern in ipairs(patterns) do
+			local window = tonumber(text:match(pattern))
+			if window and window >= 8000 and window < math.huge then return window end
+		end
+		return nil
+	end
+
+	-- A refusal can only lower an existing claim. The shared model map feeds
+	-- compaction, badges and configuration export, and persists across executions.
+	function M.rememberContextWindow(record, window)
+		window = tonumber(window)
+		if not window or window ~= window or window < 8000 or window == math.huge then return end
+		local id = util.trim(tostring(record and record.model or "")):lower()
+		if id == "" then return end
+		window = math.floor(window)
+		local contexts = util.deepCopy(config.get("agent.forceContext", {}) or {})
+		local previous = tonumber(contexts[id])
+		if previous and previous > 0 then window = math.min(window, previous) end
+		if previous == window then return end
+		contexts[id] = window
+		config.set("agent.forceContext", contexts)
+		log.info("provider", string.format("%s: learned context window %d for %s",
+			tostring(record.label or id), window, tostring(record.model)))
+	end
+
+	function M.learnContextWindow(record, res)
+		if not res then return nil end
+		local window = M.contextWindowFromMessage(M.errorText(res, nil))
+		if window then M.rememberContextWindow(record, window) end
+		return window
+	end
+
 	-- Gateways reject different subsets of the payload. Rather than maintaining a
 	-- per-vendor allowlist that goes stale, a 400 whose text names a field is
 	-- repaired once and retried -- and the repair is remembered on the record so
@@ -730,6 +788,9 @@ return function(env)
 	}
 
 	local function repair(body, message)
+		-- A context error often mentions max_tokens too. It needs shorter history,
+		-- not output-ceiling repairs that would learn the wrong limit.
+		if M.contextWindowFromMessage(message) then return nil end
 		local lowered = tostring(message or ""):lower()
 		for _, entry in ipairs(REPAIRS) do
 			if lowered:find(entry.match:lower(), 1, true) then
@@ -833,10 +894,15 @@ return function(env)
 			local web = config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web"
 			if not web and wantStream and util.trim(record.wsUrl) ~= "" and caps.ws then
 				local ws = env.require("net/ws")
+				local socketHeaders = headers
+				if registry.requiresClaude(record) then
+					socketHeaders = http.headersFor({ url = url, headers = headers, body = payload,
+						identity = "claude", identityRequired = true, timeout = requestTimeout(request) })
+				end
 				local streamBody, wsErr = ws.stream({
 					url = record.wsUrl,
 					path = "/chat/completions",
-					headers = headers,
+					headers = socketHeaders,
 					body = payload,
 					aborted = request.aborted,
 					onFrame = request.onFrame,
@@ -860,6 +926,7 @@ return function(env)
 				headers = headers,
 				body = util.encode(payload),
 				identity = registry.identityFor(record),
+				identityRequired = registry.requiresClaude(record),
 				attempts = attemptsAllowed,
 				skipStatus = skip429,
 				aborted = request.aborted,
@@ -945,6 +1012,7 @@ return function(env)
 		end
 
 		if not res or not res.ok then
+			M.learnContextWindow(record, res)
 			local message = M.errorText(res, err)
 			registry.markFail(record, message)
 			return nil, message, res

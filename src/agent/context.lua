@@ -27,6 +27,7 @@ return function(env)
 			-- prompt and tool schemas ctx.tokens() does not see. Learned from what the
 			-- provider actually counted, so the budget check reflects the real prompt.
 			overhead = 0,
+			calibrated = false,
 		}
 
 		function ctx.push(message)
@@ -118,6 +119,7 @@ return function(env)
 			local real = tonumber(promptTokens)
 			if not real or real <= 0 then return end
 			ctx.overhead = math.max(0, real - ctx.tokens())
+			ctx.calibrated = true
 		end
 
 		function ctx.stats()
@@ -201,10 +203,16 @@ return function(env)
 			if type(summarise) ~= "function" then
 				ctx.summary = (ctx.summary and (ctx.summary .. "\n") or "") ..
 					string.format("[%d earlier messages were dropped to fit the context budget]", #removed)
+				ctx.compactions = ctx.compactions + 1
 				return ctx.summary
 			end
 
 			local transcript = {}
+			local previousSummary = ctx.summary and util.trim(ctx.summary) or ""
+			if previousSummary ~= "" then
+				transcript[#transcript + 1] = "Summary so far:\n" .. previousSummary
+				transcript[#transcript + 1] = "\nNewer messages to fold into that summary:"
+			end
 			for _, message in ipairs(removed) do
 				local label = message.role
 				local text = tostring(message.content or "")
@@ -221,6 +229,9 @@ return function(env)
 			local ok, note = pcall(summarise, table.concat(transcript, "\n"))
 			if ok and type(note) == "string" and util.trim(note) ~= "" then
 				ctx.summary = util.trim(note)
+			elseif previousSummary ~= "" then
+				ctx.summary = previousSummary .. "\n"
+					.. string.format("[%d more earlier messages were dropped; no summary was available]", #removed)
 			else
 				ctx.summary = string.format("[%d earlier messages were dropped; no summary was available]", #removed)
 			end
@@ -341,6 +352,7 @@ return function(env)
 			ctx.compactions = 0
 			ctx.dropped = 0
 			ctx.overhead = 0
+			ctx.calibrated = false
 		end
 
 		-- Persistence keeps the fields a reload needs and drops the derived ones.

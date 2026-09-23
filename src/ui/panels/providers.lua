@@ -792,9 +792,21 @@ return function(env)
 			})
 
 			if featured.note then
+				local text = tostring(featured.note)
+				local at = featured.noteHighlight and text:find(featured.noteHighlight, 1, true)
+				if at then
+					local function escape(value)
+						return (value:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+					end
+					text = escape(text:sub(1, at - 1))
+						.. string.format('<b><font color="#%s">%s</font></b>',
+							theme.color.accent:ToHex(), escape(featured.noteHighlight))
+						.. escape(text:sub(at + #featured.noteHighlight))
+				end
 				local note = P.text(card, {
 					name = "FeaturedNote",
-					text = tostring(featured.note),
+					text = text,
+					rich = at ~= nil,
 					role = "small",
 					color = theme.color.textSecondary,
 					wrap = true,
@@ -1385,19 +1397,25 @@ return function(env)
 					registry.save(record, { force = true })
 				end,
 			})
-			R.toggle(behaviour, {
-				name = "ClaudeUa",
-				label = "Send the Claude Code identity",
-				hint = "The claude-cli User-Agent and its client headers. Turning this off suppresses "
-					.. "the whole set for this endpoint whatever the global switch says, which is the "
-					.. "one lever this client has when a CDN in front of an API refuses the request.",
-				value = record.claudeUa ~= false,
-				layoutOrder = 3,
-				onChange = function(value)
-					record.claudeUa = value
-					registry.save(record, { force = true })
-				end,
-			})
+			if registry.requiresClaude(record) then
+				R.paragraph(behaviour,
+					"Claude Code identity is required by AgentRouter and is always sent. It cannot be turned off for this endpoint.",
+					{ name = "ClaudeUaRequired", role = "small", color = theme.color.textSecondary, layoutOrder = 3 })
+			else
+				R.toggle(behaviour, {
+					name = "ClaudeUa",
+					label = "Send the Claude Code identity",
+					hint = "The claude-cli User-Agent and its client headers. Turning this off suppresses "
+						.. "the whole set for this endpoint whatever the global switch says, which is the "
+						.. "one lever this client has when a CDN in front of an API refuses the request.",
+					value = record.claudeUa ~= false,
+					layoutOrder = 3,
+					onChange = function(value)
+						record.claudeUa = value
+						registry.save(record, { force = true })
+					end,
+				})
+			end
 
 			-- Transport and the three invisible maps -----------------------------
 			local advanced = R.section(detail.instance, {

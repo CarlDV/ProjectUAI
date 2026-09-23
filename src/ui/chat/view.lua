@@ -436,10 +436,13 @@ return function(env)
 				follow()
 			elseif event.kind == "compact" then
 				local into, order = target()
-				message.notice(into, {
-					tone = "info",
-					text = "Older turns were summarised to stay inside the context budget.",
-				}, order)
+				local before, after = tonumber(event.before), tonumber(event.after)
+				local text = "Older turns were summarised to stay inside the context budget."
+				if before and after and before > after then
+					text = string.format("Compacted context: about %s to %s tokens.",
+						util.formatNumber(before), util.formatNumber(after))
+				end
+				message.notice(into, { tone = "info", text = text }, order)
 				follow()
 			elseif event.kind == "error" then
 				stopReveal(true)

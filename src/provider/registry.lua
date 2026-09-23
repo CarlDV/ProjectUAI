@@ -179,10 +179,20 @@ return function(env)
 		return authority == "opencode.ai" or authority:match("^opencode%.ai:%d+$") ~= nil
 	end
 
+	-- Host based so manually entered gateways keep the same required identity.
+	function M.requiresClaude(record)
+		local base = util.trim(tostring(record and record.baseUrl or "")):lower()
+		local authority = base:match("^https?://([^/%?#]+)")
+		if not authority or authority:find("@", 1, true) then return false end
+		local host = authority:gsub(":%d+$", ""):gsub("%.$", "")
+		return host == "agentrouter.org" or host:match("^[%w%.%-]+%.agentrouter%.org$") ~= nil
+	end
+
 	function M.identityFor(record)
 		-- A manually entered Zen endpoint gets the same compatibility identity as
 		-- the preset without competing Claude/Stainless headers.
 		if M.isOpencode(record) then return "none" end
+		if M.requiresClaude(record) then return "claude" end
 		return (record.claudeUa ~= false) and "claude" or "none"
 	end
 
@@ -382,6 +392,7 @@ return function(env)
 	function M.save(record, opts)
 		opts = opts or {}
 		record.baseUrl = M.normaliseBaseUrl(record.baseUrl)
+		if M.requiresClaude(record) then record.claudeUa = true end
 		local ok, problems = M.validate(record)
 		if not ok and not opts.force then return false, problems end
 

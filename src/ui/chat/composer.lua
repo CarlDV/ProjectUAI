@@ -651,6 +651,7 @@ return function(env)
 					{ label = "Model and effort", detail = modelLabel.Text, value = "model", icon = "spark" },
 					{ label = "Permissions", detail = permissionLabel.Text, value = "permissions", icon = "sliders" },
 					{ label = (mobile and contextRequested or scopeScroll.instance.Visible) and "Hide context details" or "Show context details", value = "context", icon = "folder" },
+					{ label = "Context breakdown", detail = "What is filling the window", value = "context_inspect", icon = "folder" },
 					{ label = mobile and (composer.expanded and "Automatic input height" or "Expand input")
 						or (composer.expanded and "Single-line input" or "Multiline input"), value = "expand", icon = "code" },
 				}
@@ -703,6 +704,7 @@ return function(env)
 						if mobile then contextRequested = not contextRequested
 						else scopeScroll.instance.Visible = not scopeScroll.instance.Visible end
 						resizeComposer()
+					elseif value == "context_inspect" then env.require("ui/chat/context").open(sessions.current())
 					elseif value == "expand" then composer.setExpanded(not composer.expanded)
 					elseif value == "status" then overlay.toast(statusLabel.Text, "info", 5)
 					elseif value == "compact" then

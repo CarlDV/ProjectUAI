@@ -445,6 +445,9 @@ Background chat:
 			"refused or corrected -- a refusal that drops out of the summary comes back as a",
 			"fresh idea.",
 			"Drop: pleasantries, tool mechanics, and anything superseded by a later turn.",
+			"You may be given a 'Summary so far' block followed by newer messages; merge them",
+			"into a single updated summary, preserving key facts, decisions, file paths, and",
+			"unfinished tasks rather than describing only the newest messages.",
 			"Write plain text under 200 words. No preamble.",
 		}, "\n")
 	end

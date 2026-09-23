@@ -542,6 +542,12 @@ return function(env)
 			info = rgb(120, 162, 226),
 			infoSurface = M.mix(NEUTRAL[3], rgb(120, 162, 226), 0.13),
 
+			-- Context categories keep their colors independently of pressure/status.
+			contextSystem = rgb(180, 157, 232),
+			contextMessages = rgb(120, 162, 226),
+			contextSummary = rgb(226, 170, 78),
+			contextUnused = NEUTRAL[6],
+
 			-- The one message surface. The agent's turn is the canvas itself -- a reply
 			-- is the page, not an object on it -- and tool rows, subagent cards and
 			-- reasoning are all flat now too, so the only fill left in a transcript is

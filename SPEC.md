@@ -80,6 +80,13 @@ it; `ui/*` must not require `agent/*` except through `agent/session`.
   usable completion is required before saving the working ceiling in
   `record.maxTokensCap = { model, tokens }`; failed or empty responses teach no cap.
   Both the OpenAI and Anthropic adapters use this recovery.
+* Both adapters parse context-length refusals separately from output-token limits.
+  A named window of at least 8000 tokens is saved under the lowercased model id in
+  `agent.forceContext`, only lowering an existing value. Like `record.maxTokensCap`,
+  the learned value persists; the context map is also included in configuration
+  export. The loop compacts against the refusing model and retries it once before
+  continuing the fallback chain. Cancellation and a history with nothing to fold
+  do not trigger repeated requests.
 * Buffered HTTP applies `agent.executorReplyCeiling` (default 8192). Only an actual
   configured WebSocket path or enabled web relay bypasses this default clamp;
   socket capability alone and ordinary SSE do not. A failed socket's HTTP fallback
@@ -126,6 +133,14 @@ Base URLs are normalised once: a trailing slash is dropped, a missing `/v1` is
 added unless the URL already names a path, and a URL that already ends in
 `/chat/completions` is used verbatim.
 
+`registry.requiresClaude(record)` recognizes `agentrouter.org` and its subdomains,
+including manually entered endpoints. `identityFor` returns `claude` there even
+when `record.claudeUa` is false. Inference and model-discovery requests mark this
+identity as required, so `net/http` applies its headers despite the global switch
+or conflicting custom headers. The provider UI explains the requirement instead
+of offering a toggle. The featured preset uses `https://agentrouter.org` with the
+Anthropic Messages adapter, producing `https://agentrouter.org/v1/messages`.
+
 **Models are never guessed.** Presets carry no model list. `provider/models`
 resolves a provider's models from exactly two sources — ids the user added by
 hand (which rank first, and persist on the record) and whatever `GET /v1/models`
@@ -133,6 +148,14 @@ reported (cached for ten minutes, not persisted). Nothing is filtered out of the
 endpoint's answer, because deciding which of its ids are chat models would be a
 guess. An endpoint with no `/models` route is a normal case: the Providers editor
 takes a typed id, and saving requires one.
+
+Rolling compaction feeds the previous summary back to the summarizer with newly
+removed turns. Failed or disabled summary calls preserve earlier facts and append
+a note about dropped messages. The context inspector uses the same pressure and
+limit calculation as compaction: estimated messages and summary plus overhead
+calibrated from a provider reply. Before that first reply, totals are labelled as
+partial. Its colored bar uses the model window when known and the compaction point
+otherwise; the marker and legend make that scale explicit.
 
 Generation settings live in `runtime/config` and are persisted in `UAI/config.json`:
 

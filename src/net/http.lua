@@ -146,6 +146,17 @@ return function(env)
 		for key, value in pairs(spec.headers or {}) do
 			if value ~= nil then headers[key] = tostring(value) end
 		end
+		-- A gateway requiring this identity must retain it even when the global
+		-- preference is off or a saved custom header would otherwise replace it.
+		if spec.identityRequired and identity == "claude" then
+			local required = ua.headers({ attempt = attempt, timeout = spec.timeout, required = true })
+			local names = {}
+			for key in pairs(required) do names[key:lower()] = true end
+			for key in pairs(headers) do
+				if names[key:lower()] then headers[key] = nil end
+			end
+			for key, value in pairs(required) do headers[key] = value end
+		end
 
 		if isOpenRouter then
 			-- Ensure OpenRouter attribution headers are always present for rankings and app stats
@@ -180,6 +191,11 @@ return function(env)
 			headers["Content-Type"] = "application/json"
 		end
 		return headers
+	end
+
+	-- Socket envelopes can carry the same required identity as HTTP requests.
+	function M.headersFor(spec)
+		return buildHeaders(spec, spec.attempt or 1)
 	end
 
 	-- What a transport hands back when it never got an answer varies: some set

@@ -66,6 +66,9 @@ return function(env)
 					"iy_plugin_read and iy_plugin_write support custom plugins with shared globals, multiple commands, aliases, syntax checks, returned-table validation and live reloads.",
 				} },
 				{ category = "improved", items = {
+					"Context-length refusals teach a persistent model window. The current turn compacts and retries once before provider fallback; repeated summaries retain earlier facts even if a later summary request fails.",
+					"Message options now includes a colored Context breakdown with system/tools, messages, rolling summary, unused space, and the compaction threshold. Compaction notices show the token reduction.",
+					"Delete individual saved facts from Settings > Skills > Memory. AgentRouter is now featured with its signup requirement highlighted and its required Claude Code identity always sent.",
 					"The desktop profile control shows your Roblox headshot beside a clearer name and provider hierarchy. Its menu adds a matching identity header, a live provider summary, roomier actions and visible hover and open states, with an initial fallback while avatars load.",
 					"iy_cmds includes native argument signatures and short descriptions alongside names, aliases and plugin origins, with a fallback for older IY versions.",
 					"Buffered HTTP uses an 8,192-token default reply ceiling through agent.executorReplyCeiling, without changing agent.maxTokens. Configured WebSocket streams, the enabled web relay and explicit token overrides bypass this default; 0 disables it.",

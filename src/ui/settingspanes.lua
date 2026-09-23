@@ -1427,33 +1427,43 @@ return function(env)
 			hint = "When off, nothing new is stored and nothing is injected.",
 			path = "memory.enabled",
 		})
-		local memoryText = P.text(memory, {
-			name = "MemoryList",
-			text = "",
-			role = "caption",
-			color = theme.color.textSecondary,
-			wrap = true,
-			auto = "Y",
+		local memoryList = P.column(memory, {
+			name = "MemoryEntries", size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs,
 		})
-		memoryText.Size = UDim2.new(1, 0, 0, 0)
 		local function refreshMemory()
+			for _, child in ipairs(memoryList:GetChildren()) do
+				if child:IsA("GuiObject") then child:Destroy() end
+			end
 			local list = state.memoryList()
 			if #list == 0 then
-				memoryText.Text = "Nothing stored."
+				P.text(memoryList, { text = "Nothing stored.", role = "caption", color = theme.color.textTertiary,
+					auto = "Y", wrap = true })
 				return
 			end
-			local lines = {}
-			for _, entry in ipairs(list) do
-				lines[#lines + 1] = entry.key .. ": " .. util.ellipsis(entry.value, 120)
+			for index, entry in ipairs(list) do
+				local row = P.row(memoryList, {
+					name = "MemoryEntry_" .. entry.key, size = UDim2.new(1, 0, 0, 0), auto = "Y",
+					gap = theme.space.sm, alignY = "Top", layoutOrder = index,
+				})
+				P.text(row, {
+					text = entry.key .. ": " .. util.ellipsis(entry.value, 120),
+					role = "caption", color = theme.color.textSecondary, wrap = true, auto = "Y",
+					size = UDim2.new(0, 0, 0, 0), flex = "Fill", layoutOrder = 1,
+				})
+				local key = entry.key
+				P.iconButton(row, {
+					name = "ForgetOne", icon = "trash", variant = "ghost", diameter = theme.size.controlSmall,
+					layoutOrder = 2,
+					onClick = function() state.forget(key) end,
+				})
 			end
-			memoryText.Text = table.concat(lines, "\n")
 		end
 		refreshMemory()
 		local unsubscribe = state.memoryChanged:connect(function()
-			if not memoryText.Parent then return end
+			if not memoryList.Parent then return end
 			refreshMemory()
 		end)
-		memoryText.Destroying:Connect(function() pcall(unsubscribe) end)
+		memoryList.Destroying:Connect(function() pcall(unsubscribe) end)
 		R.actions(memory, { {
 			name = "ForgetEverything",
 			text = "Forget everything",

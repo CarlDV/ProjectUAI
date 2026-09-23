@@ -1884,12 +1884,12 @@ return function(env)
 		-- dot: a notice's text began twelve pixels left of the tool call above it.
 		local dotSlot = P.frame(row, {
 			name = "DotSlot",
-			size = UDim2.fromOffset(theme.size.icon, theme.text.small.height),
+			size = UDim2.fromOffset(theme.size.icon, theme.text.small.size),
 			layoutOrder = 1,
 		})
 		P.statusDot(dotSlot, {
 			color = theme.toneColor(tone),
-			diameter = theme.size.dotSmall,
+			diameter = theme.size.dot,
 			anchor = Vector2.new(0.5, 0.5),
 			position = UDim2.fromScale(0.5, 0.5),
 		})

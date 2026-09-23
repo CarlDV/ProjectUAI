@@ -103,6 +103,7 @@ local providers = { changed = signal.new("providers"),
 	get = function(id) for _, record in ipairs(records) do if record.id == id then return record end end end,
 	count = function() return #records end, cooling = function() return false end,
 	keysOf = function() return {} end,
+	requiresClaude = function() return false end,
 	endpoint = function(record, suffix) return record.baseUrl .. suffix end,
 	normaliseBaseUrl = function(url) return url end,
 	validate = function() return true, {} end }

@@ -106,6 +106,17 @@ for _, size in ipairs({ { 844, 390 }, { 932, 430 }, { 1194, 834 }, { 390, 844 },
 	local picker = app.env.require("ui/panels/modelpicker").open()
 	write(h, app, prefix .. "-models", width, height)
 	picker.close(); h.settle(0.4)
+	local context = app.sessions.current().ctx
+	for index = 1, 12 do
+		context.pushUser(("Keep the lighthouse. "):rep(60))
+		context.pushAssistant({ content = ("Work on the dock. "):rep(80) })
+	end
+	context.summary = ("Preserve the shoreline and warm lights. "):rep(80)
+	context.calibrate(context.tokens() + 12000)
+	app.config.set("agent.forceContext", { ["claude-opus-5"] = 80000 })
+	local inspector = app.env.require("ui/chat/context").open(app.sessions.current())
+	write(h, app, prefix .. "-context", width, height)
+	inspector.close(); h.settle(0.4)
 	app.app.show("providers")
 	write(h, app, prefix .. "-providers", width, height)
 	app.unload()

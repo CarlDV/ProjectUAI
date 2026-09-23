@@ -55,5 +55,9 @@ return function(env)
 		return env.require("provider/registry").endpoint(record, "/chat/completions")
 	end
 
+	function M.contextOverflow(message)
+		return env.require("provider/openai").contextWindowFromMessage(message)
+	end
+
 	return M
 end

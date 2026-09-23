@@ -11,7 +11,7 @@ end
 
 local function fixture()
 	local h = envMock.new()
-	local env = { services = h.services, info = { folder = "UAI", version = "test" }, context = {} }
+	local env = { services = h.services, hs = h.services.HttpService, info = { folder = "UAI", version = "test" }, context = {} }
 	local loaded = {}
 	function env.require(id)
 		if loaded[id] then return loaded[id] end
@@ -93,6 +93,87 @@ scenario("forced compaction folds older turns and keeps the latest", function()
 	check("only the last two turns remain", ctx.stats().turns == 2)
 	check("the summariser saw the dropped turns", has(seen, "question 1") and has(seen, "question 3"))
 	check("the newest turn was kept", ctx.messages[#ctx.messages].content == "answer 5")
+end)
+
+scenario("context refusals name the window rather than the requested tokens", function()
+	local env, config = fixture()
+	local openai = env.require("provider/openai")
+	local examples = {
+		{ "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens (5000 in the completion)", 128000 },
+		{ "prompt is too long: 250000 tokens > 200000 maximum", 200000 },
+		{ "Maximum context length of 128,000 tokens exceeded by 140,000 prompt tokens", 128000 },
+		{ "Maximum context window is 1,048,576 tokens", 1048576 },
+		{ "Too many tokens: at most 32000 tokens are allowed", 32000 },
+		{ "max_tokens is too large: 200000" },
+		{ "This model's maximum context length is 4000 tokens" },
+		{ "context_length_exceeded: requested 130000 tokens with max_tokens 16000" },
+		{ "context_length_exceeded: max_tokens 16000 is the maximum output budget" },
+	}
+	for _, example in ipairs(examples) do
+		check(example[1], openai.contextWindowFromMessage(example[1]) == example[2])
+	end
+	check("missing text is safe", openai.contextWindowFromMessage(nil) == nil)
+	config.set("agent.forceContext", { relayed = 1000000, other = 64000 })
+	openai.rememberContextWindow({ model = "Relayed", label = "Relay" }, 128000)
+	check("learning lowers a manual claim using the lowercase id", config.get("agent.forceContext").relayed == 128000)
+	openai.rememberContextWindow({ model = "Relayed" }, 200000)
+	check("a refusal cannot raise a known limit", config.get("agent.forceContext").relayed == 128000)
+	for _, invalid in ipairs({ -1, 0, 7999, math.huge, 0 / 0, "not a window" }) do
+		openai.rememberContextWindow({ model = "Relayed" }, invalid)
+	end
+	check("invalid windows are ignored", config.get("agent.forceContext").relayed == 128000)
+	check("other models are unaffected", config.get("agent.forceContext").other == 64000)
+end)
+
+scenario("a learned window makes compaction fire for an unknown model", function()
+	local env, config, context = fixture()
+	config.set("agent.contextTokens", 1000000)
+	local ctx = context.new()
+	for index = 1, 24 do
+		ctx.pushUser(("word "):rep(400))
+		ctx.pushAssistant({ content = ("reply "):rep(400) })
+	end
+	check("the unknown model initially fits the manual cap", ctx.compact(function() return "unused" end, { model = "relayed" }) == nil)
+	local before = #ctx.wire("system")
+	local refusal = { status = 400, body = env.require("runtime/util").encode({ error = {
+		message = "maximum context length is 12000 tokens; received 30000 tokens",
+	} }) }
+	check("the response teaches the real limit", env.require("provider/openai").learnContextWindow({ model = "relayed" }, refusal) == 12000)
+	ctx.compact(function() return "summary" end, { model = "relayed" })
+	check("the wire form shrank after compaction", #ctx.wire("system") < before)
+	check("it now fits the learned window", ctx.pressure() <= ctx.limitFor("relayed"))
+end)
+
+scenario("summaries accumulate across repeated compactions", function()
+	local _, _, context = fixture()
+	local ctx, calls = context.new(), 0
+	local function summarise(transcript)
+		calls = calls + 1
+		if calls == 2 then
+			check("the next summary sees the prior facts", has(transcript, "Summary so far:\nKeep the lighthouse"))
+			check("the next summary also sees newer turns", has(transcript, "Newer messages to fold") and has(transcript, "new question"))
+		end
+		return calls == 1 and "Keep the lighthouse" or "Keep the lighthouse and add a dock"
+	end
+	for index = 1, 8 do ctx.pushUser("old question"); ctx.pushAssistant({ content = "old answer" }) end
+	ctx.compact(summarise, { force = true })
+	for index = 1, 8 do ctx.pushUser("new question"); ctx.pushAssistant({ content = "new answer" }) end
+	ctx.compact(summarise, { force = true })
+	check("the summariser ran twice", calls == 2 and ctx.compactions == 2)
+	check("the wire uses the updated summary", has(ctx.wire("system")[2].content, "Keep the lighthouse and add a dock"))
+end)
+
+scenario("failed or disabled summaries preserve previous facts", function()
+	for _, summarise in ipairs({ function() error("offline") end, function() return "  " end, function() return nil end, false }) do
+		local _, _, context = fixture()
+		local ctx = context.new()
+		ctx.summary = "Do not delete the lighthouse"
+		for index = 1, 6 do ctx.pushUser("question"); ctx.pushAssistant({ content = "answer" }) end
+		local result = ctx.compact(summarise, { force = true })
+		check("old facts survive", has(result, "Do not delete the lighthouse"))
+		check("the missing newer summary is disclosed", has(result, "8") and has(result, "dropped"))
+		check("fallback compaction is counted", ctx.compactions == 1)
+	end
 end)
 
 print(string.format("context compaction: %d checks passed, %d scenarios failed", passed, failed))
