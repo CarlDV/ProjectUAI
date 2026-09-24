@@ -6451,6 +6451,7 @@ scenario("a subagent has no ask tool and knows what it is", function()
 	contains("it says what it is", brief, "subagent of UAI")
 	contains("and that nobody can answer it", brief, "no user to ask")
 	contains("with what to do instead", brief, "state both readings")
+	contains("and where dumped files belong", brief, "dump/ subfolder")
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)

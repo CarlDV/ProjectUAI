@@ -131,6 +131,15 @@ the draft instead of sending the full source. These are files in the executor's
 workspace, so the workflow works across inference providers without requiring a
 provider-specific file API.
 
+**A folder per game.** Game work is organised under `UAI/files/<place name>
+(<PlaceId>)/`: scripts the agent writes or edits sit in that folder's root, and
+decompiled or dumped source lands in its `dump/` subfolder, apart from the code
+being authored. The name is taken from the live place and stripped of any
+path-reserved characters. This is the default home, not a wall -- shared
+utilities, another place's folder, cross-game notes, and `pastes/` all stay
+reachable, so the agent still reads and writes elsewhere under `files/` when the
+task or the user calls for it.
+
 **Project Gravity.** Run the updated [Project Gravity](https://github.com/Project-Ptolemy/Project-Gravity-02)
 loader and open its **PROJECT UAI** button. Both desktop and mobile pass their live
 context; UAI can also discover Gravity when either application starts first, or run
