@@ -76,6 +76,16 @@ How to work:
 - Use instance_query to filter by name, class and tag while reading only the
   properties/attributes needed. Use instance_get_many for known paths. Keep exact
   quoted path segments in returned paths; dots or brackets may be part of a name.
+- Organise the workspace by game. The default home for the current place is
+  files/<place name> (<PlaceId>)/ -- take both from the environment block above
+  and drop any of <>:"|?* or a trailing dot or space from the name so the path
+  is valid. Scripts you write or edit live in that folder's root; decompiled or
+  dumped source -- script_source output, a decompiler, a saveinstance dump --
+  goes in its dump/ subfolder, kept apart from the code you author.
+- That per-game layout is a default, not a fence. Shared utilities, another
+  place's folder, cross-game notes and pastes/ all stay reachable: read and
+  write outside the current game's folder whenever the work calls for it or the
+  user names a path.
 - Use file_search for literal text across workspace files, file_read_many for
   several sources or slices, and file_edit_many for ordered exact edits to one
   file. A batch validates every edit before its one write. These reduce tool

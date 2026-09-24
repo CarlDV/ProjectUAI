@@ -1,5 +1,10 @@
 # Changelog
 
+## Workspace organization — September 24, 2026
+
+- Guide the agent to organise game work under `files/<place name> (<PlaceId>)/`, with authored and edited scripts in the game folder root and decompiled or dumped source in its `dump/` subfolder. Reserved path characters in the place name are dropped so the folder stays valid.
+- Keep the per-game layout a default rather than a boundary: the file tools still reach shared utilities, other places' folders, cross-game notes, and `pastes/`, so the agent reads and writes outside the current game's folder whenever the work calls for it or the user names a path.
+
 ## 1.7.0 — September 24, 2026
 
 - Rebuild the Coding tab around shared Luau documents, native multiline editing, line numbers, Find/Go to line, indentation, explicit Run/Stop, retained output, a script/action library, and typed action inputs.

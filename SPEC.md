@@ -206,6 +206,14 @@ Explicit `files/` and `pastes/` paths resolve before bare-name fallbacks; client
 configuration is never a fallback scope. Saved-paste slices return at most 6,000
 source bytes with UTF-8-safe continuation offsets, including batch reads.
 
+The prompt directs game-specific work into a per-place folder under `files/`,
+named `<place name> (<PlaceId>)` from the environment block with path-reserved
+characters (`<>:"|?*` and trailing dots or spaces) removed. Scripts the agent
+authors or edits go in that folder's root; decompiled or dumped source goes in
+its `dump/` subfolder. This is prompt guidance, not an enforced boundary: the
+file tools still resolve any valid path under `files/`, so shared utilities and
+cross-game files stay reachable.
+
 `run_luau` uses a separate managed executor with a default 10-second deadline
 (configurable to 1–60 seconds), cooperative loop checkpoints, bounded output, and
 capture of multiple returns. Functions scheduled through its task wrappers share

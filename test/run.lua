@@ -6482,6 +6482,11 @@ scenario("the system prompt teaches denials, dates and asking early", function()
 	truthy("the date is stated", promptText:find("Date: %d%d%d%d%-%d%d%-%d%d %d%d:%d%d UTC") ~= nil,
 		"no Date line in the prompt")
 	contains("and quotes must be exact", (promptText:gsub("\n%s+", " ")), "character for character")
+	-- The per-game workspace layout: authored scripts in the game folder root,
+	-- dumps in its dump/ subfolder, and the whole thing a default rather than a fence.
+	contains("game work has a per-place home", promptText, "Organise the workspace by game")
+	contains("dumps are kept apart from authored code", promptText, "dump/ subfolder")
+	contains("the layout does not fence the agent in", promptText, "default, not a fence")
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
