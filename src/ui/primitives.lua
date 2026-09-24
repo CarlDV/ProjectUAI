@@ -354,6 +354,15 @@ return function(env)
 				text = theme.color.textSecondary, stroke = nil, font = "body",
 			}
 		end,
+		-- A quiet title/dropdown: no border at rest, full-strength text, hover fill. Used
+		-- for the primary picker in a toolbar, where a bordered box would be one too many
+		-- rectangles but the label still has to read as the loudest thing on the strip.
+		soft = function()
+			return {
+				bg = nil, bgHover = theme.color.surfaceHover, bgPress = theme.color.surfaceActive,
+				text = theme.color.text, stroke = nil, font = "bodyStrong",
+			}
+		end,
 		-- Code actions follow the selected code palette, including its light surface.
 		code = function()
 			return {
@@ -451,11 +460,23 @@ return function(env)
 				align = props.align or "Center",
 				auto = autoWidth and "XY" or "X",
 				size = not autoWidth and UDim2.new(0, 0, 1, 0) or nil,
-				flex = not autoWidth and "Shrink" or nil,
+				flex = not autoWidth and (props.trailing and "Fill" or "Shrink") or nil,
 				truncate = not autoWidth,
 				layoutOrder = 2,
 			})
 			if autoWidth then label.Size = UDim2.fromOffset(0, 0) end
+		end
+
+		-- A trailing glyph pinned to the button's right edge -- the chevron that marks a
+		-- control as a dropdown. The label above takes Fill so this sits flush right.
+		local trailingHolder
+		if props.trailing then
+			trailingHolder = P.frame(content, {
+				name = "TrailingSlot",
+				size = UDim2.fromOffset(theme.size.icon, theme.size.icon),
+				layoutOrder = 3,
+			})
+			icons.draw(props.trailing, trailingHolder, theme.size.icon, props.trailingColor or iconTint or variant.text, props.trailingDirection)
 		end
 
 		local handle = { instance = button, label = label, enabled = props.enabled ~= false, busy = false }
@@ -463,14 +484,18 @@ return function(env)
 		local iconParts = {}
 		local function collectIconParts()
 			iconParts = {}
-			if not iconHolder then return end
-			for _, child in ipairs(iconHolder:GetDescendants()) do
-				if child:IsA("ImageLabel") then
-					iconParts[#iconParts + 1] = { instance = child, property = "ImageColor3" }
-				elseif child:IsA("UIStroke") then
-					iconParts[#iconParts + 1] = { instance = child, property = "Color" }
-				elseif child:IsA("Frame") and child.BackgroundTransparency < 1 then
-					iconParts[#iconParts + 1] = { instance = child, property = "BackgroundColor3" }
+			local holders = {}
+			if iconHolder then holders[#holders + 1] = iconHolder end
+			if trailingHolder then holders[#holders + 1] = trailingHolder end
+			for _, holder in ipairs(holders) do
+				for _, child in ipairs(holder:GetDescendants()) do
+					if child:IsA("ImageLabel") then
+						iconParts[#iconParts + 1] = { instance = child, property = "ImageColor3" }
+					elseif child:IsA("UIStroke") then
+						iconParts[#iconParts + 1] = { instance = child, property = "Color" }
+					elseif child:IsA("Frame") and child.BackgroundTransparency < 1 then
+						iconParts[#iconParts + 1] = { instance = child, property = "BackgroundColor3" }
+					end
 				end
 			end
 		end

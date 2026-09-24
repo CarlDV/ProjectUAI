@@ -75,8 +75,7 @@ return function(env)
 		agentself = "Agent",
 		instance = "Instance tree",
 		script = "Code",
-		-- Archived with the code editor panel and its tool group (archive/).
-		-- coding = "Code editor",
+		coding = "Code workspace",
 		fs = "Files",
 		net = "HTTP",
 		web = "Web",
@@ -308,6 +307,19 @@ return function(env)
 		end
 		result.args = coerced
 
+		-- Read-only target binding before a permission yield. Native operations keep
+		-- exact IDs/observations here, never silently resolve a replacement path later.
+		local prepared
+		if tool.prepare then
+			local preparedOk, value, why = pcall(tool.prepare, coerced, ctx)
+			if not preparedOk or not value then
+				result.text = tostring(preparedOk and why or value)
+				result.error = "preflight failed"
+				return result
+			end
+			prepared = value
+		end
+
 		local payload = { tool = tool, args = coerced, ctx = ctx, reason = nil }
 		local allowedByHooks = hooks.run("preTool", payload)
 		if not allowedByHooks then
@@ -320,6 +332,10 @@ return function(env)
 
 		local allowed, source = permissions.request(tool, coerced, ctx)
 		if blocked() then return result end
+		if M.missingCapability(tool) or permissions.check(tool) == "deny" then
+			result.text, result.error = "The tool's capability or permission changed while approval was pending.", "unavailable"
+			return result
+		end
 		if not allowed then
 			result.text = string.format("The user did not approve %s (%s). Do not retry it; ask what to do instead.",
 				name, source or "denied")
@@ -348,7 +364,10 @@ return function(env)
 		local expired, settled = false, false
 		scoped.callId = call.id
 		scoped.aborted = function()
-			return expired or (ctx and ctx.aborted and ctx.aborted()) or false
+			local owner = ctx and ctx.session
+			local outside = owner and ((owner.toolFilter and not owner.toolFilter[name]) or (owner.toolGroups and not owner.toolGroups[tool.group]) or (owner.toolExclude and owner.toolExclude[name]))
+			return expired or (ctx and ctx.aborted and ctx.aborted()) or not M.groupEnabled(tool.group)
+				or outside or permissions.check(tool) == "deny" or false
 		end
 		if ctx and ctx.emit then
 			scoped.emit = function(kind, value)
@@ -364,7 +383,7 @@ return function(env)
 			scoped.progress = function(text) scoped.emit("tool:progress", { text = tostring(text) }) end
 		end
 		local finished, ok, value = clock.timeout(timeout, function()
-			return tool.run(coerced, scoped)
+			return tool.run(coerced, scoped, prepared)
 		end)
 		settled = true
 

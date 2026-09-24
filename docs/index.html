@@ -57,7 +57,7 @@
     <section class="hero container" aria-labelledby="heroTitle">
       <div class="hero-copy">
         <a class="release-link" href="https://github.com/CarlDV/ProjectUAI/blob/main/CHANGELOG.md">
-          <span class="release-version">v<!-- site:version:start -->1.6.0<!-- site:version:end --></span>
+          <span class="release-version">v<!-- site:version:start -->1.7.0<!-- site:version:end --></span>
           Five new tools. Fewer round trips. <span aria-hidden="true">↗</span>
         </a>
         <p class="eyebrow">An agent at home in your game</p>
@@ -96,8 +96,8 @@
 
     <div class="container">
       <dl class="capability-strip" aria-label="Current release capabilities">
-        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->115<!-- site:tool-count:end --></dd></div>
-        <div><dt>Tool groups</dt><dd><!-- site:group-count:start -->20<!-- site:group-count:end --></dd></div>
+        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->154<!-- site:tool-count:end --></dd></div>
+        <div><dt>Tool groups</dt><dd><!-- site:group-count:start -->21<!-- site:group-count:end --></dd></div>
         <div><dt>Files per batch read</dt><dd>12</dd></div>
         <div><dt>Edits in one write</dt><dd>20</dd></div>
       </dl>
@@ -197,16 +197,56 @@
         </div>
         <div class="catalog-toolbar" id="toolFilters" role="search" aria-label="Search the tool catalog" hidden>
           <div class="search-field"><label for="toolSearch">Find a tool</label><input type="search" id="toolSearch" placeholder="Try files, raycast, or Luau" autocomplete="off" spellcheck="false" aria-controls="toolCatalog"></div>
-          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (12)</option><option value="script">Code (4)</option><option value="fs">Files (9)</option><option value="agentself">Agent (12)</option><option value="character">Character (4)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (10)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="gravity">Project Gravity (13)</option><option value="remotes">Remotes (5)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
+          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (24)</option><option value="script">Code (5)</option><option value="fs">Files (9)</option><option value="agentself">Agent (12)</option><option value="character">Character (4)</option><option value="coding">Code workspace (14)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (10)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="gravity">Project Gravity (13)</option><option value="remotes">Remotes (17)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
           <button class="button button-outline clear-filters" type="button" id="clearFilters" disabled>Clear filters</button>
         </div>
-        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->115<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->20<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.6.0<!-- site:version:end --></span></div>
+        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->154<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->21<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.7.0<!-- site:version:end --></span></div>
         <noscript><p class="catalog-help">Open a category to browse its tools. Enable JavaScript to search and filter.</p></noscript>
         <div id="toolCatalog" class="tool-catalog">
           <!-- site:catalog:start -->
           <details class="tool-group" data-group="instance" open>
-            <summary><span class="tool-group-label">Instance tree</span><span class="tool-group-count">12 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
+            <summary><span class="tool-group-label">Instance tree</span><span class="tool-group-count">24 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
             <ul class="tool-list">
+              <li class="tool-row" data-tool-name="changes_list">
+                <div class="tool-row-heading"><code>changes_list</code><span class="risk risk-read">Read</span></div>
+                <p>List recorded UAI property/attribute changes and Undo status. Other game effects are outside this history.</p>
+              </li>
+              <li class="tool-row" data-tool-name="changes_read">
+                <div class="tool-row-heading"><code>changes_read</code><span class="risk risk-read">Read</span></div>
+                <p>Inspect recorded before/after values for one supported game-change batch.</p>
+              </li>
+              <li class="tool-row" data-tool-name="changes_undo">
+                <div class="tool-row-heading"><code>changes_undo</code><span class="risk risk-write">Write</span></div>
+                <p>Undo one recorded property/attribute batch. Rechecks every target/value and never overwrites a conflicting newer edit.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_open_source">
+                <div class="tool-row-heading"><code>code_open_source</code><span class="risk risk-write">Write</span></div>
+                <p>Open a script/file/capture as a source snapshot in the shared Code workspace. Large source stays in a bounded reader. Never overwrites a modified document or executes source.</p>
+              </li>
+              <li class="tool-row" data-tool-name="explorer_children">
+                <div class="tool-row-heading"><code>explorer_children</code><span class="risk risk-read">Read</span></div>
+                <p>Read a bounded child page by exact parent handle or logical root (nil/bookmarks). Cursors reject changed branches.</p>
+              </li>
+              <li class="tool-row" data-tool-name="explorer_export">
+                <div class="tool-row-heading"><code>explorer_export</code><span class="risk risk-write">Write</span></div>
+                <p>Export explicitly selected object metadata to a verified user file. Model export and full-place saving are not provided.</p><span class="tool-needs">Requires fs</span>
+              </li>
+              <li class="tool-row" data-tool-name="explorer_properties">
+                <div class="tool-row-heading"><code>explorer_properties</code><span class="risk risk-read">Read</span></div>
+                <p>Read supported properties, attributes or tags for exact handles or shared selection. Returns a bounded page and an expiring snapshot_id for guarded edits; large values are labelled previews.</p>
+              </li>
+              <li class="tool-row" data-tool-name="explorer_search">
+                <div class="tool-row-heading"><code>explorer_search</code><span class="risk risk-read">Read</span></div>
+                <p>Search by literal name, class, tag and subtree with bounded cooperative traversal and snapshot pages.</p>
+              </li>
+              <li class="tool-row" data-tool-name="explorer_select">
+                <div class="tool-row-heading"><code>explorer_select</code><span class="risk risk-write">Write</span></div>
+                <p>Explicitly change shared Explorer selection (maximum 20). Existing selection requires expected_revision. focus optionally opens the native workspace.</p>
+              </li>
+              <li class="tool-row" data-tool-name="explorer_state">
+                <div class="tool-row-heading"><code>explorer_state</code><span class="risk risk-read">Read</span></div>
+                <p>Read native Explorer selection, root handles, metadata coverage and capabilities. Does not scan or change selection.</p>
+              </li>
               <li class="tool-row" data-tool-name="instance_attribute">
                 <div class="tool-row-heading"><code>instance_attribute</code><span class="risk risk-write">Write</span></div>
                 <p>Read or write an attribute on an instance. Omit value to read.</p>
@@ -217,11 +257,15 @@
               </li>
               <li class="tool-row" data-tool-name="instance_create">
                 <div class="tool-row-heading"><code>instance_create</code><span class="risk risk-write">Write</span></div>
-                <p>Create an instance and parent it. Properties are applied after creation, in the order given.</p>
+                <p>Create an instance detached, validate/apply properties, then parent it. Legacy property maps use sorted property names. Failed setup destroys only the new owned instance.</p>
               </li>
               <li class="tool-row" data-tool-name="instance_destroy">
                 <div class="tool-row-heading"><code>instance_destroy</code><span class="risk risk-danger">High impact</span></div>
                 <p>Destroy an instance and everything under it. This cannot be undone.</p>
+              </li>
+              <li class="tool-row" data-tool-name="instance_edit_many">
+                <div class="tool-row-heading"><code>instance_edit_many</code><span class="risk risk-write">Write</span></div>
+                <p>Apply ordered typed property/attribute/tag operations with expected values or an observed snapshot. Preflight conflicts produce zero writes. Property/attribute changes share Game changes Undo.</p>
               </li>
               <li class="tool-row" data-tool-name="instance_find">
                 <div class="tool-row-heading"><code>instance_find</code><span class="risk risk-read">Read</span></div>
@@ -243,6 +287,10 @@
                 <div class="tool-row-heading"><code>instance_query</code><span class="risk risk-read">Read</span></div>
                 <p>Find instances and read selected properties/attributes in one call. Name is a case-insensitive substring; class uses IsA. Stops as soon as a page fills, without collecting the entire subtree. Search is capped at 20,000 nodes.</p>
               </li>
+              <li class="tool-row" data-tool-name="instance_result_read">
+                <div class="tool-row-heading"><code>instance_result_read</code><span class="risk risk-read">Read</span></div>
+                <p>Read bounded retained detail from a large result in this tool group. Follow returned path arrays and offsets; expires after five minutes.</p>
+              </li>
               <li class="tool-row" data-tool-name="instance_set">
                 <div class="tool-row-heading"><code>instance_set</code><span class="risk risk-write">Write</span></div>
                 <p>Set one property on one instance. The value is converted to the property&#39;s existing type, so &#39;Size&#39; takes &#39;4, 1, 2&#39; on a part and &#39;0, 200, 0, 40&#39; on a GUI frame.</p>
@@ -258,7 +306,7 @@
             </ul>
           </details>
           <details class="tool-group" data-group="script">
-            <summary><span class="tool-group-label">Code</span><span class="tool-group-count">4 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
+            <summary><span class="tool-group-label">Code</span><span class="tool-group-count">5 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
             <ul class="tool-list">
               <li class="tool-row" data-tool-name="check_luau">
                 <div class="tool-row-heading"><code>check_luau</code><span class="risk risk-read">Read</span></div>
@@ -271,6 +319,10 @@
               <li class="tool-row" data-tool-name="script_list">
                 <div class="tool-row-heading"><code>script_list</code><span class="risk risk-read">Read</span></div>
                 <p>List script instances in the place, with their paths. Useful for finding where behaviour lives before reading it.</p>
+              </li>
+              <li class="tool-row" data-tool-name="script_result_read">
+                <div class="tool-row-heading"><code>script_result_read</code><span class="risk risk-read">Read</span></div>
+                <p>Read bounded retained detail from a large result in this tool group. Follow returned path arrays and offsets; expires after five minutes.</p>
               </li>
               <li class="tool-row" data-tool-name="script_source">
                 <div class="tool-row-heading"><code>script_source</code><span class="risk risk-read">Read</span></div>
@@ -390,6 +442,67 @@
               <li class="tool-row" data-tool-name="character_walk">
                 <div class="tool-row-heading"><code>character_walk</code><span class="risk risk-write">Write</span></div>
                 <p>Walk your character to a position using normal pathing, waiting until it arrives or gives up. Use this rather than teleporting when the server watches movement.</p>
+              </li>
+            </ul>
+          </details>
+          <details class="tool-group" data-group="coding">
+            <summary><span class="tool-group-label">Code workspace</span><span class="tool-group-count">14 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
+            <ul class="tool-list">
+              <li class="tool-row" data-tool-name="code_action_list">
+                <div class="tool-row-heading"><code>code_action_list</code><span class="risk risk-read">Read</span></div>
+                <p>List saved action snapshots and revisions. Selecting an action does not run it.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_action_read">
+                <div class="tool-row-heading"><code>code_action_read</code><span class="risk risk-read">Read</span></div>
+                <p>Inspect a saved action&#39;s typed inputs and source snapshot before editing or running. Source is paged and the saved revision is explicit.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_action_run">
+                <div class="tool-row-heading"><code>code_action_run</code><span class="risk risk-danger">High impact</span></div>
+                <p>Run a saved action revision with validated data inputs. Input strings are never compiled or interpolated.</p><span class="tool-needs">Requires exec</span>
+              </li>
+              <li class="tool-row" data-tool-name="code_action_save">
+                <div class="tool-row-heading"><code>code_action_save</code><span class="risk risk-write">Write</span></div>
+                <p>Save an inspectable source snapshot as an action with typed inputs. Updating an action is explicit and revision guarded.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_edit">
+                <div class="tool-row-heading"><code>code_edit</code><span class="risk risk-write">Write</span></div>
+                <p>Replace an inclusive line range against expected_revision, preserving source outside the range. Never selects or runs the document.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_propose">
+                <div class="tool-row-heading"><code>code_propose</code><span class="risk risk-write">Write</span></div>
+                <p>Store a reviewable candidate tied to a base revision. Reports proposed; does not overwrite, select, or run live source.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_read">
+                <div class="tool-row-heading"><code>code_read</code><span class="risk risk-read">Read</span></div>
+                <p>Read the latest live source or a retained version/proposal. Returns the revision for edits and Run; source pages are at most 6,000 bytes.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_run">
+                <div class="tool-row-heading"><code>code_run</code><span class="risk risk-danger">High impact</span></div>
+                <p>Run an identified stored source revision through the shared engine. Rejects source changed during approval; no source retransmission needed.</p><span class="tool-needs">Requires exec</span>
+              </li>
+              <li class="tool-row" data-tool-name="code_search">
+                <div class="tool-row-heading"><code>code_search</code><span class="risk risk-read">Read</span></div>
+                <p>Search live documents. Literal query is the default; pattern explicitly enables a Lua pattern. Results include source offsets and revisions.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_select">
+                <div class="tool-row-heading"><code>code_select</code><span class="risk risk-write">Write</span></div>
+                <p>Explicitly select and open a document in the user&#39;s Code workspace.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_tabs">
+                <div class="tool-row-heading"><code>code_tabs</code><span class="risk risk-read">Read</span></div>
+                <p>List the shared Code library, live document revisions, and open/active IDs. Source is read separately.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_versions">
+                <div class="tool-row-heading"><code>code_versions</code><span class="risk risk-read">Read</span></div>
+                <p>List recoverable source versions and pending proposals without dumping source.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_write">
+                <div class="tool-row-heading"><code>code_write</code><span class="risk risk-write">Write</span></div>
+                <p>Create or conditionally replace shared source. Existing nonempty source requires expected_revision. Saves a recoverable checkpoint and never changes the user&#39;s selection.</p>
+              </li>
+              <li class="tool-row" data-tool-name="workspace_result_read">
+                <div class="tool-row-heading"><code>workspace_result_read</code><span class="risk risk-read">Read</span></div>
+                <p>Read bounded retained detail for a large native tool result. Start with result_id; follow returned path arrays or offset. No source, object, or traffic is changed.</p>
               </li>
             </ul>
           </details>
@@ -638,8 +751,16 @@
             </ul>
           </details>
           <details class="tool-group" data-group="remotes">
-            <summary><span class="tool-group-label">Remotes</span><span class="tool-group-count">5 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
+            <summary><span class="tool-group-label">Remotes</span><span class="tool-group-count">17 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
             <ul class="tool-list">
+              <li class="tool-row" data-tool-name="remote_capture_bytes">
+                <div class="tool-row-heading"><code>remote_capture_bytes</code><span class="risk risk-read">Read</span></div>
+                <p>Read retained text/binary bytes from a large captured value. Offsets address original bytes; hex output is explicit. Truncated prefixes never imply complete original data.</p>
+              </li>
+              <li class="tool-row" data-tool-name="remote_capture_read">
+                <div class="tool-row-heading"><code>remote_capture_read</code><span class="risk risk-read">Read</span></div>
+                <p>Read a capture&#39;s summary, arguments, results or caller as bounded graph pages. Table nodes reference node_id; no remote calls occur.</p>
+              </li>
               <li class="tool-row" data-tool-name="remote_fire">
                 <div class="tool-row-heading"><code>remote_fire</code><span class="risk risk-danger">High impact</span></div>
                 <p>Fire a RemoteEvent to the server. This is a real server call: it can change the game and can be logged or punished by anticheat. Prefix an argument with a type when it is not a plain string or number, e.g. &#39;vec3:0, 10, 0&#39; or &#39;instance:Workspace.Door&#39;.</p>
@@ -648,13 +769,53 @@
                 <div class="tool-row-heading"><code>remote_invoke</code><span class="risk risk-danger">High impact</span></div>
                 <p>Invoke a RemoteFunction and return what the server answers. Blocks until it replies, and can hang if the server never does.</p>
               </li>
+              <li class="tool-row" data-tool-name="remote_replay">
+                <div class="tool-row-heading"><code>remote_replay</code><span class="risk risk-danger">High impact</span></div>
+                <p>Dispatch a reviewed replay plan once. A timed-out InvokeServer remains outstanding and must not be automatically retried.</p>
+              </li>
+              <li class="tool-row" data-tool-name="remote_replay_prepare">
+                <div class="tool-row-heading"><code>remote_replay_prepare</code><span class="risk risk-write">Write</span></div>
+                <p>Prepare an immutable five-minute replay plan from a captured revision or explicit remote/method and packed typed arguments. Preparation sends nothing.</p>
+              </li>
+              <li class="tool-row" data-tool-name="remote_result_read">
+                <div class="tool-row-heading"><code>remote_result_read</code><span class="risk risk-read">Read</span></div>
+                <p>Read bounded retained detail from a large result in this tool group. Follow returned path arrays and offsets; expires after five minutes.</p>
+              </li>
+              <li class="tool-row" data-tool-name="remote_rule">
+                <div class="tool-row-heading"><code>remote_rule</code><span class="risk risk-danger">High impact</span></div>
+                <p>Explicit exact-target outgoing blocking rule. InvokeServer requires local_error policy. Stop disarms all rules; excluding logs is a separate operation.</p>
+              </li>
               <li class="tool-row" data-tool-name="remote_watch">
                 <div class="tool-row-heading"><code>remote_watch</code><span class="risk risk-read">Read</span></div>
                 <p>Listen to a RemoteEvent and report the next few things the server sends through it. Useful for learning a remote&#39;s argument shape before firing it.</p>
               </li>
+              <li class="tool-row" data-tool-name="remotes_calls">
+                <div class="tool-row-heading"><code>remotes_calls</code><span class="risk risk-read">Read</span></div>
+                <p>Read captured call summaries with sequence gaps and continuation. Arguments/results are separate bounded reads.</p>
+              </li>
+              <li class="tool-row" data-tool-name="remotes_capture">
+                <div class="tool-row-heading"><code>remotes_capture</code><span class="risk risk-write">Write</span></div>
+                <p>Explicit capture lifecycle. Start requires supported mode and exact scope. Tool default lifetime is 30 seconds; persistent is explicit. Stop/Clear remain available if hooks fail.</p>
+              </li>
+              <li class="tool-row" data-tool-name="remotes_export">
+                <div class="tool-row-heading"><code>remotes_export</code><span class="risk risk-write">Write</span></div>
+                <p>Export explicit captures or a frozen bounded session snapshot to verified files. Large exports use numbered parts and a completion manifest.</p><span class="tool-needs">Requires fs</span>
+              </li>
+              <li class="tool-row" data-tool-name="remotes_filter">
+                <div class="tool-row-heading"><code>remotes_filter</code><span class="risk risk-write">Write</span></div>
+                <p>Change admission filtering for future recordings. Excluded past calls cannot be recovered. This never blocks traffic.</p>
+              </li>
+              <li class="tool-row" data-tool-name="remotes_import">
+                <div class="tool-row-heading"><code>remotes_import</code><span class="risk risk-write">Write</span></div>
+                <p>Open a validated capture file as offline records. Import never starts capture, resolves stale identities, or sends traffic.</p><span class="tool-needs">Requires fs</span>
+              </li>
               <li class="tool-row" data-tool-name="remotes_list">
                 <div class="tool-row-heading"><code>remotes_list</code><span class="risk risk-read">Read</span></div>
                 <p>Find remotes in the place, with how many client-side listeners each has when the host can tell.</p>
+              </li>
+              <li class="tool-row" data-tool-name="remotes_state">
+                <div class="tool-row-heading"><code>remotes_state</code><span class="risk risk-read">Read</span></div>
+                <p>Read capture state, actual coverage, scope, counts and traffic-rule status. Does not start capture or send traffic.</p>
               </li>
               <li class="tool-row" data-tool-name="signal_watch">
                 <div class="tool-row-heading"><code>signal_watch</code><span class="risk risk-read">Read</span></div>
@@ -813,7 +974,7 @@
     <div class="container footer-inner">
       <div><a class="brand" href="#top"><img src="webassets/icon.svg" width="28" height="28" alt=""><span>Project <strong>UAI</strong></span></a><p>Built for the things you want to make.</p></div>
       <nav aria-label="Project resources"><a href="https://discord.gg/9xYyyYuKap" target="_blank" rel="noopener">Discord</a><a href="https://github.com/CarlDV/ProjectUAI">Source</a><a href="https://github.com/CarlDV/ProjectUAI/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/CarlDV/ProjectUAI/blob/main/LICENSE">MIT License</a><a href="#top">Back to top ↑</a></nav>
-      <span class="footer-version">v<!-- site:version:start -->1.6.0<!-- site:version:end --> · CarlDV</span>
+      <span class="footer-version">v<!-- site:version:start -->1.7.0<!-- site:version:end --> · CarlDV</span>
     </div>
   </footer>
   <div class="copy-status" id="copyStatus" role="status" aria-live="polite" aria-atomic="true"></div>

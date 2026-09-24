@@ -64,6 +64,7 @@ readfile writefile appendfile isfile isfolder makefolder listfiles delfile delfo
 setclipboard toclipboard request http_request syn fluxus http WebSocket
 getconnections firesignal fireclickdetector firetouchinterest fireproximityprompt
 hookfunction hookmetamethod getrawmetatable setreadonly isreadonly cloneref clonefunction
+getnamecallmethod newcclosure
 getnilinstances getinstances getscripts getloadedmodules getgc getsenv getcallingscript checkcaller
 decompile getscriptclosure getcustomasset setfflag queue_on_teleport setthreadidentity getthreadidentity
 crypt base64 lz4 messagebox rconsoleprint rconsoleclear setidentity getidentity

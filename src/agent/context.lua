@@ -16,6 +16,26 @@ return function(env)
 	local usage = env.require("agent/usage")
 
 	local M = {}
+	-- Compact references only; querying context never initializes a workspace or hook.
+	function M.workspaceSummary()
+		local loaded = env.loadedModules or {}
+		local store, explorer, capture = loaded["runtime/code_store"], loaded["runtime/explorer"], loaded["runtime/remote_capture"]
+		local out = {}
+		if store and store.initialized then
+			local doc = store.active()
+			out.destination, out.documentId, out.sourceRevision = store.workspace.destination, doc and doc.id, doc and doc.revision
+			out.sourceId = store.workspace.sourceId
+		end
+		if explorer and #explorer.selectedIds > 0 then out.selection = util.slice(explorer.selectedIds, 1, 5); out.selectionCount, out.selectionRevision = #explorer.selectedIds, explorer.selectionRevision end
+		if capture and capture.status ~= "idle" then
+			local records = loaded["runtime/remote_store"]
+			out.captureId, out.captureStatus, out.captureRevision, out.ruleCount = capture.sessionId, capture.status, capture.revision, #capture.rules
+			out.recordId = capture.selectedId
+			if capture.view.record and capture.view.record.id == capture.selectedId then out.recordRevision = capture.view.record.revision end
+			if records then local state = records.state(); out.retained, out.evicted = state.retained, state.counters.evicted end
+		end
+		return next(out) and util.encode(out) or nil
+	end
 
 	function M.new()
 		local ctx = {

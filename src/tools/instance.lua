@@ -8,68 +8,20 @@ return function(env)
 	local util = env.require("runtime/util")
 	local H = env.require("tools/helpers")
 	local scan = env.require("tools/scan")
+	local refs = env.require("runtime/instance_refs")
+	local fields = env.require("runtime/instance_fields")
+	local N = env.require("tools/native_helpers").forGroup("instance")
 
+	local native = env.require("tools/instance_native")
 	local SCAN_CAP = 20000
 
-	local COMMON = { "Name", "ClassName" }
-
-	local BY_CLASS = {
-		{ "BasePart", { "Position", "Size", "Orientation", "Anchored", "CanCollide", "CanTouch", "Transparency", "Color", "Material", "Massless", "Shape", "Reflectance" } },
-		{ "Model", { "PrimaryPart", "WorldPivot" } },
-		{ "GuiObject", { "Position", "Size", "AnchorPoint", "Visible", "BackgroundColor3", "BackgroundTransparency", "ZIndex", "LayoutOrder", "Rotation", "ClipsDescendants", "AutomaticSize", "AbsolutePosition", "AbsoluteSize" } },
-		{ "TextLabel", { "Text", "TextColor3", "TextSize", "Font", "TextWrapped", "RichText", "TextXAlignment", "TextYAlignment", "TextTransparency" } },
-		{ "TextButton", { "Text", "TextColor3", "TextSize", "Font", "AutoButtonColor" } },
-		{ "TextBox", { "Text", "PlaceholderText", "TextColor3", "TextSize", "ClearTextOnFocus", "MultiLine" } },
-		{ "ImageLabel", { "Image", "ImageColor3", "ImageTransparency", "ScaleType" } },
-		{ "ScrollingFrame", { "CanvasSize", "CanvasPosition", "ScrollBarThickness", "AutomaticCanvasSize", "ScrollingEnabled" } },
-		{ "ScreenGui", { "Enabled", "DisplayOrder", "IgnoreGuiInset", "ResetOnSpawn", "ZIndexBehavior" } },
-		{ "Humanoid", { "Health", "MaxHealth", "WalkSpeed", "JumpPower", "JumpHeight", "HipHeight", "Sit", "PlatformStand", "MoveDirection", "RigType" } },
-		{ "Player", { "DisplayName", "UserId", "AccountAge", "Team", "TeamColor", "CharacterAppearanceId" } },
-		{ "Camera", { "CFrame", "FieldOfView", "CameraType", "CameraSubject", "Focus" } },
-		{ "Sound", { "SoundId", "Volume", "Playing", "Looped", "TimePosition", "PlaybackSpeed" } },
-		{ "Light", { "Brightness", "Color", "Range", "Enabled", "Shadows" } },
-		{ "Lighting", { "ClockTime", "Brightness", "Ambient", "OutdoorAmbient", "FogColor", "FogStart", "FogEnd", "GlobalShadows", "ExposureCompensation" } },
-		{ "ValueBase", { "Value" } },
-		{ "Decal", { "Texture", "Transparency", "Face" } },
-		{ "Tool", { "RequiresHandle", "CanBeDropped", "Enabled", "ToolTip" } },
-		{ "ProximityPrompt", { "ActionText", "ObjectText", "HoldDuration", "MaxActivationDistance", "Enabled" } },
-		{ "Attachment", { "Position", "WorldPosition", "Axis" } },
-		{ "UIListLayout", { "FillDirection", "Padding", "SortOrder", "HorizontalAlignment", "VerticalAlignment", "Wraps" } },
-		{ "UIPadding", { "PaddingTop", "PaddingBottom", "PaddingLeft", "PaddingRight" } },
-		{ "UIStroke", { "Color", "Thickness", "Transparency", "ApplyStrokeMode" } },
-		{ "UICorner", { "CornerRadius" } },
-		{ "UIScale", { "Scale" } },
-		{ "CanvasGroup", { "GroupTransparency", "GroupColor3" } },
-		{ "Script", { "Enabled", "RunContext" } },
-		{ "LuaSourceContainer", { "Source" } },
-		{ "Terrain", { "WaterColor", "WaterTransparency", "WaterWaveSize" } },
-		{ "SpawnLocation", { "Enabled", "Neutral", "TeamColor", "Duration" } },
-		{ "Seat", { "Occupant", "Disabled" } },
-	}
-
-	local function propertyNames(instance, extra)
-		local names, seen = {}, {}
-		local function add(name)
-			if type(name) == "string" and name ~= "" and not seen[name] then
-				seen[name] = true
-				names[#names + 1] = name
-			end
-		end
-		for _, name in ipairs(COMMON) do add(name) end
-		for _, entry in ipairs(BY_CLASS) do
-			local ok, isA = pcall(function() return instance:IsA(entry[1]) end)
-			if ok and isA then
-				for _, name in ipairs(entry[2]) do add(name) end
-			end
-		end
-		for _, name in ipairs(extra or {}) do add(name) end
-		return names
-	end
+	local schema = env.require("runtime/instance_schema")
+	local propertyNames = schema.names
 
 	local function readProperties(instance, extra)
 		local rows = {}
 		for _, name in ipairs(propertyNames(instance, extra)) do
-			local ok, value = pcall(function() return instance[name] end)
+			local ok, value = fields.read(instance, "property", name)
 			if ok and value ~= nil and typeof(value) ~= "function" then
 				local shown = H.show(value)
 				-- Source can be enormous; it has its own tool.
@@ -95,7 +47,7 @@ return function(env)
 				local child = children[index]
 				visited = visited + 1
 				if visited > SCAN_CAP then return end
-				lines[#lines + 1] = prefix .. H.describe(child)
+				lines[#lines + 1] = prefix .. H.describe(child) .. " (" .. refs.id(child) .. ")"
 				recurse(child, depth + 1, prefix .. "  ")
 			end
 			if #children > shown then
@@ -127,8 +79,8 @@ return function(env)
 				if #lines == 0 then
 					return H.pathOf(root) .. " [" .. root.ClassName .. "] has no children."
 				end
-				return string.format("%s [%s], %d nodes shown:\n%s",
-					H.pathOf(root), root.ClassName, visited, table.concat(lines, "\n"))
+				return N.result({ instanceId = refs.id(root), shown = visited }, string.format("%s [%s], %d nodes shown:\n%s",
+					H.pathOf(root), root.ClassName, visited, table.concat(lines, "\n")))
 			end,
 		},
 		{
@@ -173,10 +125,10 @@ return function(env)
 				if #hits == 0 then
 					return string.format("No match under %s (%d instances scanned).%s", H.pathOf(root), stats.scanned, note)
 				end
-				return string.format("%d match(es) under %s.%s\n%s", #hits, H.pathOf(root), note,
+				return N.result({ scanned = stats.scanned, complete = stats.complete }, string.format("%d match(es) under %s.%s\n%s", #hits, H.pathOf(root), note,
 					H.list(hits, limit, function(node)
-						return H.pathOf(node) .. " [" .. node.ClassName .. "]"
-					end))
+						return H.pathOf(node) .. " [" .. node.ClassName .. "] (" .. refs.id(node) .. ")"
+					end)))
 			end,
 		},
 		{
@@ -195,34 +147,7 @@ return function(env)
 				},
 				required = { "path" },
 			},
-			run = function(args)
-				local instance, err = H.resolve(args.path)
-				if not instance then return H.fail(err) end
-
-				local blocks = { H.pathOf(instance) .. " [" .. instance.ClassName .. "]" }
-				blocks[#blocks + 1] = H.keyValues(readProperties(instance, args.properties))
-
-				local okAttrs, attributes = pcall(function() return instance:GetAttributes() end)
-				if okAttrs and type(attributes) == "table" and util.count(attributes) > 0 then
-					local rows = {}
-					for _, key in ipairs(util.keys(attributes, true)) do
-						rows[#rows + 1] = { key, H.show(attributes[key]) }
-					end
-					blocks[#blocks + 1] = "Attributes:\n" .. H.keyValues(rows)
-				end
-
-				local okTags, tags = pcall(function() return instance:GetTags() end)
-				if okTags and type(tags) == "table" and #tags > 0 then
-					blocks[#blocks + 1] = "Tags: " .. table.concat(tags, ", ")
-				end
-
-				local okChildren, children = pcall(function() return instance:GetChildren() end)
-				if okChildren then
-					blocks[#blocks + 1] = util.pluralise(#children, "child")
-				end
-
-				return table.concat(blocks, "\n")
-			end,
+			run = native.run.instance_get,
 		},
 		{
 			name = "instance_set",
@@ -237,28 +162,7 @@ return function(env)
 				},
 				required = { "path", "property", "value" },
 			},
-			run = function(args)
-				local instance, err = H.resolve(args.path)
-				if not instance then return H.fail(err) end
-				local name = util.trim(args.property)
-
-				local okRead, current = pcall(function() return instance[name] end)
-				if not okRead then
-					return H.fail(string.format("%s has no property '%s'", instance.ClassName, name))
-				end
-
-				local value, convertErr = H.coerce(args.value, current)
-				if value == nil then return H.fail(convertErr or "could not convert that value") end
-
-				local before = H.show(current)
-				local okWrite, writeErr = pcall(function() instance[name] = value end)
-				if not okWrite then
-					return H.fail(string.format("%s.%s could not be set: %s", instance.ClassName, name, tostring(writeErr)))
-				end
-
-				local after = H.show(select(2, pcall(function() return instance[name] end)))
-				return H.changed(name .. " = " .. after, H.pathOf(instance), "was " .. before)
-			end,
+			run = native.run.instance_set,
 		},
 		{
 			name = "instance_create",
@@ -277,46 +181,7 @@ return function(env)
 				},
 				required = { "class" },
 			},
-			run = function(args)
-				local okNew, instance = pcall(function() return Instance.new(tostring(args.class)) end)
-				if not okNew or not instance then
-					return H.fail("'" .. tostring(args.class) .. "' is not a creatable class")
-				end
-
-				if args.name and util.trim(args.name) ~= "" then instance.Name = util.trim(args.name) end
-
-				local applied, failed = {}, {}
-				for key, raw in pairs(args.properties or {}) do
-					local okRead, current = pcall(function() return instance[key] end)
-					if okRead then
-						local value, convertErr = H.coerce(raw, current)
-						if value ~= nil then
-							local okWrite = pcall(function() instance[key] = value end)
-							if okWrite then
-								applied[#applied + 1] = key
-							else
-								failed[#failed + 1] = key
-							end
-						else
-							failed[#failed + 1] = key .. " (" .. tostring(convertErr) .. ")"
-						end
-					else
-						failed[#failed + 1] = key .. " (no such property)"
-					end
-				end
-
-				local parent, parentErr = H.resolve(args.parent or "Workspace")
-				if not parent then
-					instance:Destroy()
-					return H.fail("parent not found: " .. tostring(parentErr))
-				end
-				instance.Parent = parent
-
-				local note = string.format("Created %s at %s", instance.ClassName, H.pathOf(instance))
-				if #applied > 0 then note = note .. "\nSet: " .. table.concat(applied, ", ") end
-				if #failed > 0 then note = note .. "\nCould not set: " .. table.concat(failed, ", ") end
-				return note
-			end,
+			run = native.run.instance_create,
 		},
 		{
 			name = "instance_clone",
@@ -331,26 +196,7 @@ return function(env)
 				},
 				required = { "path" },
 			},
-			run = function(args)
-				local instance, err = H.resolve(args.path)
-				if not instance then return H.fail(err) end
-				local okClone, copy = pcall(function() return instance:Clone() end)
-				if not okClone or not copy then
-					return H.fail("that instance cannot be cloned (Archivable may be false)")
-				end
-				if args.name and util.trim(args.name) ~= "" then copy.Name = util.trim(args.name) end
-				local parent = instance.Parent
-				if args.parent and util.trim(args.parent) ~= "" then
-					local resolved, parentErr = H.resolve(args.parent)
-					if not resolved then
-						copy:Destroy()
-						return H.fail("parent not found: " .. tostring(parentErr))
-					end
-					parent = resolved
-				end
-				copy.Parent = parent
-				return "Cloned to " .. H.pathOf(copy)
-			end,
+			run = native.run.instance_clone,
 		},
 		{
 			name = "instance_destroy",
@@ -361,16 +207,7 @@ return function(env)
 				properties = { path = { type = "string" } },
 				required = { "path" },
 			},
-			run = function(args)
-				local instance, err = H.resolve(args.path)
-				if not instance then return H.fail(err) end
-				local full = H.pathOf(instance)
-				local okCount, children = pcall(function() return #instance:GetDescendants() end)
-				local okDestroy, destroyErr = pcall(function() instance:Destroy() end)
-				if not okDestroy then return H.fail(tostring(destroyErr)) end
-				return string.format("Destroyed %s%s", full,
-					okCount and (" and " .. util.pluralise(children, "descendant")) or "")
-			end,
+			run = native.run.instance_destroy,
 		},
 		{
 			name = "instance_parent",
@@ -384,21 +221,7 @@ return function(env)
 				},
 				required = { "path", "parent" },
 			},
-			run = function(args)
-				local instance, err = H.resolve(args.path)
-				if not instance then return H.fail(err) end
-				local was = H.pathOf(instance)
-				if util.trim(args.parent):lower() == "nil" then
-					local ok, setErr = pcall(function() instance.Parent = nil end)
-					if not ok then return H.fail(tostring(setErr)) end
-					return "Detached " .. was
-				end
-				local parent, parentErr = H.resolve(args.parent)
-				if not parent then return H.fail(parentErr) end
-				local ok, setErr = pcall(function() instance.Parent = parent end)
-				if not ok then return H.fail(tostring(setErr)) end
-				return string.format("Moved %s to %s", was, H.pathOf(instance))
-			end,
+			run = native.run.instance_parent,
 		},
 		{
 			name = "instance_attribute",
@@ -413,26 +236,7 @@ return function(env)
 				},
 				required = { "path", "name" },
 			},
-			run = function(args)
-				local instance, err = H.resolve(args.path)
-				if not instance then return H.fail(err) end
-				if args.value == nil then
-					local ok, value = pcall(function() return instance:GetAttribute(args.name) end)
-					if not ok then return H.fail("could not read that attribute") end
-					if value == nil then return "Attribute '" .. tostring(args.name) .. "' is not set." end
-					return tostring(args.name) .. " = " .. H.show(value)
-				end
-				local text = util.trim(args.value)
-				local value = tonumber(text)
-				if value == nil then
-					if text:lower() == "true" then value = true
-					elseif text:lower() == "false" then value = false
-					else value = text end
-				end
-				local ok, setErr = pcall(function() instance:SetAttribute(args.name, value) end)
-				if not ok then return H.fail(tostring(setErr)) end
-				return H.changed("attribute " .. tostring(args.name) .. " = " .. H.show(value), H.pathOf(instance))
-			end,
+			run = native.run.instance_attribute,
 		},
 		{
 			name = "instance_tagged",
@@ -456,13 +260,16 @@ return function(env)
 				local ok, tagged = pcall(function() return service:GetTagged(util.trim(args.tag)) end)
 				if not ok or type(tagged) ~= "table" then return H.fail("could not read that tag") end
 				if #tagged == 0 then return "Nothing is tagged '" .. util.trim(args.tag) .. "'." end
-				return string.format("%d instance(s) tagged '%s':\n%s", #tagged, util.trim(args.tag),
+				return N.result({ total = #tagged }, string.format("%d instance(s) tagged '%s':\n%s", #tagged, util.trim(args.tag),
 					H.list(tagged, H.limit(args.limit, 25, 100), function(node)
-						return H.pathOf(node) .. " [" .. node.ClassName .. "]"
-					end))
+						return H.pathOf(node) .. " [" .. node.ClassName .. "] (" .. refs.id(node) .. ")"
+					end)))
 			end,
 		},
 	}
 	for _, tool in ipairs(env.require("tools/instance_bulk")) do tools[#tools + 1] = tool end
+	for _, tool in ipairs(tools) do native.extend(tool) end
+	for _, tool in ipairs(env.require("tools/explorer")) do tools[#tools + 1] = tool end
+	N.addReader(tools, "instance")
 	return tools
 end

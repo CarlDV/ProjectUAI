@@ -8,7 +8,7 @@ return function(env)
 	local H = env.require("tools/helpers")
 	local execution = env.require("tools/execution")
 
-	return {
+	local tools = {
 		{
 			name = "run_luau",
 			risk = "danger",
@@ -114,4 +114,7 @@ return function(env)
 			end,
 		},
 	}
+	for _, tool in ipairs(tools) do env.require("tools/script_native").extend(tool) end
+	env.require("tools/native_helpers").addReader(tools, "script")
+	return tools
 end

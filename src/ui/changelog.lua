@@ -42,6 +42,7 @@ return function(env)
 		changelog.markRead()
 
 		local releases = changelog.all()
+		local latestVersion = changelog.latest() and changelog.latest().version
 
 		for index, release in ipairs(releases) do
 			local card = P.column(modal.content, {
@@ -82,7 +83,7 @@ return function(env)
 				color = theme.color.accent,
 			})
 
-			if index == 1 then
+			if release.version == latestVersion then
 				local latestBadge = P.frame(header, {
 					name = "LatestBadge",
 					size = UDim2.new(0, 0, 0, 0),

@@ -29,12 +29,7 @@ return function(env)
 	local PANELS = {
 		{ id = "chat", label = "Chat", icon = "code" },
 		{ id = "cowork", label = "Cowork", icon = "terminal" },
-		-- Archived: the code editor panel. The implementation lives on in
-		-- archive/code_panel.lua and archive/code_store.lua (see archive/README.md),
-		-- but it is not wired into the panel list or the builders while its rendering
-		-- (highlighting, output display, scrolling) is reworked. Re-add both halves
-		-- below to revive it.
-		-- { id = "code", label = "Code", icon = "terminal" },
+		{ id = "code", label = "Code", icon = "terminal" },
 		{ id = "agents", label = "Subagents", icon = "spark" },
 		{ id = "providers", label = "Providers", icon = "sliders" },
 		{ id = "tools", label = "Tools", icon = "worktree" },
@@ -340,6 +335,23 @@ return function(env)
 		})
 		badge.Visible = false
 
+		local capture = env.require("runtime/remote_capture")
+		local captureBadge = P.frame(button, {
+			name = "LauncherCapture", bg = theme.color.danger, radius = theme.radius.sm,
+			anchor = Vector2.new(0.5, 1), position = UDim2.new(0.5, 0, 1, 0),
+			size = UDim2.new(1, 0, 0, theme.text.caption.height + theme.space.xxs), zIndex = theme.z.header + 4,
+		})
+		local captureLabel = P.text(captureBadge, { text = "REC", role = "caption", color = theme.color.textOnAccent,
+			size = UDim2.fromScale(1, 1), align = "Center", alignY = "Center", zIndex = theme.z.header + 5 })
+		local function captureStatus()
+			local state = capture.status
+			captureBadge.Visible = state == "running" or state == "paused" or state == "starting" or #capture.rules > 0
+			captureLabel.Text = #capture.rules > 0 and "RULES" or state == "paused" and "PAUSED" or "REC"
+			captureBadge.BackgroundColor3 = state == "paused" and theme.color.warn or theme.color.danger
+		end
+		local offCapture = capture.changed:connect(captureStatus)
+		captureStatus()
+
 		-- Keep the original grab offset in parent coordinates throughout a gesture.
 		-- AbsolutePosition includes the ScreenGui inset; copying it into Position
 		-- and changing anchors on the first move made the launcher jump.
@@ -459,6 +471,7 @@ return function(env)
 		end)
 		local release = dispose.add(function()
 			alive = false
+			offCapture()
 			finish(true)
 			for _, stop in ipairs(releases) do stop() end
 			if fillTween then fillTween:Cancel() end
@@ -557,6 +570,7 @@ return function(env)
 		-- the user was at the bottom when they minimized, so they are at the
 		-- bottom when they come back.
 		M.window.onShow = function()
+			local panel = M.panels and M.panels[M.panel]; if panel and panel.setVisible then panel.setVisible(true) end
 			if responsive.isMobile() and M.launcher then M.launcher.Visible = false end
 			M.setLauncherBusy(false)
 			if M.panel == "chat" then M.readNotifications(sessions.activeId) end
@@ -565,6 +579,7 @@ return function(env)
 			end
 		end
 		M.window.onHide = function()
+			local panel = M.panels and M.panels[M.panel]; if panel and panel.setVisible then panel.setVisible(false) end
 			if responsive.isMobile() then
 				if M.launcher then M.launcher.Visible = true end
 				pcall(function()
@@ -911,8 +926,7 @@ return function(env)
 	local BUILDERS = {
 		chat = buildChatPanel,
 		cowork = function(parent) return env.require("ui/panels/cowork").new(parent) end,
-		-- Archived with the panel list entry above.
-		-- code = function(parent) return env.require("ui/panels/code").new(parent) end,
+		code = function(parent) return env.require("ui/panels/code").new(parent) end,
 		agents = function(parent) return env.require("ui/panels/agents").new(parent) end,
 		providers = function(parent) return env.require("ui/panels/providers").new(parent) end,
 		tools = function(parent) return env.require("ui/panels/tools").new(parent) end,
@@ -932,6 +946,7 @@ return function(env)
 		if not BUILDERS[id] then id = "chat" end
 		for key, panel in pairs(M.panels or {}) do
 			if panel.root then panel.root.Visible = key == id end
+			if panel.setVisible then panel.setVisible(key == id) end
 		end
 		if not M.panels[id] then
 			local holder = P.frame(M.body, {
@@ -949,6 +964,7 @@ return function(env)
 			if id == "chat" then M.chatPanel = panel end
 		end
 		M.panels[id].root.Visible = true
+		if M.panels[id].setVisible then M.panels[id].setVisible(true) end
 		M.panel = id
 		config.set("ui.panel", id, { quiet = true })
 		if id == "chat" then M.attachSession() end

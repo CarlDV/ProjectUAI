@@ -78,6 +78,41 @@ camera, remotes (discover, fire, watch), on-screen interfaces, diagnostics, plac
 and account metadata, plus the agent's own task list, memory, searching and
 reading its earlier conversations, and subagent dispatch.
 
+**Code workspace — v1.7.0, September 24, 2026.** Open **Code** and
+choose Editor, Files, Explorer, Remotes, Output, History, Library, or Game changes.
+The user and agent share live Luau documents and revisions. Source highlighting,
+line numbers, Find, Go to line, indentation, explicit Run/Stop, retained output,
+versions, comparison/proposals and typed reusable actions use the same model.
+Focused editing uses the native TextBox for input, selection and IME, with visible
+syntax colors and a caret while typing. Closing a view preserves its script in the
+library. Source documents use two verified snapshots under `UAI/code/`.
+
+Files browses the `UAI` workspace through expandable folders. Open a file in the
+editor, then use Save or Save as; disk-conflict checks protect edited drafts.
+Run and Save stay adjacent. Buttons and tabs retain padding across narrow layouts,
+touch input and larger text, with horizontal scrolling for crowded action strips.
+
+Explorer provides lazy child pages, name/class/tag search, multiple selection,
+supported properties, typed attributes/tags, guarded edits, hierarchy operations,
+bookmarks, world picking, source opening and selected metadata export. Stable
+object references survive renaming and moving. **Game changes → Undo** covers
+recorded property and attribute changes with conflict checks. Tags, hierarchy,
+remote effects and arbitrary Luau side effects are outside that Undo coverage.
+
+Remotes starts only through an explicit scoped **Start**. It supports UAI calls,
+incoming events and host-dependent outgoing interception, with bounded capture
+lists, typed values, filters, replay drafts, reviewed one-shot replay, generated
+source and offline export/import. Excluding logs and blocking traffic are separate
+controls. Stop disarms traffic rules; capture stays visible on the minimized
+launcher. A timed-out InvokeServer may remain outstanding and must not be retried
+automatically. **More → Capture coverage** explains the actual backend and limits;
+intercepted Invoke outcomes remain unverified and incoming function callbacks are
+unavailable.
+
+See [the native testing guide](docs/CODE_WORKSPACE_TESTING.md) for capabilities and
+desktop/mobile/gamepad scenarios. Native input, hook forwarding and performance
+require Roblox client validation.
+
 **Batch inspection and file workflows.** Prefer a combined query or batch when
 the work is independent; this reduces model round trips and unnecessary local
 scanning without changing the inference provider's speed.

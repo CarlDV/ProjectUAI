@@ -324,6 +324,10 @@ return function(env)
 	end
 
 	function M.reset(section)
+		if not section or section == "ui" then
+			local capture = env.loadedModules and env.loadedModules["runtime/remote_capture"]
+			if capture then capture.stop("settings reset") end
+		end
 		if section then
 			util.set(M.data, section, util.deepCopy(util.get(DEFAULTS, section)))
 		else

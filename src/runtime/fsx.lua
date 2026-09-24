@@ -266,6 +266,7 @@ return function(env)
 	-- that is not the client's own state and not itself a scope folder is relocated
 	-- verbatim.
 	local CLIENT_STATE = {
+		["code"] = true,
 		["config.json"] = true,
 		["stats.json"] = true,
 		["sessions"] = true,

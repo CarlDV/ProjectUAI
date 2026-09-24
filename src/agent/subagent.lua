@@ -572,7 +572,7 @@ return function(env)
 		-- what makes two subagents dispatched in the same batch safe.
 		child.systemPrompt = function()
 			return prompt.subagent(task_text, {
-				extra = opts.extra,
+				extra = (opts.extra or "") .. "\nNative workspace references are shared with the user. Respect this subagent's tool scope; never use a controller or generated script to bypass a denied native action.",
 				unlimited = M.unlimited(),
 			})
 		end

@@ -12,44 +12,7 @@ return function(env)
 
 	local REMOTE_CLASSES = { "RemoteEvent", "RemoteFunction", "UnreliableRemoteEvent" }
 
-	-- Typed argument forms, so a model can pass a Vector3 or an Instance through
-	-- JSON without the tool having to guess from a string's shape.
-	local PREFIXES = {
-		vec3 = function(text) return H.coerce(text, Vector3.new(0, 0, 0)) end,
-		vector3 = function(text) return H.coerce(text, Vector3.new(0, 0, 0)) end,
-		vec2 = function(text) return H.coerce(text, Vector2.new(0, 0)) end,
-		color3 = function(text) return H.coerce(text, Color3.new(0, 0, 0)) end,
-		cframe = function(text) return H.coerce(text, CFrame.new(0, 0, 0)) end,
-		instance = function(text) return H.resolve(text) end,
-		number = function(text) return tonumber(text) end,
-		string = function(text) return tostring(text) end,
-	}
-
-	local function convertArgs(list)
-		local out = {}
-		local notes = {}
-		for index, item in ipairs(list or {}) do
-			if type(item) == "string" then
-				local prefix, rest = item:match("^(%a+):(.*)$")
-				if prefix and PREFIXES[prefix:lower()] then
-					local value, err = PREFIXES[prefix:lower()](rest)
-					if value == nil then
-						return nil, string.format("argument %d (%s) could not be converted: %s",
-							index, prefix, tostring(err or "bad value"))
-					end
-					out[index] = value
-					notes[#notes + 1] = string.format("%d=%s", index, H.show(value))
-				else
-					out[index] = item
-					notes[#notes + 1] = string.format("%d=%q", index, util.ellipsis(item, 40))
-				end
-			else
-				out[index] = item
-				notes[#notes + 1] = string.format("%d=%s", index, H.show(item))
-			end
-		end
-		return out, table.concat(notes, ", "), #list
-	end
+	local native = env.require("tools/remote_native")
 
 	local function findRemote(path, wanted)
 		local instance, err = H.resolve(path)
@@ -66,7 +29,7 @@ return function(env)
 		return instance
 	end
 
-	return {
+	local tools = {
 		{
 			name = "remotes_list",
 			risk = "read",
@@ -80,42 +43,7 @@ return function(env)
 				},
 				required = {},
 			},
-			run = function(args)
-				local root, err = H.resolve(args.root or "game")
-				if not root then return H.fail(err) end
-				local needle = util.trim(args.name):lower()
-
-				local ok, descendants = pcall(function() return root:GetDescendants() end)
-				if not ok then return H.fail("could not read that subtree") end
-
-				local hits = {}
-				for _, node in ipairs(descendants) do
-					local isRemote = false
-					for _, class in ipairs(REMOTE_CLASSES) do
-						local okA, isA = pcall(function() return node:IsA(class) end)
-						if okA and isA then isRemote = true end
-					end
-					if isRemote and (needle == "" or tostring(node.Name):lower():find(needle, 1, true)) then
-						hits[#hits + 1] = node
-					end
-				end
-
-				if #hits == 0 then return "No remotes found under " .. H.pathOf(root) .. "." end
-				return string.format("%d remote(s):\n%s", #hits,
-					H.list(hits, H.limit(args.limit, 30, 100), function(node)
-						local suffix = ""
-						if caps.fn.getconnections then
-							local signalName = node:IsA("RemoteFunction") and nil or "OnClientEvent"
-							if signalName then
-								local okConn, connections = pcall(caps.fn.getconnections, node[signalName])
-								if okConn and type(connections) == "table" then
-									suffix = string.format(" (%d listener%s)", #connections, #connections == 1 and "" or "s")
-								end
-							end
-						end
-						return H.pathOf(node) .. " [" .. node.ClassName .. "]" .. suffix
-					end))
-			end,
+			run = native.run.remotes_list,
 		},
 		{
 			name = "remote_fire",
@@ -135,16 +63,7 @@ return function(env)
 				},
 				required = { "path" },
 			},
-			run = function(args)
-				local remote, err = findRemote(args.path, { "RemoteEvent", "UnreliableRemoteEvent" })
-				if not remote then return H.fail(err) end
-				local values, notes = convertArgs(args.args)
-				if not values then return H.fail(notes) end
-				local ok, fireErr = pcall(function() remote:FireServer(unpack(values, 1, #(args.args or {}))) end)
-				if not ok then return H.fail(tostring(fireErr)) end
-				return string.format("Fired %s with %d argument(s)%s",
-					H.pathOf(remote), #(args.args or {}), notes ~= "" and (": " .. notes) or "")
-			end,
+			run = native.run.remote_fire,
 		},
 		{
 			name = "remote_invoke",
@@ -158,22 +77,7 @@ return function(env)
 				},
 				required = { "path" },
 			},
-			run = function(args)
-				local remote, err = findRemote(args.path, { "RemoteFunction" })
-				if not remote then return H.fail(err) end
-				local values, notes = convertArgs(args.args)
-				if not values then return H.fail(notes) end
-
-				local finished, ok, result = clock.timeout(8, function()
-					return remote:InvokeServer(unpack(values, 1, #(args.args or {})))
-				end)
-				if not finished then
-					return "The server did not answer within 8 seconds. The call is still outstanding."
-				end
-				if not ok then return H.fail(tostring(result)) end
-				return string.format("%s returned: %s%s",
-					H.pathOf(remote), H.show(result), notes ~= "" and ("\nSent: " .. notes) or "")
-			end,
+			run = native.run.remote_invoke,
 		},
 		{
 			name = "remote_watch",
@@ -279,4 +183,8 @@ return function(env)
 			end,
 		},
 	}
+	for _, tool in ipairs(tools) do native.extend(tool) end
+	for _, tool in ipairs(env.require("tools/remote_capture")) do tools[#tools + 1] = tool end
+	env.require("tools/native_helpers").addReader(tools, "remotes")
+	return tools
 end

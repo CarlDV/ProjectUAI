@@ -267,6 +267,7 @@ return function(env)
 			if bounded ~= line then truncated = true end
 			logs[#logs + 1] = bounded
 			bytes = bytes + #bounded + 1
+			if type(args.onOutput) == "function" then pcall(args.onOutput, bounded) end
 		end
 		local function wait(secondsToWait)
 			check()
@@ -334,7 +335,7 @@ return function(env)
 			local result = pack(pcall(function()
 				check()
 				return fn(function(...) capture("", ...) end, function(...) capture("[warn]", ...) end,
-					managed, wait, checkpoint)
+					managed, wait, checkpoint, unpack(args.parameters or {}, 1, args.parameters and (args.parameters.n or #args.parameters) or 0))
 			end))
 			if result[1] then returns = result
 			elseif result[2] ~= STOP then failure = display(result[2]) end
@@ -388,5 +389,32 @@ return function(env)
 			data = { status = status, ms = clock.since(started), outputTruncated = truncated } }
 	end
 
+	-- Callable operations share deadlines, cancellation and the unload registry.
+	-- They do not require a compiler. A dispatched native call is never killed or retried.
+	function M.runOperation(fn, args, ctx)
+		args = args or {}
+		if ctx and ctx.aborted and ctx.aborted() then return { ok = false, text = "Stopped before dispatch", data = { status = "aborted", dispatched = false } } end
+		local started, seconds = clock.ms(), M.timeout(args)
+		local done, result, stopped, dispatched = false, nil, nil, false
+		local operation = { stop = function(reason) stopped = reason end }
+		active[operation] = true
+		task.spawn(function()
+			if stopped or (ctx and ctx.aborted and ctx.aborted()) then done = true; return end
+			dispatched = true; result = pack(pcall(fn)); done = true
+		end)
+		while not done do
+			if stopped or (ctx and ctx.aborted and ctx.aborted()) or clock.since(started) >= seconds * 1000 then break end
+			task.wait()
+		end
+		active[operation] = nil
+		if not done then
+			return { ok = false, text = "The native call is still outstanding. It was dispatched once and must not be retried automatically.", data = { status = "outstanding", dispatched = dispatched, ms = clock.since(started) } }
+		end
+		if not result then return { ok = false, text = "Stopped before dispatch", data = { status = "aborted", dispatched = false } } end
+		if not result[1] then return { ok = false, text = "Native call error: " .. tostring(result[2]), data = { status = "errored", dispatched = dispatched, ms = clock.since(started) } } end
+		local returns = { n = result.n - 1 }; for i = 2, result.n do returns[i - 1] = result[i] end
+		if args.onReturn then pcall(args.onReturn, unpack(returns, 1, returns.n)) end
+		return { ok = true, text = "Native call returned", data = { status = "returned", dispatched = dispatched, resultCount = returns.n, ms = clock.since(started) }, returns = returns }
+	end
 	return M
 end

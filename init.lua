@@ -19,7 +19,7 @@ end
 
 local hostContext = ...
 
-local VERSION = "1.6.0"
+local VERSION = "1.7.0"
 local FOLDER = "UAI"
 local BUILD = type(__UAI_BUILD) == "string" and __UAI_BUILD or VERSION
 
@@ -45,6 +45,8 @@ if globalTable and type(globalTable.UAI) == "table" then
 		end
 		existing.pendingBuild = BUILD
 		local inspected, busy = pcall(function()
+			local runner = existing.env.loadedModules and existing.env.loadedModules["tools/code_runner"]
+			if runner and runner.busy and runner.busy() then return true end
 			for _, session in ipairs(existing.sessions.list()) do
 				if session.busy then return true end
 			end
@@ -60,6 +62,11 @@ if globalTable and type(globalTable.UAI) == "table" then
 			return existing
 		end
 		local checkedDrafts, pending = pcall(function()
+			local workspace = existing.env.loadedModules and existing.env.loadedModules["runtime/code_store"]
+			if workspace and workspace.preflightReplacement then
+				local preserved, why = workspace.preflightReplacement()
+				if not preserved then return "Update ready. " .. tostring(why) end
+			end
 			for _, session in ipairs(existing.sessions.list()) do
 				local ctx = session.ctx or {}
 				if session.ephemeral and (#(session.log or {}) > 0 or #(ctx.messages or {}) > 0

@@ -16,12 +16,40 @@ return function(env)
 	local config = env.require("runtime/config")
 
 	local M = {}
-
-	-- The order of categories within a release: new capabilities first, then
-	-- improvements, then fixes -- the order a reader cares about them.
+	-- New capabilities first, then improvements and fixes.
 	local CATEGORY_ORDER = { "added", "improved", "fixed" }
-
 	local ENTRIES = {
+		{
+			version = "1.7.0",
+			date = "September 24, 2026",
+			title = "Code workspace, Explorer and Remotes",
+			highlights = "Browse workspace files, edit and run Luau, inspect live objects and remotes, and review source or game changes in the rebuilt Coding tab.",
+			sections = {
+				{ category = "added", label = "Workspace", items = {
+					"Shared Luau documents, native multiline input, syntax colors, line numbers, Find, Go to line, indentation, and Run/Stop with retained output.",
+					"Script/action library, typed action inputs, source versions, source Undo/Redo, guarded proposals, and wide or compact source comparisons.",
+					"Native Explorer with lazy hierarchy, search, exact object references, multiple selection, supported properties, attributes, tags, hierarchy actions, source opening, world picking, bookmarks, and metadata export.",
+					"Native Remotes with explicit scoped capture, pause/stop, bounded argument/result trees, independent filters and traffic rules, reviewed one-shot replay, generated scripts, and offline capture import/export.",
+				} },
+				{ category = "improved", label = "Coding navigation and review", items = {
+					"Browse UAI workspace folders, expand parents, open files, and use Save or Save as. Disk-conflict checks preserve edited drafts.",
+					"History and Game changes use searchable timelines and inline reviews, with source diffs, before/after values, and guarded Restore or Undo actions.",
+					"Run and Save stay adjacent. Stop appears during a run; document labels and close targets keep room in narrow layouts.",
+					"Coding buttons, toolbars, searches and dialog actions have consistent padding. Crowded action strips scroll and reveal keyboard focus; tree rows accommodate larger text and touch targets.",
+				} },
+				{ category = "improved", label = "Shared behavior", items = {
+					"UI and tools share source revisions, instance identities, typed edits and recorded property/attribute Undo. Changing a view never runs source or starts capture.",
+					"Two verified Code snapshots protect drafts; damaged files are preserved. Missing filesystem/compiler/clipboard capabilities have explicit fallbacks.",
+					"Capture survives navigation and shows a launcher indicator. Stop, unload, reset and authorization revocation clean up owned behavior; expired callbacks cannot restart it.",
+					"Capture coverage reports the actual backend, subscribed events and omitted targets. Game Undo covers recorded property and attribute changes with conflict checks.",
+				} },
+				{ category = "fixed", label = "Editing and live inspection", items = {
+					"Syntax colors remain visible while editing, with a visible caret and selection. Switching files restores the document's cursor and selection.",
+					"Explorer refreshes preserve the pressed row's identity. Parent clicks expand children and context actions target the clicked object.",
+					"Remote Start/Pause/Stop work directly. Incoming discovery covers larger remote collections, quiet filtered calls remain findable, and arriving results preserve replay edits.",
+				} },
+			},
+		},
 		{
 			version = "1.6.0",
 			date = "September 23, 2026",

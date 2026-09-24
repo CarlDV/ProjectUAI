@@ -628,19 +628,94 @@ cannot activate the button; focus loss, destruction and rebuild release gesture,
 service and layout listeners. Placement is saved on drag release, clamped within
 the usable viewport, and restored after temporary keyboard or viewport changes.
 
-The Code panel was a shared multi-tab Luau editor whose state lived in a store module
-(`ui/panels/code_store`) so the `coding` tool group could operate on the same tabs the
-user saw. The design and tool contract were verified end to end, but the rendering was
-not usable yet (no syntax highlighting, run output that copied but displayed wrongly,
-broken scrolling), so it is archived in `archive/` -- outside `src/`, disconnected from
-the panel list, the mode switch, and the tool groups -- with revival steps and the list
-of what to fix in `archive/README.md`.
+The Code workspace is owned by `runtime/code_store` and composed in
+`ui/panels/code`. Editor, Files, Explorer, Remotes, Output, History, Library and Game changes
+are destinations within Code. Layout follows the available panel rectangle. Native
+TextBox editing owns source input, selection and IME; escaped line-state syntax
+highlighting, a visible caret, virtual labels and an independent gutter remain
+available during editing. Source
+remains raw and unwrapped. Enter inserts a newline; Run is explicit.
+
+Documents have stable IDs, monotonic revisions and distinct open-view state. They
+are loaded once and shared immediately with tools before delayed disk saves.
+Closing a view retains its document. Two verified snapshots in reserved `code/`
+store documents, versions, proposals, action snapshots and small preferences.
+Legacy files are retained; damaged snapshots are copied to verified recovery files
+before replacement. Unreadable or future-format data prevents overwriting. Failed
+saves retain live drafts and report status. Build replacement preflight protects
+pending Code work. Initial limits are 24 documents, 10 open views, 256,000 UTF-8
+bytes per editable source, 12 versions per document within 4 MiB of source history,
+24 actions and three proposals per document. The serialized envelope is capped at
+12 MiB; an oversized envelope preserves live source and reports a save failure.
+Larger inspected source, up to 2 MiB, uses verified files and a bounded reader.
+
+Source history is distinct from native TextBox Undo and Game changes. Restore and
+proposal application guard source revisions. Actions retain immutable executable
+snapshots; updates guard both action and source revisions. Up to 12 named
+string/number/boolean/choice inputs are passed as data in `local inputs = ...`.
+`tools/code_runner` calls the existing managed execution engine with one manual
+workspace run at a time; agent concurrency is unchanged. Retained output identifies
+the run/document/revision. `tools/execution.runOperation` manages native calls
+without a compiler and reports still-outstanding dispatched calls after timeout or
+Stop, never retrying them or claiming to roll back server effects.
+
+`instance_refs`, `instance_fields`, `instance_schema`, `instance_scan`,
+`instance_edits` and `changes` serve Explorer and the instance tools. Epoch-scoped
+weak identities survive rename/reparent, with bounded pins and stale detection.
+Paths reject duplicate-name ambiguity. Supported properties come from a bundled
+curated catalog; actual protected reads/writes remain authoritative. Typed edits
+preflight expected values, read back engine values, record observed changes and
+conditionally recover partial failures. Undo checks every current recorded value
+before writing. Tags and hierarchy operations are outside initial Undo coverage.
+Edits report local observations, without a server replication guarantee.
+
+Explorer tracks up to 64 branches, searches cooperatively within 20,000 nodes and
+returns bounded snapshot cursors. UI rows are pooled. Selection is capped at 20
+objects and field batches at 100 operations. Drafts survive live updates and view
+rebuilds. Create/duplicate/move/detach/delete use exact targets, expected parents and
+normalized selections. Source is a provenance-labelled snapshot, never a live
+write-through editor. Nil roots, bookmarks and world picking are explicit. Metadata
+export is verified and bounded; no full-map or unverified saveinstance adapter exists.
+
+`runtime/values` supplies packed graphs with exact nil positions, typed Roblox
+values, binary encoding and bounded cycle/alias inspection. Unsupported, incomplete,
+opaque or cyclic/sparse graphs remain inspectable but cannot replay. `remote_capture`,
+`remote_store` and `remote_hooks` own explicit capture sessions independently of GUI.
+Imports/schema/state reads install no hooks and send no traffic. Outgoing hooks use
+reusable neutral forwarding cells and owned detached routing probes; intercepted
+Invoke outcomes have separate unverified coverage. Incoming capture uses events
+only, never replaces function callbacks.
+
+Capture holds at most 1,000 records within 4 MiB, 128 pending outcomes, 2,048 incoming
+subscriptions, 10 pins within an additional 1 MiB, and 32 KiB per typed graph
+(16 KiB per string, 256 slots/table nodes, depth 12, 1,024 values). Summaries report
+omissions/eviction gaps; details/bytes paginate. View filters, admission filters and
+exact-target blocking rules are separate. Pause stops recording; Stop also disarms
+rules. Native Start offers continuous/timed capture; tool Start defaults to 30
+seconds unless persistence is explicit. Permission/group/session revocation removes
+agent-owned behavior. Capture survives navigation/minimize with a launcher indicator;
+unload/reset disarms it. Visible capture/property refresh is coalesced to 10 Hz.
+
+Replay prepares a five-minute immutable plan with target, packed arguments, source
+revision, rule revision and digest, then dispatches at most once. Generated bound
+source uses expiring runtime bindings; portable snippets resolve explicit paths and
+reject ambiguity. Opening/importing source never runs it. Explicit exports use
+unique scoped destinations, verified parts and a completion manifest. Imported
+captures remain offline until explicit current-target rebinding. Tool summaries and
+structured data share a roughly 6,000-byte budget with retained detail pages for
+larger operation results.
+
+The Code workspace ships in version 1.7.0. Native input, touch/gamepad,
+executor forwarding/coexistence and performance need the client scenarios in
+`docs/CODE_WORKSPACE_TESTING.md`. Historical files in `archive/` are references only.
 
 ## 8. Build and verification
 
 ```
 luajit tools/bundle.lua      # src/ -> dist/uai.lua, the single loadable file
 luajit test/check.lua        # lint, parse and link every module
+luajit test/code_workspace.lua # shared source/history/actions and UI fixtures
+luajit test/native_workspace.lua # identities, typed edits, capture/replay
 luajit test/run.lua          # load dist/uai.lua against the mock client, run scenarios
 luajit test/iy_control.lua   # IY selectors, native configuration and plugin contracts
 luajit test/tool_workflows.lua # batch tools, pagination, scopes, cancellation

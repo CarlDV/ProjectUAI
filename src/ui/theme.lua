@@ -287,6 +287,12 @@ return function(env)
 	}
 
 	local BASE_SIZE = {
+		codeToolbar = 38,
+		codeStatus = 22,
+		codeWide = 800,
+		codeOutput = 170,
+		codeGutter = 44,
+		codeOverscan = 8,
 		control = 34,      -- default button / field height
 		controlSmall = 28,
 		controlLarge = 42,
@@ -486,6 +492,10 @@ return function(env)
 			surfaceOverlay = NEUTRAL[4],
 			surfaceHover = NEUTRAL[4],
 			surfaceActive = NEUTRAL[5],
+			-- Selected list rows. A few percent toward the accent rather than a plain
+			-- grey step, so a selection reads as chosen rather than merely hovered -- the
+			-- one place a list earns a touch of colour.
+			surfaceSelected = M.mix(NEUTRAL[4], accent.base, 0.20),
 			scrim = NEUTRAL[0],
 
 			activityBlue = rgb(59, 130, 246),

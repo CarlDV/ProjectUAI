@@ -776,7 +776,7 @@ return function(env)
 		})
 		modal.content.Size = UDim2.fromOffset(0, 0)
 		modal.content.AutomaticSize = Enum.AutomaticSize.XY
-		P.text(body, {
+		local codeText = P.text(body, {
 			name = "CodeText",
 			text = tostring(props.code or ""),
 			role = "mono",
@@ -788,6 +788,16 @@ return function(env)
 			align = "Left",
 			padding = { x = theme.space.sm, y = theme.space.md },
 		})
+		if not caps.clipboard then
+			local selectable = Instance.new("TextBox", body)
+			selectable.Name, selectable.BackgroundTransparency, selectable.BorderSizePixel = "SelectableCode", 1, 0
+			selectable.Text, selectable.TextEditable, selectable.ClearTextOnFocus = tostring(props.code or ""), false, false
+			selectable.MultiLine, selectable.TextWrapped, selectable.RichText = true, false, false
+			selectable.TextXAlignment, selectable.TextYAlignment = Enum.TextXAlignment.Left, Enum.TextYAlignment.Top
+			selectable.Font, selectable.TextSize, selectable.TextColor3 = theme.text.mono.font, theme.text.mono.size, theme.color.codeText
+			selectable.Size, selectable.AutomaticSize, selectable.Selectable = UDim2.fromOffset(0, 0), Enum.AutomaticSize.XY, true
+			P.pad(selectable, { x = theme.space.sm, y = theme.space.md }); codeText.Visible = false
+		end
 
 		if caps.clipboard then
 			P.button(modal.footer, {

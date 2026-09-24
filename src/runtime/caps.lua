@@ -56,6 +56,12 @@ return function(env)
 		identify = callable(identifyexecutor) or callable(getexecutorname),
 		websocket = (type(WebSocket) == "table" and callable(WebSocket.connect)) or nil,
 		getconnections = callable(getconnections),
+		hookmetamethod = callable(hookmetamethod),
+		getnamecallmethod = callable(getnamecallmethod),
+		hookfunction = callable(hookfunction),
+		newcclosure = callable(newcclosure),
+		checkcaller = callable(checkcaller),
+		getcallingscript = callable(getcallingscript),
 		firesignal = callable(firesignal),
 		fireclickdetector = callable(fireclickdetector),
 		firetouchinterest = callable(firetouchinterest),
@@ -94,6 +100,11 @@ return function(env)
 	M.clipboard = M.fn.clipboard ~= nil
 	M.hui = M.fn.gethui ~= nil
 	M.hooks = M.fn.getconnections ~= nil
+	M.remoteHooks = {
+		namecall = { state = M.fn.hookmetamethod and M.fn.getnamecallmethod and "available_unverified" or "unavailable" },
+		direct = { state = M.fn.hookfunction and "available_unverified" or "unavailable" },
+		invokeOutcomes = { state = "available_unverified", reason = "Requires a yielding native backend fixture" },
+	}
 	M.sourceRead = M.fn.decompile ~= nil or M.fn.getscripts ~= nil
 
 	M.executor = "unknown"

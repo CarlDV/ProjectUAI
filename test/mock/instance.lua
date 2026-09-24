@@ -180,6 +180,7 @@ local PROPERTY_TYPES = {
 	AutomaticCanvasSize = "EnumItem", FilterType = "EnumItem",
 	CFrame = "CFrame", Velocity = "Vector3", AssemblyLinearVelocity = "Vector3",
 	MoveDirection = "Vector3", WorldPosition = "Vector3", Orientation = "Vector3",
+	ImageRectOffset = "Vector2", ImageRectSize = "Vector2",
 	Transparency_ = "number",
 }
 
