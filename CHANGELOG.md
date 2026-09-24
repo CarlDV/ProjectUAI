@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.7.0 — September 24, 2026
+
+- Rebuild the Coding tab around shared Luau documents, native multiline editing, line numbers, Find/Go to line, indentation, explicit Run/Stop, retained output, a script/action library, and typed action inputs.
+- Add a workspace file browser rooted at `UAI`, with expandable folders, file opening, Save/Save as, and disk-conflict checks that preserve edited drafts.
+- Keep syntax highlighting visible while editing, show the caret and selection, and restore each document's cursor position. Keep Run and Save adjacent, with Stop shown while a run is active.
+- Stabilize Explorer selection and expansion during live refreshes, keep context actions attached to the clicked object, and retain horizontal scrolling for deep trees.
+- Make remote capture available directly from Start/Pause/Stop, expand incoming event discovery, and preserve filtered calls and edited replay drafts as results arrive.
+- Replace History and Game changes with searchable timelines and inline reviews, including before/after values and conflict-aware Restore/Undo actions.
+- Add consistent inner padding and outer spacing to Coding buttons, toolbars, document tabs, search controls, and dialog actions. Crowded toolbars scroll, focused actions stay reachable, and tree rows allow room for larger text and touch targets.
+- Verify Coding layouts at 320, 390, 620, and 960 px with pointer/touch input, comfortable/compact density, and enlarged text. Native game testing remains separate from these source and geometry checks.
+- Add verified Code persistence with two snapshots, preserved legacy/damaged data, explicit save status, revision checks and changed-build protection. Closing a view retains its document; navigation and rebuild retain drafts.
+- Add native Explorer with lazy hierarchy, cancellable search, stable object IDs, desktop/touch multiple selection, typed supported properties/attributes/tags, guarded hierarchy actions, source opening, bookmarks, world picker and metadata export. Recorded property/attribute changes support conflict-aware Undo.
+- Add native Remotes with explicit capture scopes/lifetimes, incoming events, host-dependent outgoing capture, pause/stop, bounded typed values, view/admission filters, traffic rules, reviewed one-shot replay, generated scripts, offline import and verified split exports. Capture state remains visible on the minimized launcher.
+- Converge instance/script/remote tools on shared services, preserve native-call arity, reject stale references/revisions, and paginate source/capture/result details. Direct calls work without a compiler; timed-out calls report outstanding status and are never retried automatically.
+- Add lifecycle cleanup and agent-authorization revocation without changing model tool limits or concurrency. No third-party Dex/SimpleSpy window is downloaded or launched.
+- Document native client workflows and capability limits, including source access, capture backends, and the scope of Game changes Undo.
+
 ## Context and provider improvements — September 23, 2026
 
 - Learn model context windows from provider refusals, persist them in `agent.forceContext`, and compact then retry the same turn once before provider fallback.
