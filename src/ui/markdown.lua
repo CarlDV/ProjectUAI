@@ -140,11 +140,15 @@ return function(env)
 	function M.highlight(source, language)
 		local text = tostring(source or "")
 		local lang = tostring(language or ""):lower()
-		local lua = lang == "lua" or lang == "luau"
+		local lua = lang == "lua" or lang == "luau" or lang == ""
 		local json = lang == "json" or lang == "jsonc"
 		local python = lang == "python" or lang == "py"
 		local js = lang == "javascript" or lang == "js" or lang == "typescript" or lang == "ts"
 		if #text > 32000 or not (lua or json or python or js) then return M.escape(text) end
+		if lua then
+			local palette = {}; for _, key in ipairs({ "keyword", "string", "number", "comment", "call" }) do palette[key] = "#" .. theme.code[key]:ToHex() end
+			return env.require("runtime/code_lexer").highlight(text, palette)
+		end
 		local out, index = {}, 1
 		local function emit(value, tone)
 			local escaped = M.escape(value)

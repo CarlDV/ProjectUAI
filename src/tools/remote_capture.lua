@@ -31,9 +31,10 @@ return function(env)
 		end
 		local off = config.changed:connect(function(path) if path == nil or path == "agent" or path == "agent.disabledGroups" or tostring(path):match("^permissions") then check() end end)
 		local offSession = sessions.anyEvent:connect(function(session, event) if event.kind == "abort" then capture.revokeAgent(session.id) end end)
+		local offPermission = permissions.changed:connect(check)
 		local function tick() if not alive then return end; check(); clock.delay(0.5, tick) end
 		clock.delay(0.5, tick)
-		env.require("runtime/dispose").add(function() alive = false; off(); offSession() end, "capture authorization")
+		env.require("runtime/dispose").add(function() alive = false; off(); offSession(); offPermission() end, "capture authorization")
 	end
 	N.add(tools, "remotes_state", "read", "Read capture state, actual coverage, scope, counts and traffic-rule status. Does not start capture or send traffic.", {}, {}, function() return N.result(capture.state(), "Shared Remotes state") end)
 	N.add(tools, "remotes_capture", "write", "Explicit capture lifecycle. Start requires supported mode and exact scope. Tool default lifetime is 30 seconds; persistent is explicit. Stop/Clear remain available if hooks fail.",
@@ -84,5 +85,20 @@ return function(env)
 		watchRevocation(); local state, why = capture.setRule(args.action, { sessionId = args.session_id, revision = args.expected_revision, remoteId = args.instance_id, method = args.method, policy = args.policy, ruleId = args.rule_id, ownerSessionId = ctx.session and ctx.session.id }, "tool")
 		return N.result(state, why or "Traffic rules updated")
 	end)
+	N.add(tools, "remote_caller_source", "write", "Open a captured caller as a read-only source/decompile snapshot and annotate likely remote-name call sites outside interception hooks.",
+		{ record_id = str, decompile = boolean, refresh = boolean, focus = boolean }, { "record_id" }, function(args, ctx)
+		local result, why = env.require("tools/source_documents").caller(args.record_id, args, ctx); return N.result(result, why or "Caller source provenance captured")
+	end)
+	N.add(tools, "remote_script_prepare", "read", "Prepare a portable Luau script for review. The script uses an exact game path and typed arguments, and requires no UAI binding. Preparation sends no traffic.",
+		{ record_id = str, record_revision = num, instance_id = str, method = str, arguments = { type = "object" } }, {}, function(args)
+		local review, why = replay.reviewSource({ recordId = args.record_id, recordRevision = args.record_revision, remoteId = args.instance_id, method = args.method, arguments = args.arguments })
+		if not review then return N.fail(why) end
+		return N.result({ reviewId = review.id, digest = review.digest, sourceId = review.sourceId, bytes = #review.source, expiresAt = review.at + 300000 }, "Read the source_id with script_source before exporting this reviewed script")
+	end)
+	local scriptExport = N.add(tools, "remote_script_export", "write", "Export the exact portable script that was reviewed. Requires its current review ID and digest; target or argument changes invalidate review.",
+		{ review_id = str, digest = str, destination = str }, { "review_id", "digest" }, function(args)
+		local source, why = replay.reviewedSource(args.review_id, args.digest); if not source then return N.fail(why) end
+		local result, err = exports.write(source, args.destination or ("exports/" .. env.require("runtime/code_store").id("remote") .. ".lua")); return N.result(result, err or "Portable script exported")
+	end); scriptExport.needs = { "fs" }
 	return tools
 end

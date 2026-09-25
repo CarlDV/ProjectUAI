@@ -377,6 +377,7 @@ function M.build(dt)
 			out.TextEditable = true
 			out.PlaceholderText = ""
 			out.CursorPosition = -1
+			out.SelectionStart = -1
 		end
 		if className == "ScrollingFrame" then
 			out.CanvasPosition = "Vector2.zero"

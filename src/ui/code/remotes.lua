@@ -10,6 +10,8 @@ return function(env)
 	local replay = env.require("tools/remote_replay")
 	local explorer = env.require("runtime/explorer")
 	local refs = env.require("runtime/instance_refs")
+	local sources = env.require("runtime/script_sources")
+	local targets = env.require("runtime/remote_targets")
 	local values = env.require("runtime/values")
 	local store = env.require("runtime/code_store")
 	local util = env.require("runtime/util")
@@ -24,10 +26,11 @@ return function(env)
 		view.section, view.expanded = view.section or "arguments", view.expanded or {}
 		view.drafts = view.drafts or {}
 		view.filters = view.filters or {}
-		view.mode = view.mode or ((caps.fn.hookmetamethod and caps.fn.getnamecallmethod or caps.fn.hookfunction) and "Incoming and outgoing" or "Incoming events")
-		view.scope, view.backend, view.listMode = view.scope or "Game subtree", view.backend or "auto", view.listMode or "calls"
+		view.mode = view.mode or "Incoming events"
+		view.scope, view.backend, view.listMode = view.scope or "Selected remote", view.backend or "auto", view.listMode or "calls"
 		if view.remoteId and not view.record then view.scope = "Selected remote" end
-		if view.persistent == nil then view.persistent = true end
+		if view.persistent == nil then view.persistent = false end
+		view.duration = view.duration or 30
 		if view.follow == nil then view.follow = true end
 		local handle = { root = root, alive = true, visible = true }
 		local header = common.toolbar(root)
@@ -39,6 +42,10 @@ return function(env)
 		local list, valueView, newCalls, recordHeader, sectionTabs, listTabs, scopeButton, modeButton
 		local catalogue, catalogueGeneration, catalogueBusy, movingList = nil, 0, false, false
 		local selected = view.record
+		local sourceGeneration = 0
+		local function cancelSource()
+			sourceGeneration = sourceGeneration + 1; sources.cancel(handle)
+		end
 		local function saveDraft()
 			if selected and view.argumentDraft then view.drafts[selected.id] = { graph = view.argumentDraft, at = clock.ms(), reboundId = view.reboundId } end
 			local ordered = {}; for key, draft in pairs(view.drafts) do if clock.ms() - draft.at > 300000 and (not selected or key ~= selected.id) then view.drafts[key] = nil else ordered[#ordered + 1] = { key = key, at = draft.at } end end
@@ -52,34 +59,32 @@ return function(env)
 		end
 		local modeIds = { ["UAI calls"] = "uai", ["Incoming events"] = "incoming", ["Outgoing calls"] = "outgoing", ["Incoming and outgoing"] = "combined" }
 		local function start()
-			local ids, rootId = {}, nil
-			if view.scope == "Selected remote" then if view.remoteId then ids = { view.remoteId } end
-			elseif view.scope == "Explorer selection" then ids = util.copy(explorer.selectedIds)
-			elseif view.scope == "Selected subtree" then rootId = explorer.primaryId
-			else rootId = refs.id(game) end
-			local args = { mode = modeIds[view.mode], ids = ids, rootId = rootId, backend = view.backend, persistent = view.persistent, duration = not view.persistent and (view.duration or 60) or nil, expected_revision = capture.revision }
+			local resolved, why = targets.resolve(view.scope, view.remoteId, explorer.state())
+			if not common.message(resolved, why) then return end
+			local args = { mode = modeIds[view.mode], ids = resolved.ids, rootId = resolved.rootId, backend = view.backend,
+				persistent = view.persistent, duration = not view.persistent and (view.duration or 30) or nil, expected_revision = capture.revision }
+
 			common.work(function() return capture.start(args, { origin = "user", aborted = function() return not handle.alive end }) end, function()
 				view.follow, view.before, view.listMode = true, nil, "calls"; if handle.alive then refresh() end
 			end)
 		end
 		local function configure()
-			local selectedIds = util.copy(explorer.selectedIds)
+			local selectionSnapshot, selectedRemote = explorer.state(), view.remoteId
 			local startRevision = capture.revision
 			forms.form("Start capture", {
 				{ key = "mode", label = "Observe", type = "choice", choices = { "Incoming and outgoing", "Outgoing calls", "Incoming events", "UAI calls" }, default = view.mode },
 				{ key = "scope", label = "Scope", type = "choice", choices = { "Game subtree", "Selected remote", "Explorer selection", "Selected subtree" }, default = view.scope },
 				{ key = "backend", label = "Outgoing backend", type = "choice", choices = { "auto", "namecall", "direct" }, default = view.backend },
-				{ key = "lifetime", label = "Stop condition", type = "choice", choices = { "Until stopped", "30 seconds", "60 seconds", "300 seconds" }, default = view.persistent and "Until stopped" or tostring(view.duration or 60) .. " seconds" },
+				{ key = "lifetime", label = "Stop condition", type = "choice", choices = { "Until stopped", "30 seconds", "60 seconds", "300 seconds" }, default = view.persistent and "Until stopped" or tostring(view.duration or 30) .. " seconds" },
 			}, function(data)
 				local modes = { ["UAI calls"] = "uai", ["Incoming events"] = "incoming", ["Outgoing calls"] = "outgoing", ["Incoming and outgoing"] = "combined" }
-				local ids, rootId = {}, nil
-				if data.scope == "Selected remote" then if view.remoteId then ids = { view.remoteId } end
-				elseif data.scope == "Explorer selection" then ids = selectedIds
-				elseif data.scope == "Selected subtree" then rootId = selectedIds[#selectedIds]
-				else rootId = refs.id(game) end
-				view.mode, view.backend, view.scope, view.persistent, view.duration = data.mode, data.backend, data.scope, data.lifetime == "Until stopped", tonumber(data.lifetime:match("^%d+"))
-				local result, why = capture.start({ mode = modes[data.mode], ids = ids, rootId = rootId, backend = data.backend, persistent = data.lifetime == "Until stopped", duration = tonumber(data.lifetime:match("^%d+")), expected_revision = startRevision })
+				local resolved, resolveWhy = targets.resolve(data.scope, selectedRemote, selectionSnapshot)
+				if not resolved then return nil, resolveWhy end
+				local result, why = capture.start({ mode = modes[data.mode], ids = resolved.ids, rootId = resolved.rootId, backend = data.backend,
+					persistent = data.lifetime == "Until stopped", duration = tonumber(data.lifetime:match("^%d+")), expected_revision = startRevision })
+
 				if not result then return nil, why end
+				view.mode, view.backend, view.scope, view.persistent, view.duration = data.mode, data.backend, data.scope, data.lifetime == "Until stopped", tonumber(data.lifetime:match("^%d+"))
 				view.follow, view.before, view.listMode = true, nil, "calls"; refresh(); return true
 			end, { key = "capture-start", submit = "Start", description = "Capture observes the chosen scope. Replay and traffic blocking are separate actions." })
 		end
@@ -98,6 +103,21 @@ return function(env)
 				local started, err = runner.operation(plan.method .. " · " .. plan.target.name, function(ctx) return replay.run(plan.id, plan.digest, ctx) end)
 				if not common.message(started, err) then return end
 				modal.close(true); navigate("Output")
+			end })
+		end
+		local function reviewScript(export)
+			local args = optionsForRecord(); if not args then return end
+			local reviewed, why = replay.reviewSource(args); if not common.message(reviewed, why) then return end
+			local modal = overlay.modal({ title = "Review portable script", description = "Review the remote path and arguments in this runnable Luau." })
+			if not modal then return end
+			local host = P.frame(modal.content, { size = UDim2.new(1, 0, 0, theme.size.codeOutput * 2) })
+			local preview = env.require("ui/code/preview").new(host, reviewed.source, "PortableScriptReview")
+			common.button(modal.footer, { text = "Cancel", onClick = function() preview.destroy(); modal.close() end })
+			common.button(modal.footer, { text = export and "Export reviewed script" or "Copy reviewed script", variant = "primary", layoutOrder = 2, onClick = function()
+				local source, problem = replay.reviewedSource(reviewed.id, reviewed.digest); if not common.message(source, problem) then return end
+				if export then common.work(function() return env.require("runtime/native_exports").write(source, "exports/" .. store.id("remote") .. ".lua") end,
+					function(result) common.copy(result.path); preview.destroy(); modal.close() end)
+				else common.copy(source); preview.destroy(); modal.close() end
 			end })
 		end
 		local function rules(button)
@@ -122,8 +142,15 @@ return function(env)
 				for _, pair in ipairs({ { "Reveal remote in Explorer", "reveal" }, { "Exclude exact remote from recording", "exclude" }, { "Restore exact remote recording", "include" }, { "Copy reference", "reference" }, { "Ask AI about this", "ask" } }) do choices[#choices + 1] = { label = pair[1], value = pair[2] } end
 			end
 			if selected then
-				for _, pair in ipairs({ { "Edit replay arguments", "draft" }, { "Review replay…", "replay" }, { "Open generated script", "source" }, { "Copy portable script", "portable" }, { "Export portable script", "portableExport" }, { "Export this call", "exportOne" }, { "Open caller source", "caller" }, { "Refresh selected result", "refresh" }, { "Start empty argument draft", "empty" } }) do choices[#choices + 1] = { label = pair[1], value = pair[2] } end
-				if selected.offline then choices[#choices + 1] = { label = "Rebind offline call to current remote…", value = "rebind" } end
+				for _, pair in ipairs({ { "Copy diagnostic record", "diagnostic" }, { "Inspect caller", "callerInspect" }, { "Open caller source", "caller" },
+					{ "Decompile caller", "decompileCaller" }, { "Open caller in Explorer", "callerExplorer" }, { "Export record metadata", "exportOne" }, { "Refresh record", "refresh" } }) do
+					choices[#choices + 1] = { label = pair[1], value = pair[2] }
+				end
+				if selected.direction == "outgoing" then
+					for _, pair in ipairs({ { "Edit replay arguments", "draft" }, { "Review replay…", "replay" }, { "Open generated script", "source" },
+						{ "Review and copy portable script", "portable" }, { "Review and export portable script", "portableExport" }, { "New empty replay draft", "empty" } }) do choices[#choices + 1] = { label = pair[1], value = pair[2] } end
+					if selected.offline then choices[#choices + 1] = { label = "Rebind offline call to current remote…", value = "rebind" } end
+				end
 			end
 			common.menu(button or menuButton, "Remotes actions", choices, function(action) perform(action, button) end)
 		end
@@ -156,27 +183,31 @@ return function(env)
 						view.reboundId = data.remoteId; view.argumentDraft = view.argumentDraft or util.deepCopy(selected.arguments); saveDraft(); refreshDetail(); return true
 					end, { key = "rebind:" .. selected.id, submit = "Bind", description = "This only binds the draft target. Replace any expired Instance arguments, then review replay separately." })
 				elseif action == "refresh" then local record, why = records.get(selected.id); if common.message(record, why) then selected, view.record = record, record; refreshDetail() end
-				elseif action == "caller" then local caller = selected.caller; if caller and caller.scriptId then common.work(function() return env.require("tools/source_documents").open({ instanceId = caller.scriptId, focus = true }) end, function() navigate("Editor") end) else common.message(nil, "Calling script information is unavailable") end
+				elseif action == "diagnostic" then if selected then common.copy(util.encode(selected)) end
+				elseif action == "callerInspect" then if selected then overlay.code({ title = "Captured caller provenance", code = util.encode(selected.sourceProvenance or selected.caller or {}), language = "json" }) end
+				elseif action == "callerExplorer" then
+					local caller = selected and selected.caller
+					if caller and caller.scriptId and common.message(explorer.select({ caller.scriptId })) then navigate("Explorer") else common.message(nil, "Calling script identity is unavailable") end
+				elseif action == "caller" or action == "decompileCaller" then
+					local recordId = selected and selected.id; if not recordId then return end
+					cancelSource(); local generation = sourceGeneration
+					common.work(function() return env.require("tools/source_documents").caller(recordId, { focus = true, decompile = action == "decompileCaller" },
+						{ requestOwner = handle, aborted = function() return not handle.alive or not handle.visible or generation ~= sourceGeneration or not selected or selected.id ~= recordId end }) end, function() if handle.alive then navigate("Editor") end end)
 				elseif action == "source" then common.work(function()
 					local source, why = replay.source(optionsForRecord()); if not source then return nil, why end
 					return env.require("tools/source_documents").open({ sourceId = source.id, focus = true })
 				end, function() navigate("Editor") end)
-				elseif action == "portable" or action == "portableExport" then
-					local source, why = replay.portable(optionsForRecord()); if not common.message(source, why) then return end
-					if action == "portable" then common.copy(source) else common.work(function() return env.require("runtime/native_exports").write(source, "exports/" .. store.id("remote") .. ".lua") end, function(result) common.copy(result.path) end) end
+				elseif action == "portable" or action == "portableExport" then reviewScript(action == "portableExport")
 				end
 		end
 		local function generatedCode()
-			local args = optionsForRecord(); if not args then return nil, "Select a captured call first." end
-			local source, why = replay.portable(args)
-			if source then return source end
-			local bound, err = replay.source(args)
-			if bound then return bound.source end
-			return nil, err or why
+			local args = optionsForRecord(); if not args then return nil, "Select an outgoing captured call first." end
+			return replay.portable(args)
 		end
 		local function copyCode()
-			local source, why = generatedCode(); if common.message(source, why) then common.copy(source) end
+			if selected and selected.direction == "incoming" then common.copy(util.encode(selected)) else reviewScript(false) end
 		end
+
 		statusButton = header.add("Stopped", function() more(statusButton) end, { flex = true, trailing = false })
 		startButton = header.add("Start", function()
 			if capture.status == "running" then common.message(capture.control("pause", capture.sessionId, capture.revision))
@@ -198,7 +229,7 @@ return function(env)
 		configBar.add("", configure, { icon = "sliders", iconOnly = true, name = "RemoteCaptureSettings" })
 		local function showFilter()
 			local definitions = { { key = "name", label = "Remote name", default = view.filter } }
-			for _, item in ipairs({ { "direction", "Direction", { "All", "outgoing", "incoming" } }, { "method", "Method", { "All", "FireServer", "InvokeServer", "OnClientEvent" } }, { "origin", "Origin", { "All", "unknown", "uai", "replay", "game", "executor", "server" } }, { "outcome", "Outcome", { "All", "pending", "forwarded", "returned", "received", "errored", "blocked", "completion_unobserved" } } }) do
+			for _, item in ipairs({ { "direction", "Direction", { "All", "outgoing", "incoming" } }, { "method", "Method", { "All", "FireServer", "InvokeServer", "OnClientEvent" } }, { "origin", "Origin", { "All", "hooked_unknown", "unknown", "uai", "replay", "game", "executor", "server" } }, { "outcome", "Outcome", { "All", "pending", "forwarded", "returned", "received", "errored", "blocked", "completion_unobserved" } } }) do
 				definitions[#definitions + 1] = { key = item[1], label = item[2], type = "choice", choices = item[3], default = view.filters[item[1]] or "All" }
 			end
 			forms.form("Filter retained calls", definitions, function(data)
@@ -216,10 +247,7 @@ return function(env)
 				if not handle.alive or generation ~= catalogueGeneration then return end
 				catalogueBusy = false
 				if not result then catalogue = { items = {}, error = why }
-				elseif morePage and catalogue then
-					for _, item in ipairs(result.items) do catalogue.items[#catalogue.items + 1] = item end
-					catalogue.nextCursor, catalogue.complete, catalogue.reason = result.nextCursor, result.complete, result.reason
-				else catalogue = result end
+				else local merged, mergeWhy = explorer.mergePage(morePage and catalogue or nil, result, 4000); catalogue = merged or { items = {}, error = mergeWhy } end
 				refresh()
 			end)
 		end
@@ -255,6 +283,7 @@ return function(env)
 		local function selectRow(row)
 			if row.older then view.follow, view.before = false, row.older; refresh(); return end
 			if row.more then cataloguePage(true); return end
+			cancelSource()
 			if row.instanceId then
 				saveDraft(); capture.select(nil); selected, view.record, view.argumentDraft = nil, nil, nil
 				view.remoteId, view.scope, view.detail = row.instanceId, "Selected remote", true
@@ -301,15 +330,19 @@ return function(env)
 		end
 		refreshDetail = function()
 			if valueView then valueView.destroy(); valueView = nil end; common.clear(valueHost)
-			sectionTabs.set({ { id = "arguments", label = "Arguments" }, { id = "code", label = "Code" }, { id = "results", label = "Results" }, { id = "caller", label = "Caller" }, { id = "draft", label = "Replay draft" } }, view.section)
 			local outgoing = selected ~= nil and selected.direction == "outgoing"
-			copyButton.setEnabled(outgoing); openButton.setEnabled(outgoing); replayButton.setEnabled(outgoing)
+			if not outgoing and (view.section == "code" or view.section == "draft") then view.section = "arguments" end
+			local sections = { { id = "arguments", label = "Arguments" }, { id = "results", label = "Results" }, { id = "caller", label = "Caller" } }
+			if outgoing then sections[#sections + 1] = { id = "code", label = "Code" }; sections[#sections + 1] = { id = "draft", label = "Replay draft" } end
+			sectionTabs.set(sections, view.section)
+			copyButton.setText(outgoing and "Copy code" or "Copy record")
+			copyButton.setEnabled(selected ~= nil); openButton.setEnabled(outgoing); replayButton.setEnabled(outgoing)
 			if not selected then
 				local object = view.remoteId and refs.resolve(view.remoteId)
 				recordHeader.Text = object and (object.Name .. " · " .. object.ClassName .. "\n" .. refs.describe(object).displayPath) or "Select a call to inspect its arguments, code and results."
 				local title = object and "Ready to observe this remote" or "Remote spy"
 				P.text(valueHost, { text = title, role = "heading", position = UDim2.fromOffset(16, 20), size = UDim2.new(1, -32, 0, 30) })
-				P.text(valueHost, { text = object and "Selected remote is the capture scope. Press Start to begin recording." or "Press Start to record calls across the game. Browse remotes to choose a specific target.", role = "small", wrap = true, position = UDim2.fromOffset(16, 58), size = UDim2.new(1, -32, 0, 90), color = theme.color.textSecondary })
+				P.text(valueHost, { text = object and "Selected remote is the capture scope. Press Start to begin recording." or "Choose a remote or an explicit subtree, then Start a 30-second observation. Capture settings enable outgoing hooks.", role = "small", wrap = true, position = UDim2.fromOffset(16, 58), size = UDim2.new(1, -32, 0, 90), color = theme.color.textSecondary })
 				return
 			end
 			describeSelected()
@@ -332,7 +365,7 @@ return function(env)
 			if not handle.alive or not handle.visible then return end
 			local current = state()
 			local active = current.status == "running" or current.status == "paused" or current.status == "starting"
-			local names = { idle = "Stopped", stopped = "Stopped", starting = "Starting…", running = "Recording", paused = "Paused", faulted = "Failed", disposed = "Stopped" }
+			local names = { idle = "Stopped", stopped = "Stopped", expired = "Expired", starting = "Starting…", running = "Recording", paused = "Paused", faulted = "Failed", disposed = "Stopped" }
 			statusButton.setText((names[current.status] or current.status) .. (#capture.rules > 0 and (" · " .. #capture.rules .. " rules") or ""))
 			startButton.setText(current.status == "running" and "Pause" or current.status == "paused" and "Resume" or "Start")
 			startButton.setEnabled(current.status ~= "starting")
@@ -345,6 +378,7 @@ return function(env)
 			if current.omitted > 0 then summary = summary .. " · " .. current.omitted .. " omitted" end
 			if current.counters.evicted > 0 then summary = summary .. " · " .. current.counters.evicted .. " old calls evicted" end
 			if current.status == "faulted" then summary = tostring(capture.reason or "Capture failed. Open settings to choose another backend.") end
+			if not active and current.coverage.wrapperStatus:find("retained", 1, true) then summary = summary .. " · Forwarding wrappers retained; recording/rules off" end
 			info.Text = summary
 			listTabs.set({ { id = "calls", label = "Calls" }, { id = "remotes", label = "Remotes" } }, view.listMode)
 			local items, why = {}, nil
@@ -379,7 +413,7 @@ return function(env)
 			end
 			movingList = false
 			local unseen = math.max(0, current.newest - (view.lastSeen or current.newest))
-			newCalls.setText(view.follow and "Following" or unseen > 0 and ("Latest +" .. unseen) or "Latest")
+			newCalls.setText(view.follow and "Following" or unseen > 0 and ("Latest +" .. unseen) or "Follow paused · Latest")
 			layoutListHeader()
 			if selected then
 				local live = records.get(selected.id)
@@ -422,11 +456,12 @@ return function(env)
 				refresh(); refreshDetail(); layout()
 				if view.listMode == "remotes" then cataloguePage() end
 			else
-				saveDraft(); catalogueGeneration = catalogueGeneration + 1; catalogueBusy = false; divider.root.Visible = false
+				cancelSource(); saveDraft(); catalogueGeneration = catalogueGeneration + 1; catalogueBusy = false; divider.root.Visible = false
 			end
 		end
 		function handle.destroy()
 			handle.alive = false; catalogueGeneration = catalogueGeneration + 1
+			cancelSource()
 			saveDraft(); view.record = selected; offRecords(); offCapture(); divider.destroy()
 			if valueView then valueView.destroy() end; root:Destroy()
 		end

@@ -11,8 +11,10 @@ local envMock = require("env")
 local json = require("json")
 
 local suite = { passed = 0, failed = 0, scenarios = 0, failures = {} }
-local filters = {}
-for index = 1, #(arg or {}) do filters[#filters + 1] = tostring(arg[index]):lower() end
+local filters, nativeOnly = {}, false
+for index = 1, #(arg or {}) do
+	if arg[index] == "--native" then nativeOnly = true else filters[#filters + 1] = tostring(arg[index]):lower() end
+end
 
 local current = "?"
 
@@ -60,6 +62,7 @@ local function renderedText(text)
 end
 
 local function scenario(name, fn)
+	if nativeOnly and (name:lower():find("bridge", 1, true) or name:lower():find("cowork", 1, true)) then return end
 	if #filters > 0 then
 		local matched = false
 		for _, filter in ipairs(filters) do
@@ -571,7 +574,8 @@ scenario("transient failures are retried and real refusals are not", function()
 	-- these gateways return one for an exhausted shared quota or an edge filter and
 	-- interleave them with 200s, so the body is what separates "busy" from "no".
 	local cases = {
-		{ "a transport error", nil, "timed out", true },
+		{ "a transient connection error", nil, "connection reset", true },
+		{ "a transport timeout with unknown outcome", nil, "timed out", false },
 		{ "408", { status = 408, body = "" }, nil, true },
 		{ "429", { status = 429, body = "" }, nil, true },
 		{ "500", { status = 500, body = "" }, nil, true },
@@ -642,7 +646,7 @@ scenario("a minimal request that dies on a deadline is not paid for twice", func
 		end,
 	})
 
-	handle.config.set("agent.executorReplyCeiling", 2000)
+	handle.config.set("agent.maxTokens", 2000)
 	handle.config.set("agent.effort", "off")
 	local session = handle.sessions.current()
 	session.send("hello")
@@ -2942,7 +2946,7 @@ scenario("an over-large reply ceiling is lowered to what the model allows", func
 		native.errors()[1] and native.errors()[1].traceback or nil)
 end)
 
-scenario("executor reply ceilings follow the actual transport and preserve explicit overrides", function()
+scenario("native replies use configured model limits without an executor ceiling", function()
 	for _, api in ipairs({ "openai", "anthropic" }) do
 		local sent = {}
 		local response = api == "openai" and chatBody({ content = "ok" }) or messagesBody({ text = "ok" })
@@ -2959,7 +2963,7 @@ scenario("executor reply ceilings follow the actual transport and preserve expli
 		caps.ws = true
 		handle.config.set("agent.effort", "off")
 		truthy(api .. " default call succeeds", providerCall(harness, adapter, record))
-		check(api .. " buffered SSE is clamped even on a socket-capable host", sent[#sent].max_tokens, 8192)
+		check(api .. " buffered SSE retains the configured output budget", sent[#sent].max_tokens, 128000)
 		check(api .. " stored reply ceiling is unchanged", handle.config.get("agent.maxTokens"), 128000)
 		check(api .. " context default is unchanged", handle.config.get("agent.contextTokens"), 1000000)
 		providerCall(harness, adapter, record, { maxTokens = 32768 })
@@ -2972,14 +2976,14 @@ scenario("executor reply ceilings follow the actual transport and preserve expli
 		check(api .. " explicit extra token override is retained", sent[#sent].max_tokens, 24576)
 		handle.config.set("agent.executorReplyCeiling", 6000)
 		providerCall(harness, adapter, record)
-		check(api .. " executor ceiling is tunable", sent[#sent].max_tokens, 6000)
+		check(api .. " legacy executor ceiling settings are ignored", sent[#sent].max_tokens, 128000)
 		handle.config.set("agent.maxTokens", 2000)
 		providerCall(harness, adapter, record)
 		check(api .. " lower requested ceilings are not raised", sent[#sent].max_tokens, 2000)
 		handle.config.set("agent.maxTokens", 128000)
 		handle.config.set("agent.executorReplyCeiling", 0)
 		providerCall(harness, adapter, record)
-		check(api .. " zero disables the default transport ceiling", sent[#sent].max_tokens, 128000)
+		check(api .. " the configured output budget remains authoritative", sent[#sent].max_tokens, 128000)
 		handle.config.set("agent.executorReplyCeiling", 8192)
 		record.wsUrl = "wss://harness.test/stream"
 		if api == "openai" then
@@ -2990,14 +2994,15 @@ scenario("executor reply ceilings follow the actual transport and preserve expli
 			check("the socket path was actually used", result and result.via, "websocket")
 			handle.env.require("net/ws").stream = function() return nil, "socket unavailable" end
 			providerCall(harness, adapter, record)
-			check("HTTP fallback from a failed socket gets the safe ceiling", sent[#sent].max_tokens, 8192)
+			check("HTTP fallback preserves the configured output budget", sent[#sent].max_tokens, 128000)
 			record.stream = false
 			providerCall(harness, adapter, record)
-			check("a socket URL does not exempt nonstreaming HTTP", sent[#sent].max_tokens, 8192)
+			check("nonstreaming HTTP preserves the configured output budget", sent[#sent].max_tokens, 128000)
 		else
 			providerCall(harness, adapter, record)
-			check("Messages API HTTP is bounded despite an unused socket URL", sent[#sent].max_tokens, 8192)
+			check("Messages API HTTP preserves its configured output budget", sent[#sent].max_tokens, 128000)
 		end
+		if not nativeOnly then
 		handle.config.set("bridge.enabled", true, { quiet = true })
 		handle.config.set("bridge.runtime", "web", { quiet = true })
 		local relayed
@@ -3008,11 +3013,12 @@ scenario("executor reply ceilings follow the actual transport and preserve expli
 		providerCall(harness, adapter, record)
 		check(api .. " web relay keeps the full ceiling", json.decode(relayed.body).max_tokens, 128000)
 		truthy(api .. " the request uses the web relay", relayed.relay)
+		end
 		check(api .. " no thread errors", #harness.errors(), 0)
 	end
 end)
 
-scenario("transport wall retry learns a working ceiling for both provider APIs", function()
+scenario("transport deadlines never retry or learn a ceiling for either provider API", function()
 	for _, api in ipairs({ "openai", "anthropic" }) do
 		for _, delay in ipairs({ 30, 60 }) do
 			local sent, retries = {}, 0
@@ -3033,26 +3039,23 @@ scenario("transport wall retry learns a working ceiling for both provider APIs",
 			if api == "anthropic" then request.extra = { output_config = { effort = "max", format = { type = "json_schema" } } } end
 			local result = providerCall(harness, adapter, record, request, delay + 1)
 			local label = api .. " " .. delay .. "s"
-			check(label .. " retries once", #sent, 2)
-			check(label .. " starts with the executor ceiling", sent[1] and sent[1][tokenField], 8192)
-			check(label .. " retries with fewer output tokens", sent[2] and sent[2][tokenField], 4096)
-			check(label .. " retry is reported", retries, 1)
-			check(label .. " completion recovers", result and result.content, "Recovered")
+			check(label .. " dispatches once", #sent, 1)
+			check(label .. " starts with the configured output budget", sent[1] and sent[1][tokenField], 128000)
+			check(label .. " no retry is reported", retries, 0)
+			falsy(label .. " unknown outcome remains a failure", result)
 			local cap = handle.providers.active().maxTokensCap
-			check(label .. " working ceiling is remembered", cap and cap.tokens, 4096)
-			check(label .. " cap belongs to the current model", cap and cap.model, record.model)
+			falsy(label .. " a deadline cannot teach a working ceiling", cap)
 			handle.config.saveNow()
 			local saved = json.decode(harness.files["UAI/config.json"])
-			check(label .. " learned cap is saved to disk", saved.providers.list[1].maxTokensCap.tokens, 4096)
+			falsy(label .. " no guessed cap is saved to disk", saved.providers.list[1].maxTokensCap)
 			providerCall(harness, adapter, handle.providers.active())
-			check(label .. " next request starts at the learned cap", sent[3] and sent[3][tokenField], 4096)
+			check(label .. " a separate request retains its configured ceiling", sent[2] and sent[2][tokenField], 128000)
 			if api == "anthropic" then
-				check("smaller effort preserves other output_config fields", sent[2].output_config.format.type, "json_schema")
-				check("smaller effort does not mutate the original override", request.extra.output_config.effort, "max")
+				check("failure does not mutate the original override", request.extra.output_config.effort, "max")
 			end
 			handle.providers.setModel(record.id, "harness-model-wide")
 			providerCall(harness, adapter, handle.providers.active())
-			check(label .. " changing model releases the learned cap", sent[4] and sent[4][tokenField], 8192)
+			check(label .. " changing model retains its configured ceiling", sent[3] and sent[3][tokenField], 128000)
 			check(label .. " no thread errors", #harness.errors(), 0)
 		end
 	end
@@ -3061,9 +3064,9 @@ end)
 scenario("transport wall retry does not learn from failures or repeat minimal requests", function()
 	for _, api in ipairs({ "openai", "anthropic" }) do
 		for _, case in ipairs({
-			{ label = "invalid JSON after retry", delay = 30, body = "not JSON", requests = 2 },
-			{ label = "empty completion after retry", delay = 30, body = "{}", requests = 2 },
-			{ label = "second transport wall", delay = 30, secondWall = true, requests = 2 },
+			{ label = "deadline before an invalid response", delay = 30, body = "not JSON", requests = 1 },
+			{ label = "deadline before an empty response", delay = 30, body = "{}", requests = 1 },
+			{ label = "repeated transport wall", delay = 30, secondWall = true, requests = 1 },
 			{ label = "minimal request", delay = 30, maxTokens = 2000, requests = 1 },
 			{ label = "quick transport error", delay = 1, requests = 1 },
 			{ label = "outside recovery window", delay = 131, requests = 1 },
@@ -5390,13 +5393,14 @@ end)
 -- attribution existed nowhere at all -- a client that can switch model mid-conversation
 -- was rendering four different models' answers identically.
 scenario("each turn says who said it, and the reply says with what", function()
+	local answeredModel
 	local harness, handle = bootWith({
 		model = "claude-opus-5",
 		handler = function(entry)
 			if not tostring(entry.url):find("/chat/completions") then
 				return { StatusCode = 404, Body = "{}" }
 			end
-			return { StatusCode = 200, Body = chatBody({ content = "Two things, then." }) }
+			return { StatusCode = 200, Body = chatBody({ content = "Two things, then.", model = answeredModel or json.decode(entry.body).model }) }
 		end,
 	})
 
@@ -5420,13 +5424,14 @@ scenario("each turn says who said it, and the reply says with what", function()
 	check("naming the role that answered", speaker and speaker.Text, "Assistant")
 	check("separate model attribution", harness.byName("ModelAttribution", agentByline).Text, "claude-opus-5")
 
+	answeredModel = "some/resolved-model"
 	handle.providers.setModel(handle.providers.active().id, "some/other-model")
 	harness.settle(1)
 	handle.sessions.current().send("and now")
 	harness.settle(10)
 	local bylines = harness.allByName("ModelAttribution", harness.byName("Transcript"))
-	check("a second reply names the model that produced it",
-		bylines[#bylines].Text, "some/other-model")
+	check("a second reply names the model reported by the provider",
+		bylines[#bylines].Text, answeredModel)
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
@@ -7077,6 +7082,19 @@ scenario("the changelog carries every release and marks itself read", function()
 	truthy("marking it read succeeds", changelog.markRead())
 	check("and it is read now", changelog.isUnread(), false)
 	check("the setting holds the version", config.get("ui.lastSeenVersion"), changelog.latest().version)
+	config.set("ui.lastSeenChangelog", "")
+	check("updated notes are unread for users who already opened this version", changelog.isUnread(), true)
+	changelog.markRead()
+	check("opening the revised notes clears the marker", changelog.isUnread(), false)
+	assert(config.saveNow())
+	config.set("ui.lastSeenChangelog", "", { quiet = true })
+	config.load()
+	check("the revised read marker survives a settings reload", changelog.isUnread(), false)
+	local revision = changelog.ENTRIES[1].revision
+	changelog.ENTRIES[1].revision = revision .. "-next"
+	check("another note revision restores the marker without a version bump", changelog.isUnread(), true)
+	changelog.ENTRIES[1].revision = revision
+	check("the already-read revision stays read", changelog.isUnread(), false)
 
 	-- The running version is the newest entry -- otherwise the marker can
 	-- never clear for a user who opens the modal.

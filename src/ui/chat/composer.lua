@@ -669,7 +669,7 @@ return function(env)
 				if convo and #(convo.ctx.messages or {}) > 0 then
 					local rec = providers.active()
 					local win = math.max(convo.ctx.limitFor(rec and rec.model), 1)
-					local pct = math.floor(util.clamp(convo.ctx.pressure() / win, 0, 1) * 100 + 0.5)
+					local pct = math.floor(util.clamp(convo.ctx.pressure(rec) / win, 0, 1) * 100 + 0.5)
 					options[#options + 1] = { label = "Compact now",
 						detail = string.format("Context about %d%% full -- summarise older turns", pct),
 						value = "compact", icon = "sliders" }
@@ -845,7 +845,7 @@ return function(env)
 			-- model's window when it is known, otherwise the configured cap.
 			local session = sessions.current()
 			local budget = math.max(session.ctx.limitFor(record and record.model), 1)
-			local share = util.clamp(session.ctx.pressure() / budget, 0, 1)
+			local share = util.clamp(session.ctx.pressure(record) / budget, 0, 1)
 			composer.contextShare = share
 			local tone = theme.color.success
 			if share > 0.85 then

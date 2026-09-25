@@ -23,6 +23,15 @@ local file = assert(io.open("dist/uai.lua", "rb"))
 local source = file:read("*a")
 file:close()
 local identity = assert(source:match('local __UAI_BUILD = "([^"]+)"'))
+local manifestFile = assert(io.open("dist/uai.manifest.json", "rb"))
+local manifest = require("json").decode(manifestFile:read("*a")); manifestFile:close()
+check("module manifest belongs to the generated bundle", manifest.buildId == identity and manifest.hashAlgorithm == "uai-dual32-v1" and #manifest.modules > 0)
+local previousId = ""
+for _, entry in ipairs(manifest.modules) do
+	assert(entry.id > previousId and entry.bytes >= 0 and type(entry.hash) == "string", "manifest modules must be ordered and individually identified")
+	previousId = entry.id
+end
+check("module manifest uses canonical order", previousId ~= "")
 local function boot(harness, id, hostContext)
 	local body = source
 	if id then body = body:gsub('local __UAI_BUILD = "[^"]+"', 'local __UAI_BUILD = "' .. id .. '"', 1) end

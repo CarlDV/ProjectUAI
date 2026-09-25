@@ -19,20 +19,17 @@ return function(env)
 		return { path = "files/" .. path, bytes = #content, verified = true }
 	end
 	function M.captures(keys, destination)
-		local list, why
-		if keys then list, why = records.exportRecords(keys)
-		else
-			list = {}; local cursor
-			repeat
-				local page, err = records.page({ cursor = cursor, limit = 100 }); if not page then return nil, err end
-				for _, summary in ipairs(page.items) do local record = records.get(summary.id); if record then list[#list + 1] = record end end
-				cursor = page.nextCursor
-			until not cursor or #list >= 1000
-		end
-		if not list then return nil, why end
+		local snapshot, why = records.freeze(keys); if not snapshot then return nil, why end
+		local list, offset = {}, 1
+		repeat
+			local page = records.exportPage(snapshot, offset, 100)
+			for _, record in ipairs(page.items) do list[#list + 1] = record end
+			offset = page.nextOffset
+		until not offset
+
 		serial = serial + 1
 		local envelope = { format = "uai-captures", version = 1, snapshotId = "capture-export:" .. refs.epoch .. ":" .. serial,
-			exportedAt = clock.ms(), epoch = refs.epoch, placeId = game.PlaceId,
+			exportedAt = snapshot.snapshotAt, throughSequence = snapshot.throughSequence, captureGeneration = snapshot.generation, epoch = refs.epoch, placeId = game.PlaceId,
 			state = env.require("runtime/remote_capture").state(), records = list }
 		local encoded = util.encode(envelope)
 		if #encoded <= 2 * 1024 * 1024 then return M.write(encoded, destination) end

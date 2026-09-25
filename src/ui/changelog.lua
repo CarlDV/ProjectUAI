@@ -155,6 +155,7 @@ return function(env)
 					name = "Section_" .. section.category,
 					text = section.label or section.category,
 					role = "heading",
+					wrap = true,
 					color = badgeColor,
 					auto = "Y",
 					size = UDim2.new(1, 0, 0, 0),

@@ -11,6 +11,7 @@ return function(env)
 	local alive = true
 	function M.snapshot(ref, expected, origin)
 		local doc, why = store.resolve(ref); if not doc then return nil, why end
+		if doc.readOnly then return nil, "Read-only source snapshot; extract an editable copy before Run" end
 		if expected ~= nil and expected ~= doc.revision then return nil, "stale_revision: source changed before Run" end
 		if origin == "tool" and expected == nil then return nil, "expected_revision is required for code_run" end
 		return { id = store.id("run"), documentId = doc.id, revision = doc.revision, source = doc.source, name = doc.name, bindingId = doc.bindingId, origin = origin or "user" }
@@ -23,11 +24,18 @@ return function(env)
 	end
 	function M.run(snapshot, ctx, timeout)
 		if not alive then return { ok = false, text = "Workspace unloaded" } end
+		local running = 0
+		for _, item in ipairs(M.runs) do
+			if item.id == snapshot.id then return { ok = false, text = "This run was already dispatched; prepare a new Run before executing again" } end
+			if item.status == "running" then running = running + 1 end
+		end
+		if running >= 4 then return { ok = false, text = "At most four workspace runs may be active" } end
 		if snapshot.origin ~= "tool" and M.active and M.active ~= snapshot then return { ok = false, text = "A workspace run is already active; use Stop or inspect Output" } end
 		if snapshot.cancelled or (ctx and ctx.aborted and ctx.aborted()) then if M.active == snapshot then M.active = nil end; return { ok = false, text = "Stopped before Run" } end
 		if snapshot.documentId then
 			local doc = store.resolve(snapshot.documentId)
 			if not doc or doc.revision ~= snapshot.revision then if M.active == snapshot then M.active = nil end; return { ok = false, text = "stale_revision: source changed before dispatch" } end
+			if doc.readOnly then if M.active == snapshot then M.active = nil end; return { ok = false, text = "Read-only source snapshot; extract an editable copy before Run" } end
 		end
 		if snapshot.actionId then
 			local action = store.action(snapshot.actionId)
@@ -44,7 +52,10 @@ return function(env)
 		M.runs[#M.runs + 1] = run; if run.origin ~= "tool" then M.active = run end
 		M.changed:fire({ kind = "started", runId = run.id })
 		local ok, result = pcall(execution.run, { code = run.source, timeout = timeout, parameters = run.parameters, onOutput = function(line)
-			run.output[#run.output + 1] = line; M.changed:fire({ kind = "output", runId = run.id })
+			if not alive or run.cancelled then return end
+			run.outputBytes = (run.outputBytes or 0) + #line
+			if #run.output < 500 and run.outputBytes <= 128000 then run.output[#run.output + 1] = line else run.outputOmitted = (run.outputOmitted or 0) + 1 end
+			M.changed:fire({ kind = "output", runId = run.id })
 		end }, runContext)
 		if not ok then result = { ok = false, text = tostring(result), data = { status = "runtime_error" } } end
 		run.finishedAt, run.result, run.status = clock.ms(), result, result.data and result.data.status or (result.ok and "completed" or "compile_error")

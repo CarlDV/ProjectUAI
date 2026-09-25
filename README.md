@@ -87,6 +87,12 @@ Focused editing uses the native TextBox for input, selection and IME, with visib
 syntax colors and a caret while typing. Closing a view preserves its script in the
 library. Source documents use two verified snapshots under `UAI/code/`.
 
+Inspected Source and decompiled text are read-only snapshots. **Extract editable
+copy** creates a separate document; opening source never runs it or writes back to
+the live script. Source requests share bounded workers and a cache, with explicit
+provenance, refresh, cancellation and expiry. Search/selection use UTF-8 byte
+boundaries; displayed columns count Unicode code points.
+
 Files browses the `UAI` workspace through expandable folders. Open a file in the
 editor, then use Save or Save as; disk-conflict checks protect edited drafts.
 Run and Save stay adjacent. Buttons and tabs retain padding across narrow layouts,
@@ -98,6 +104,9 @@ bookmarks, world picking, source opening and selected metadata export. Stable
 object references survive renaming and moving. **Game changes → Undo** covers
 recorded property and attribute changes with conflict checks. Tags, hierarchy,
 remote effects and arbitrary Luau side effects are outside that Undo coverage.
+Inspector actions carry the displayed selection's IDs, primary object and revision.
+Search and branch pages show partial results and limits: 20,000 runtime children or
+scanned nodes, 4,000 displayed rows, and a 64-level reveal path.
 
 Remotes starts only through an explicit scoped **Start**. It supports UAI calls,
 incoming events and host-dependent outgoing interception, with bounded capture
@@ -109,7 +118,16 @@ automatically. **More → Capture coverage** explains the actual backend and lim
 intercepted Invoke outcomes remain unverified and incoming function callbacks are
 unavailable.
 
-See [the native testing guide](docs/CODE_WORKSPACE_TESTING.md) for capabilities and
+The default capture lasts 30 seconds and requires a selected target. Game-wide
+capture and continuous capture are explicit choices. Caller actions resolve the
+captured script identity after capture and can open read-only source with likely
+remote name/path matches. Generated portable scripts require current review before
+copy/export. Hooked traffic is labelled `hooked_unknown` unless attribution has
+been verified; routing probes do not invoke the predecessor, but network behavior
+depends on the host. Stop can retain an inert forwarding wrapper.
+
+See [the native feature contract](docs/NATIVE_CLIENT.md) for current features and
+limits and [the native testing guide](docs/CODE_WORKSPACE_TESTING.md) for
 desktop/mobile/gamepad scenarios. Native input, hook forwarding and performance
 require Roblox client validation.
 
@@ -419,37 +437,32 @@ counted and where it is persisted, and the authoring rules.
 
 ## Building and testing
 
-The offline suite runs under LuaJIT. The sources use a dialect LuaJIT can also parse -- no type
-annotations, no backtick interpolation, no `continue` -- and `test/check.lua`
-fails the build on a violation.
+Complete all source, test, build-tool and documentation edits before verification.
+The native command runs build, freshness, static checks, the main and every focused
+native suite, performance contracts and the official Luau compiler, in that order.
+It stops at the first failed stage; after any fix, restart the entire command.
 
 ```bash
-luajit test/check.lua      # lint, parse and link all modules
-luajit tools/bundle.lua    # src/ + init.lua -> dist/uai.lua
-luajit test/run.lua        # full scenarios against the built bundle
-luajit test/chat_regressions.lua
-luajit test/config_transfer.lua
-luajit test/build_reload.lua
-luajit test/audit_regressions.lua
-luajit test/execution_tools.lua
-luajit test/attachments.lua
-luajit test/gravity.lua
-luajit test/tool_workflows.lua
-luajit test/execution_ui.lua
-luajit test/controls_loading.lua
-luajit test/controls_interactions.lua
-luajit test/markdown_regressions.lua
-luajit test/markdown_tables.lua
-luajit test/shared_ui_layout.lua
-luajit test/mobile_ui.lua
-luajit test/mobile_workflows.lua
-luajit test/panel_layout_regressions.lua
-luajit test/model_picker.lua
-luajit test/chat_loops.lua
-luajit test/chat_bot.lua
-luajit test/iy_control.lua
-luajit test/todo_notifications.lua
+node tools/test_native.js
 ```
+
+Prerequisites are Node.js, LuaJIT and the official `luau-compile` executable. Set
+`LUAJIT` or `LUAU_COMPILE` to override paths. Stage logs and a behavioral coverage
+summary are written to ignored `refer/native-verification/`. There is no line
+coverage claim. Sources use a LuaJIT-compatible dialect; the native static checker
+enforces it, and the official compiler checks actual Luau syntax. See the testing
+guide for the exact stages and compiler setup.
+
+Build-only commands, also after implementation is complete:
+
+```bash
+luajit tools/bundle.lua --native
+node tools/build_site.js --bundle-only --check
+```
+
+The bundle includes a deterministic build ID and per-module hashes in
+`dist/uai.manifest.json`. Freshness is read-only and also detects stale embedded
+icons. These hashes identify content; they are not cryptographic signatures.
 
 `test/run.lua` loads `dist/uai.lua` -- the actual artifact -- into a mocked
 client: a virtual clock so nothing sleeps, an in-memory filesystem, a programmable
@@ -480,7 +493,7 @@ the message, that a tool family switched off leaves the wire, that every setting
 pane builds, and that search finds a conversation by something said inside it.
 
 ```bash
-luajit test/run.lua identity      # run one scenario
+luajit test/run.lua --native identity # run one native scenario
 luajit test/mock/selftest.lua     # check the mocks themselves
 ```
 
@@ -645,31 +658,34 @@ replayed through the parser. It is still requested, because the streamed shape i
 where providers put reasoning text and per-request usage. `net/ws.lua` does real
 token streaming for a gateway that speaks a small WebSocket envelope, when the
 executor exposes `WebSocket.connect`.
+Actual socket frames update the transcript immediately, with coalesced live
+previews and one final message. Buffered replies render in full when received;
+there is no simulated typing delay. The assistant is instructed to give brief
+progress messages between work steps. No prompt can expose tokens still buffered
+by the host or force a provider to speak while it is reasoning internally.
 
 Some executors stop HTTP requests after roughly 30–60 seconds even when given a
-longer timeout. To keep replies within that window, buffered HTTP uses
-`agent.executorReplyCeiling` (8,192 tokens by default), without changing the saved
-`agent.maxTokens` setting. A configured, enabled WebSocket stream and the enabled
-web relay bypass this default ceiling; an HTTP fallback from a failed socket is
-capped again. Explicit per-request token values and provider body overrides also
-bypass the default. Model limits and previously learned caps still apply when
-building the request.
-
-Tune it with `getgenv().UAI.config.set("agent.executorReplyCeiling", 16384)`;
-use `0` to disable this default clamp. A request that returns nothing after
-20–130 seconds can be retried once with a smaller reply and reduced reasoning
-effort when available. Only a valid completion saves the working reply ceiling
-on that provider record for the current model. Minimal requests and cancelled
-requests are not retried this way. Large prompts can still spend the request
+longer timeout. The old 8,192-token executor ceiling has been removed, including
+HTTP fallback. Requests use `agent.maxTokens` (128,000 by default), explicit
+overrides, documented model limits and limits learned from provider refusals.
+Old saved `agent.executorReplyCeiling` values are ignored.
+Native request deadlines and long unanswered
+transport failures are terminal: the client does not resend a smaller request or
+fall back to another provider after an unknown outcome. A dispatched socket
+failure cannot silently send a second HTTP request. Explicit token-limit refusals
+can still teach a smaller ceiling. Large prompts can still spend the request
 window uploading and prefilling; `agent.contextTokens` remains 1,000,000 by
 default and can be lowered when short replies also time out.
 
 Automatic compaction summarises the oldest turns before a request would cross the
 budget, and the budget adapts to the model: when its context window is known,
 compaction starts at **Compact at** (`agent.contextFraction`, 80% by default) of
-that window, with `agent.contextTokens` as the hard ceiling. The pressure it
-measures is calibrated against the prompt-token count each provider actually
-reports, so the system prompt and tool schemas are counted rather than estimated.
+that window, with `agent.contextTokens` as the hard ceiling. Pressure includes
+estimated messages, the rolling summary, and the system prompt/tool schemas from
+the prepared request. Provider usage calibrates that overhead against the history
+actually sent; changing providers, endpoints or models does not reuse another
+measurement. The context breakdown shares this calculation, labels estimates,
+and shows partial totals until the first request is prepared.
 **Compact now**, in the composer's message-options menu, folds older turns on
 demand; the **Summarise old turns** switch turns the paid summary off while the
 conversation is still trimmed to fit. The composer shows a live context-window
@@ -715,7 +731,10 @@ write arguments are rejected instead of repairing them into a partial edit. If a
 provider reports that its tool batch hit the token limit, none of those calls run;
 the model receives results asking it to retry with smaller, complete calls.
 
-See [CHANGELOG.md](CHANGELOG.md) or **What's New** for the latest release notes.
+See [CHANGELOG.md](CHANGELOG.md) or **App menu → What's new** (also under **About**)
+for the latest release notes. The in-game notes are bundled with the client;
+reload the updated bundle to see them. Updated notes restore the unread marker
+even when the client version stays the same.
 
 ## Skills
 

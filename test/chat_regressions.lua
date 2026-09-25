@@ -278,7 +278,7 @@ scenario("quick chat keeps dismissed drafts and transfers them to full chat", fu
 	check("quick chat has no thread errors", #harness.errors() == 0)
 end)
 
-scenario("animated replies never reveal partial UTF-8 characters", function()
+scenario("buffered replies render completely without simulated streaming", function()
 	local harness, handle, panel = boot()
 	handle.env.require("runtime/caps").executor = "AnimationTest"
 	handle.env.require("ui/responsive").reduceMotion = false
@@ -297,11 +297,37 @@ scenario("animated replies never reveal partial UTF-8 characters", function()
 	end
 	local reply = string.rep("你好🌟こんにちは ", 35)
 	handle.sessions.current().emit("assistant:text", { text = reply, final = true })
-	harness.settle(2)
-	check("animated path was exercised", partials > 0)
+	check("completed replies never enter a simulated stream", partials == 0 and panel.view.reveal == nil)
 	check("final response is complete", harness.textOf(panel.view.agentHandle.column):find(handle.env.require("runtime/util").trim(reply), 1, true))
 	check("reply remains free of action bars", harness.byName("MessageActions", panel.view.agentHandle.root) == nil)
-	check("animation has no thread errors", #harness.errors() == 0)
+	check("immediate replies have no thread errors", #harness.errors() == 0)
+end)
+
+scenario("real response previews update in place and reconcile with durable messages", function()
+	local harness, handle, panel = boot()
+	local session = handle.sessions.current()
+	session.emit("user", { text = "Work in steps" })
+	session.emit("request:start", { provider = "Fixture", model = "fixture-model", streamId = "live-fixture" })
+	session.emit("assistant:preview", { streamId = "live-fixture", reasoning = "Checking the fixture.", text = "", model = "fixture-model" })
+	local thought = harness.byName("Reasoning", panel.view.scroll.instance)
+	check("received reasoning is visible before completion", thought and harness.textOf(thought):find("Checking the fixture.", 1, true))
+	session.emit("assistant:preview", { streamId = "live-fixture", reasoning = "Checking the fixture.", text = "First step", model = "fixture-model" })
+	local streamText = harness.byName("StreamText", panel.view.scroll.instance)
+	session.emit("assistant:preview", { streamId = "live-fixture", reasoning = "Checking the fixture.", text = "First step\nSecond step", model = "fixture-model" })
+	check("multiline chunks reuse the same live label", streamText and streamText == harness.byName("StreamText", panel.view.scroll.instance) and streamText.Text:find("Second step", 1, true))
+	local agentRoot = panel.view.preview.textHandle.root
+	session.emit("assistant:reasoning", { streamId = "live-fixture", text = "Checking the fixture. Complete." })
+	session.emit("assistant:text", { streamId = "live-fixture", model = "served-model", text = "First step\nSecond step\nDone.", final = true })
+	session.emit("assistant:complete", { streamId = "live-fixture" })
+	check("final reply replaces its preview without another message", panel.view.agentHandle.root == agentRoot and panel.view.preview == nil)
+	check("final attribution uses the model that answered", harness.byName("ModelAttribution", agentRoot).Text == "served-model")
+	check("final reasoning replaces its preview without duplication", harness.byName("Reasoning", panel.view.scroll.instance) == thought and harness.textOf(thought):find("Checking the fixture. Complete.", 1, true))
+	check("previews never enter the durable transcript", #session.log == 3 and session.livePreview == nil)
+	check("streaming leaves no stale cursor", harness.byName("StreamText", panel.view.scroll.instance) == nil)
+	panel.view.attach(nil); panel.view.attach(session)
+	check("reopening retains final attribution and one reply", #harness.allByName("Agent", panel.view.scroll.instance) == 1
+		and harness.byName("ModelAttribution", panel.view.agentHandle.root).Text == "served-model")
+	check("preview rendering has no thread errors", #harness.errors() == 0)
 end)
 
 scenario("Markdown tables render in replies without reveal-time layout churn", function()
@@ -320,11 +346,15 @@ scenario("Markdown tables render in replies without reveal-time layout churn", f
 	check("numeric column uses declared alignment", tostring(harness.byName("Cell_2", row).TextXAlignment):find("Right", 1, true))
 	local message = handle.env.require("ui/chat/message")
 	local streaming = message.agent(panel.view.scroll.instance, "", 999, "test-model")
-	streaming.stream("| A | B |\n| --- | --- |\n| one | two |")
+	local tableText = "| A | B |\n| --- | --- |\n| one | two |"
+	streaming.stream(tableText)
+	check("live tables keep their source in one label", harness.byName("StreamText", streaming.root).Text:find(tableText, 1, true)
+		and harness.byName("MarkdownTable", streaming.root) == nil)
+	streaming.finish(tableText)
 	local streamed = harness.byName("MarkdownTable", streaming.root)
-	check("multiline stream recognizes table", streamed ~= nil)
-	check("stream cursor is separate from cells", harness.byName("StreamCursor", streaming.root) ~= nil)
-	check("stream cursor does not leak into cell text", not harness.textOf(streamed):find("&lt;font", 1, true))
+	check("completed tables render their cells", streamed ~= nil and harness.textOf(streamed):find("two", 1, true))
+	check("stream cursor cannot leak into final cells", harness.byName("StreamText", streaming.root) == nil
+		and not harness.textOf(streamed):find("●", 1, true))
 	streaming.root:Destroy()
 	harness.settle(1)
 	check("table integration has no thread errors", #harness.errors() == 0)
@@ -475,7 +505,11 @@ scenario("context breakdown shows live colored categories across screen sizes", 
 		harness.click(harness.byName("ComposerOptions", composer.shell))
 		harness.click(harness.byName("Option_context_inspect"))
 		local inspector = assert(harness.byName("ContextInspector"), "context inspector did not open")
-		check("empty context explains missing measurement", harness.textOf(inspector):find("After first reply", 1, true))
+		check("empty context explains missing measurement", harness.textOf(inspector):find("After first request", 1, true))
+		for _, id in ipairs({ "system", "messages", "summary", "unused" }) do
+			local label = assert(harness.byName("ContextLabel_" .. id, inspector))
+			check(id .. " reserves readable width without zero-width flex", label.Size.X.Scale == 1 and label.Size.X.Offset < 0 and label:FindFirstChildOfClass("UIFlexItem") == nil)
+		end
 		check("an unknown model is not given an invented window", harness.textOf(inspector):find("Model window: unknown", 1, true))
 		local record = handle.providers.blank("custom")
 		record.label, record.baseUrl, record.model, record.apiKey = "Context test", "https://context.test/v1", "context-test", "test-key"
@@ -508,10 +542,16 @@ scenario("context breakdown shows live colored categories across screen sizes", 
 		local available = handle.env.require("ui/responsive").usableRect(handle.env.require("ui/overlay").layer, 0)
 		check("inspector fits the viewport", inspector.Size.X.Offset <= available.width and inspector.Size.Y.Offset <= available.height)
 		check("long details have a scrolling body", harness.byName("BodyScroll", inspector).ScrollingEnabled ~= false)
+		local original, refreshed = session.ctx.breakdown, 0
+		session.ctx.breakdown = function(...) refreshed = refreshed + 1; return original(...) end
+		for _ = 1, 100 do session.emit("status", { text = "Working" }) end
+		harness.settle(0.2)
+		check("streaming event bursts coalesce context refreshes", refreshed == 1)
 		harness.click(harness.byName("Close", inspector))
 		check("closing preserves the prompt", composer.field.get() == "Keep this draft")
 		session.emit("status", { text = "Ready" })
 		harness.settle(0.3)
+		check("closed inspectors stop recalculating categories", refreshed == 1)
 		check("inspector bindings clean up", #harness.errors() == 0)
 		check("inspector uses valid Roblox properties", #harness.instanceState.typeErrors == 0)
 	end

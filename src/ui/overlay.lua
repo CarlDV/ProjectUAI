@@ -778,7 +778,8 @@ return function(env)
 		modal.content.AutomaticSize = Enum.AutomaticSize.XY
 		local codeText = P.text(body, {
 			name = "CodeText",
-			text = tostring(props.code or ""),
+			text = env.require("ui/markdown").highlight(tostring(props.code or ""), props.language or "luau"),
+			rich = true,
 			role = "mono",
 			line = theme.line.normal,
 			color = theme.color.codeText,
@@ -797,6 +798,7 @@ return function(env)
 			selectable.Font, selectable.TextSize, selectable.TextColor3 = theme.text.mono.font, theme.text.mono.size, theme.color.codeText
 			selectable.Size, selectable.AutomaticSize, selectable.Selectable = UDim2.fromOffset(0, 0), Enum.AutomaticSize.XY, true
 			P.pad(selectable, { x = theme.space.sm, y = theme.space.md }); codeText.Visible = false
+			env.require("ui/code/syntax").attach(selectable, props.language or "luau")
 		end
 
 		if caps.clipboard then

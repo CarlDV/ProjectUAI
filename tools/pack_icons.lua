@@ -120,6 +120,18 @@ lines[#lines + 1] = ""
 
 local out = table.concat(lines, "\n")
 local outPath = "src/ui/assets.lua"
+for _, option in ipairs(arg or {}) do
+	if option == "--check" then
+		local current = io.open(outPath, "rb")
+		local body = current and current:read("*a")
+		if current then current:close() end
+		if not body or body:gsub("\r\n", "\n") ~= out then
+			io.stderr:write("Embedded icons are stale; run luajit tools/pack_icons.lua\n"); os.exit(1)
+		end
+		print("Embedded icons are current")
+		return
+	end
+end
 local dest = io.open(outPath, "wb")
 if not dest then
 	io.stderr:write("cannot open " .. outPath .. " for writing\n")

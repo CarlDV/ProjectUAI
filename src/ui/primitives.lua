@@ -843,6 +843,10 @@ return function(env)
 		function handle.set(value) box.Text = tostring(value or "") end
 		function handle.focus() pcall(function() box:CaptureFocus() end) end
 		function handle.clear() box.Text = "" end
+		if multiline and props.role == "mono" and props.syntax ~= false then
+			box.TextWrapped = false
+			handle.syntax = env.require("ui/code/syntax").attach(box, props.language or "luau")
+		end
 
 		return handle
 	end

@@ -16,13 +16,16 @@ return function(env)
 		elseif tool.name == "script_source" then
 			tool.parameters.properties.instance_id, tool.parameters.properties.source_id = { type = "string" }, { type = "string" }
 			tool.parameters.required = {}
+			tool.parameters.properties.decompile, tool.parameters.properties.refresh = { type = "boolean" }, { type = "boolean" }
 			tool.run = function(args, ctx)
-				local item, why
-				if args.source_id then item, why = sources.get(args.source_id)
-				else local object, err = refs.select(args); if not object then return N.fail(err) end; item, why = sources.inspect(refs.id(object), ctx) end
-				if not item then return N.fail(why) end
+				if args.source_id and (args.instance_id or args.path) then return N.fail("Choose exactly one source_id, instance_id, or path") end
+				local item, why, detail
+				if args.source_id then item, why, detail = sources.get(args.source_id)
+				else local object, err = refs.select(args); if not object then return N.fail(err) end; item, why, detail = sources.inspect(refs.id(object), ctx, { decompile = args.decompile, refresh = args.refresh }) end
+				if not item then local result = N.fail(why); result.data = detail; return result end
 				local result = H.readSlice(item.name, item.source, { offset = args.offset, limit = math.min(args.limit or 3000, 6000) }, 3000)
 				result.data = result.data or {}; result.data.sourceId, result.data.provenance, result.data.path = item.id, item.provenance, item.path
+				result.data.source = sources.describe(item)
 				return result
 			end
 		end

@@ -7,6 +7,7 @@ return function(env)
 	local limits = env.require("runtime/code_limits")
 	local actions = env.require("runtime/code_actions")
 	local lexer = env.require("runtime/code_lexer")
+	local codeText = env.require("runtime/code_text")
 	local signal = env.require("runtime/signal")
 	local M = { changed = signal.new("code"), storageChanged = signal.new("code-storage"),
 		storage = { state = "unloaded" }, workspace = { destination = "Editor" }, initialized = false }
@@ -14,7 +15,7 @@ return function(env)
 	local dirty, saving, scheduled, disposed, blocked = false, false, false, false, nil
 	local serial, mutation = 0, 0
 	local slots = { "code/workspace.json", "code/workspace.backup.json" }
-	local known = {}
+	local known, pendingWrites = {}, {}
 	local epoch
 	local function id(prefix)
 		if not epoch then
@@ -55,6 +56,15 @@ return function(env)
 			-- Provenance is descriptive only. Live bindings are never restored here.
 			if type(doc.bindingId) == "string" then item.bindingId = doc.bindingId end
 			if type(doc.provenance) == "string" and #doc.provenance <= 2000 then item.provenance = doc.provenance end
+			item.readOnly = doc.readOnly == true
+			if type(doc.sourceId) == "string" then item.sourceId = doc.sourceId end
+			if type(doc.sourceInfo) == "table" then
+				item.sourceInfo = {}
+				for _, key in ipairs({ "method", "status", "origin", "instanceId", "instancePath", "runtimeEpoch", "sourceHash", "capturedAt", "path" }) do
+					local entry = doc.sourceInfo[key]
+					if type(entry) == "number" or type(entry) == "boolean" or (type(entry) == "string" and #entry <= 2000) then item.sourceInfo[key] = entry end
+				end
+			end
 			for _, version in ipairs(doc.versions or {}) do
 				if type(version) ~= "table" or not nameValid(version.id) or not sourceValid(version.source) or not integer(version.revision) then return nil, "invalid source version" end
 				versionBytes = versionBytes + #version.source
@@ -198,11 +208,13 @@ return function(env)
 			state.openIds[#state.openIds + 1] = doc.id
 		end
 		if selectIt then state.activeId = doc.id end
+		if doc.sourceId then doc.snapshotState = env.require("runtime/script_sources").get(doc.sourceId) and "available" or "expired" end
 		changed("selection", doc, "view"); return doc
 	end
 	function M.select(ref) return M.open(ref, true) end
 	function M.close(ref)
 		local doc, why = M.resolve(ref); if not doc then return nil, why end
+		env.require("runtime/script_sources").release(doc)
 		for i = #state.openIds, 1, -1 do if state.openIds[i] == doc.id then table.remove(state.openIds, i) end end
 		if state.activeId == doc.id then state.activeId = state.openIds[#state.openIds] end
 		typing[doc.id] = nil; changed("close", doc, "user"); return true
@@ -210,12 +222,21 @@ return function(env)
 	function M.create(name, source, options)
 		M.init(); options = options or {}; source = source or ""
 		if not nameValid(name or "Untitled.lua") or not sourceValid(source) then return nil, "Invalid name or source; editable source is limited to 256,000 UTF-8 bytes" end
-		if #state.documents >= limits.documents then return nil, "The library holds up to 24 documents" end
+		if #state.documents >= limits.documents then return nil, "The library is full (" .. limits.documents .. " scripts). Remove one before adding another." end
 		if options.select and #state.openIds >= limits.openViews then return nil, "Close a view first (10 open views maximum)" end
 		local doc = fresh(name, source); doc.provenance, doc.bindingId = options.provenance, options.bindingId
+		doc.readOnly, doc.sourceId, doc.sourceInfo = options.readOnly == true, options.sourceId, options.sourceInfo
 		state.documents[#state.documents + 1] = doc
 		if options.select then state.openIds[#state.openIds + 1], state.activeId = doc.id, doc.id end
 		changed("create", doc, options.origin); return doc
+	end
+	function M.attachSource(ref, source)
+		local doc, why = M.resolve(ref); if not doc then return nil, why end
+		local snapshots = env.require("runtime/script_sources")
+		snapshots.release(doc)
+		doc.sourceId, doc.sourceInfo, doc.readOnly = source.id, snapshots.describe(source), source.readOnly == true
+		doc.snapshotState = source.status
+		changed("metadata", doc, "source"); return doc
 	end
 	function M.rename(ref, name)
 		local doc, why = M.resolve(ref); if not doc then return nil, why end
@@ -268,6 +289,7 @@ return function(env)
 	end
 	function M.update(ref, source, options)
 		local doc, why = M.resolve(ref); if not doc then return nil, why end
+		if doc.readOnly then return nil, "Read-only source snapshot; extract an editable copy first" end
 		options = options or {}
 		if options.expected_revision ~= nil and options.expected_revision ~= doc.revision then return nil, "stale_revision: read the current document before applying" end
 		if options.origin == "tool" and doc.source ~= "" and options.expected_revision == nil then return nil, "expected_revision is required for an existing source document" end
@@ -293,6 +315,7 @@ return function(env)
 	end
 	local function sourceUndo(ref, reverse)
 		local doc, why = M.resolve(ref); if not doc then return nil, why end
+		if doc.readOnly then return nil, "Read-only source snapshot; extract an editable copy first" end
 		local from, to = reverse and redo or undo, reverse and undo or redo
 		if not from[doc.id] or #from[doc.id] == 0 then return nil, "No source " .. (reverse and "redo" or "undo") .. " available" end
 		local source = table.remove(from[doc.id]); to[doc.id] = to[doc.id] or {}; table.insert(to[doc.id], doc.source)
@@ -317,6 +340,7 @@ return function(env)
 	end
 	function M.propose(ref, revision, source, name)
 		local doc, why = M.resolve(ref); if not doc then return nil, why end
+		if doc.readOnly then return nil, "Read-only source snapshot; extract an editable copy first" end
 		if not integer(revision) or not sourceValid(source) then return nil, "A base revision and bounded UTF-8 source are required" end
 		if #M.proposals(doc.id) >= limits.proposals then return nil, "Resolve or discard a pending proposal first (3 per document)" end
 		local proposal = { id = id("proposal"), documentId = doc.id, baseRevision = revision, source = source, name = util.ellipsis(name or "Proposed change", 120), at = clock.ms() }
@@ -346,28 +370,31 @@ return function(env)
 	function M.search(query, options)
 		M.init(); options = options or {}
 		if type(query) ~= "string" or query == "" then return nil, "Enter a search" end
-		local ok, err = pcall(string.find, "", query, 1, not options.pattern)
-		if not ok then return nil, "Invalid pattern: " .. tostring(err) end
 		local docs = state.documents
 		if options.document then local doc, why = M.resolve(options.document); if not doc then return nil, why end; docs = { doc } end
-		local out, skipped, count = {}, tonumber(options.offset) or 0, 0
+		local out, count, skipped, complete = {}, 0, math.max(0, tonumber(options.offset) or 0), true
+		local searchOptions = util.copy(options); searchOptions.limit = 10000
 		for _, doc in ipairs(docs) do
+			local found, why = codeText.search(doc.source, query, searchOptions); if not found then return nil, why end
+			complete = complete and found.complete
 			local lines, starts = lexer.lines(doc.source)
-			for line, value in ipairs(lines) do
-				local first, last = value:find(query, 1, not options.pattern)
-				if first then
-					count = count + 1
-					if count > skipped then out[#out + 1] = { documentId = doc.id, revision = doc.revision, line = line, first = starts[line] + first - 1, last = starts[line] + last - 1, text = util.ellipsis(value, 160) } end
-					if #out >= math.min(options.limit or 25, 25) then return out, nil, count end
+			for _, match in ipairs(found.items) do
+				count = count + 1
+				if count > skipped and #out < math.min(options.limit or 25, 25) then
+					local line = codeText.lineAt(starts, match.first)
+					out[#out + 1] = { documentId = doc.id, revision = doc.revision, line = line, column = codeText.column(doc.source, starts[line], match.first),
+						first = match.first, last = match.last, text = util.ellipsis(lines[line], 160) }
 				end
 			end
 		end
-		return out
+		return out, nil, count > skipped + #out and skipped + #out or nil, { complete = complete, retainedMatches = count }
 	end
+
 	function M.actions() M.init(); return state.actions end
 	function M.action(key) M.init(); for _, item in ipairs(state.actions) do if item.id == key then return item end end; return nil, "Action not found" end
 	function M.saveAction(ref, name, definitions, options)
 		local doc, why = M.resolve(ref); if not doc then return nil, why end
+		if doc.readOnly then return nil, "Read-only source snapshot; extract an editable copy before creating an action" end
 		options = options or {}; local defs, err = actions.definitions(definitions or {}); if not defs then return nil, err end
 		if options.source_revision ~= nil and options.source_revision ~= doc.revision then return nil, "stale_revision: source changed after the action comparison" end
 		if not nameValid(name) then return nil, "Invalid action name" end
@@ -376,7 +403,7 @@ return function(env)
 			item, err = M.action(options.id); if not item then return nil, err end
 			if options.expected_revision ~= item.revision then return nil, "stale_revision: refresh the action comparison" end
 			if options.source_revision == nil then return nil, "source_revision is required when updating an action" end
-		elseif #state.actions >= limits.actions then return nil, "The library holds up to 24 actions" end
+		elseif #state.actions >= limits.actions then return nil, "The library is full (" .. limits.actions .. " actions). Remove one before adding another." end
 		if not item then item = { id = id("action"), revision = 0, createdAt = clock.ms() }; state.actions[#state.actions + 1] = item end
 		item.name, item.source, item.inputs, item.description = name, doc.source, defs, util.ellipsis(options.description or "", 500)
 		item.documentId, item.sourceRevision, item.updatedAt, item.revision = doc.id, doc.revision, clock.ms(), item.revision + 1
@@ -392,34 +419,70 @@ return function(env)
 		if not fs.enabled then status("session_only", "This host has no filesystem"); return false, "Session only" end
 		if blocked then status("protected", blocked); return false, blocked end
 		if saving then schedule(); return false, "Save already in progress" end
-		if not dirty and known[slots[1]] and known[slots[2]] and known[slots[1]].valid and known[slots[2]].valid then return true end
-		saving = true; status("saving")
-		local revision = mutation
-		local snapshot = util.deepCopy(state); snapshot.generation = state.generation + 1
-		local valid, why = validate(snapshot)
-		local ok, raw = false, why
-		if valid then ok, raw = pcall(util.encode, valid) end
-		if not ok or #raw > limits.envelope then saving = false; status("failed", ok and "Workspace exceeds 12 MiB" or tostring(raw)); return false, M.storage.message end
-		local order = { slots[1], slots[2] }
-		if (known[order[1]] and known[order[1]].generation or -1) > (known[order[2]] and known[order[2]].generation or -1) then order[1], order[2] = order[2], order[1] end
-		for _, path in ipairs(order) do
-			local old = known[path]
-			if old and not old.valid and old.raw then
-				local recovery = "code/" .. id("recovery") .. ".json"
-				local preserved = fs.write(recovery, old.raw)
-				if not preserved or fs.read(recovery) ~= old.raw then saving = false; status("failed", "Cannot preserve damaged snapshot before replacement"); return false, M.storage.message end
+		saving = true
+		local function persist()
+			for _, path in ipairs(slots) do
+				local expected, present = known[path], fs.exists(path)
+				local current = present and fs.read(path) or nil
+				if present and current == nil then
+					status("failed", "Workspace data could not be read; drafts are retained and retry is required.")
+					return false, M.storage.message
+				end
+				if pendingWrites[path] and current == pendingWrites[path].raw then
+					expected, known[path] = pendingWrites[path], pendingWrites[path]
+					pendingWrites[path] = nil
+				end
+				if (expected and current ~= expected.raw) or (not expected and present) then
+					status("conflict", "Workspace changed on disk; live drafts are retained. Export them before reloading the external change.")
+					return false, M.storage.message
+				end
 			end
-			local wrote, reason = fs.write(path, raw)
-			local readback = wrote and fs.read(path)
-			if not wrote or readback ~= raw then
-				saving = false; dirty = true; status("failed", "Draft retained in memory. Save verification failed: " .. tostring(reason or path)); return false, M.storage.message
+			if not dirty and known[slots[1]] and known[slots[2]] and known[slots[1]].valid and known[slots[2]].valid then return true end
+			status("saving")
+			local revision = mutation
+			local snapshot = util.deepCopy(state); snapshot.generation = state.generation + 1
+			local valid, why = validate(snapshot)
+			if not valid then status("failed", why); return false, why end
+			local raw = util.encode(valid)
+			if #raw > limits.envelope then status("failed", "Workspace exceeds 12 MiB"); return false, M.storage.message end
+			local order = { slots[1], slots[2] }
+			if (known[order[1]] and known[order[1]].generation or -1) > (known[order[2]] and known[order[2]].generation or -1) then order[1], order[2] = order[2], order[1] end
+			for _, path in ipairs(order) do
+				local old = known[path]
+				if old and not old.valid and old.raw and not old.recovery then
+					local recovery = "code/" .. id("recovery") .. ".json"
+					local preserved = fs.write(recovery, old.raw)
+					if not preserved or fs.read(recovery) ~= old.raw then status("failed", "Cannot preserve damaged snapshot before replacement"); return false, M.storage.message end
+					old.recovery = recovery
+				end
+				pendingWrites[path] = { raw = raw, valid = valid, generation = valid.generation }
+				local called, wrote = pcall(fs.write, path, raw)
+				local readable, readback = pcall(fs.read, path)
+				if not readable or readback == nil then status("failed", "Draft retained in memory. Saved data could not be read back; retry is required."); return false, M.storage.message end
+				pendingWrites[path] = nil
+				-- A failed host write may still have changed the file. Remember our
+				-- readback so Retry does not mistake that damage for an external edit.
+				if not called or not wrote or readback ~= raw then
+					local decoded = readback and #readback <= limits.envelope and util.decode(readback)
+					local recovered = decoded and validate(decoded)
+					known[path] = { raw = readback, valid = recovered, generation = recovered and recovered.generation or -1 }
+					dirty = true; status("failed", "Draft retained in memory. The host did not save a complete snapshot; retry is required.")
+					return false, M.storage.message
+				end
+				known[path] = { raw = raw, valid = valid, generation = valid.generation }
+				state.generation = valid.generation
 			end
-			known[path] = { raw = raw, valid = valid, generation = valid.generation }
-			state.generation = valid.generation
+			dirty = mutation ~= revision
+			status(dirty and "dirty" or "saved"); if dirty then schedule() end
+			return true
 		end
-		saving = false; dirty = mutation ~= revision
-		status(dirty and "dirty" or "saved"); if dirty then schedule() end
-		return true
+		local ok, result, why = pcall(persist)
+		saving = false
+		if not ok then
+			dirty = true; status("failed", "Draft retained in memory. The host interrupted saving; retry is required.")
+			return false, M.storage.message
+		end
+		return result, why
 	end
 	function M.preflightReplacement()
 		if not M.initialized then return true end

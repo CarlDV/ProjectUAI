@@ -10,6 +10,7 @@ return function(env)
 	local files = env.require("runtime/code_files")
 	local runner = env.require("tools/code_runner")
 	local capture = env.require("runtime/remote_capture")
+	local sources = env.require("runtime/script_sources")
 	local caps = env.require("runtime/caps")
 	local clock = env.require("runtime/clock")
 	local M = {}
@@ -23,6 +24,11 @@ return function(env)
 		store.init()
 		local root = P.frame(parent, { name = "CodeWorkspace", size = UDim2.fromScale(1, 1), clip = true })
 		local panel = { root = root, alive = true, visible = true }
+		local sourceGeneration = 0
+		local activeDocument, activeDestination, activeSource = store.activeId(), store.workspace.destination, store.workspace.sourceId
+		local function cancelSource()
+			sourceGeneration = sourceGeneration + 1; sources.cancel(panel)
+		end
 		local views, containers, constructing, layingOut = {}, {}, {}, false
 		local navigate, layout, sync
 		local navigation = tabs.new(root, { name = "CodeDestinations", size = UDim2.new(1, 0, 0, common.barHeight()), onSelect = function(id) navigate(id) end })
@@ -31,7 +37,7 @@ return function(env)
 		local statusRule = P.frame(root, { name = "CodeStatusRule", size = UDim2.new(1, 0, 0, 1), bg = theme.color.borderSubtle })
 		local filePath = P.text(root, { name = "CodeFilePath", text = "", role = "caption", color = theme.color.textSecondary, truncate = true })
 		local actionBar = common.toolbar(root, { name = "EditorActions", gap = 4, padding = 4 })
-		local documentTabs, runButton, stopButton, moreButton
+		local documentTabs, runButton, saveButton, stopButton, moreButton
 		local function editor() return views.Editor end
 		local function newDocument()
 			local doc, why = store.create("Untitled " .. (#store.list() + 1) .. ".lua", "", { select = true })
@@ -47,7 +53,8 @@ return function(env)
 		end
 		local function find()
 			navigate("Editor")
-			if editor() and editor().openFind then editor().openFind(); return end
+			local target = store.workspace.sourceId and views["Large source"] or editor()
+			if target and target.openFind then target.openFind(); return end
 			forms.form("Find in script", { { key = "query", label = "Exact text", required = true } }, function(data)
 				clock.delay(0, function() if editor() then common.message(editor().find(data.query)) end end); return true
 			end, { key = "code-find", submit = "Find" })
@@ -71,7 +78,8 @@ return function(env)
 				{ label = "Copy source", value = "copy" }, { label = "Save as action…", value = "action" },
 				{ label = store.workspace.filesVisible == false and "Show files pane" or "Hide files pane", value = "filesPane" },
 				{ label = store.workspace.outputVisible and "Hide output pane" or "Show output pane", value = "outputPane" },
-				{ label = "Retry workspace autosave", value = "workspaceSave" }, { label = "Delete script…", value = "delete" },
+				{ label = "Extract editable copy / selection", value = "extract" }, { label = "Refresh source snapshot", value = "refreshSource" },
+				{ label = "Workspace save details", value = "storageDetails" }, { label = "Retry workspace autosave", value = "workspaceSave" }, { label = "Delete script…", value = "delete" },
 			}
 			common.menu(button or moreButton, "Editor actions", options, function(action)
 				local doc = store.active()
@@ -79,12 +87,36 @@ return function(env)
 				elseif action == "filesPane" then store.workspace.filesVisible = store.workspace.filesVisible == false; layout()
 				elseif action == "outputPane" then store.workspace.outputVisible = not store.workspace.outputVisible; layout()
 				elseif action == "workspaceSave" then local ok, why = store.saveNow(); if common.message(ok, why) then overlay.toast("Workspace saved", "good") end
+				elseif action == "storageDetails" then overlay.code({ title = "Workspace storage", code = store.storage.message or store.storage.state })
+				elseif action == "refreshSource" then
+					if store.workspace.sourceId and views["Large source"] then views["Large source"].refresh(); return end
+					local info = doc and doc.sourceInfo or {}
+					if not info.instanceId and not info.path then common.message(nil, "Reopen the original script or file to refresh its source."); return end
+					cancelSource(); local generation = sourceGeneration
+					clock.spawn(function()
+						local result, why = env.require("tools/source_documents").open({ instanceId = info.instanceId, path = not info.instanceId and info.path or nil,
+						decompile = info.method == "decompiled", refresh = true, focus = true }, { requestOwner = panel,
+							aborted = function() return not panel.alive or not panel.visible or generation ~= sourceGeneration or store.activeId() ~= doc.id or store.workspace.destination ~= "Editor" or store.workspace.sourceId ~= nil end })
+						if panel.alive and common.message(result, why) then navigate("Editor") end
+					end)
+				elseif action == "extract" and doc and not store.workspace.sourceId then
+					local first, after = 1, #doc.source + 1
+					if editor() then local box = editor().box; if box.SelectionStart > 0 and box.CursorPosition > 0 and box.SelectionStart ~= box.CursorPosition then first, after = math.min(box.SelectionStart, box.CursorPosition), math.max(box.SelectionStart, box.CursorPosition) end end
+					local copy, why = env.require("tools/source_documents").extract({ documentId = doc.id, first = first, after = after })
+					if common.message(copy, why) then navigate("Editor") end
+				elseif action == "extract" then common.message(nil, "Use the large source menu to extract the visible page or selection.")
 				elseif not doc then common.message(nil, "Open or create a script first.")
 				elseif action == "save" or action == "saveAs" then save(action == "saveAs")
 				elseif action == "version" then namedVersion()
 				elseif action == "rename" then forms.form("Rename script", { { key = "name", label = "Name", required = true, default = doc.name } }, function(data) return store.rename(doc.id, data.name) end)
 				elseif action == "close" then common.message(store.close(doc.id))
-				elseif action == "delete" then overlay.confirm({ title = "Delete " .. doc.name .. "?", description = "This removes the library draft and its history. Workspace files stay on disk.", danger = true, confirmText = "Delete", onConfirm = function() common.message(store.delete(doc.id)) end })
+				elseif action == "delete" then
+					local revision = doc.revision
+					overlay.confirm({ title = "Delete " .. doc.name .. "?", description = "This removes the library draft and its history. Workspace files stay on disk.", danger = true, confirmText = "Delete", onConfirm = function()
+						local current = store.resolve(doc.id)
+						if not current or current.revision ~= revision then common.message(nil, "This script changed after review. Review it again before deleting."); return end
+						common.message(store.delete(doc.id))
+					end })
 				elseif action == "find" then find()
 				elseif action == "line" then forms.form("Go to line", { { key = "line", label = "Line number", type = "number", min = 1, required = true } }, function(data) clock.delay(0, function() if panel.alive and editor() then editor().gotoLine(data.line) end end); return true end)
 				elseif action == "indent" or action == "outdent" then if editor() then editor().indent(action == "outdent") end
@@ -101,7 +133,7 @@ return function(env)
 			end,
 			onClose = function(id) if id ~= "new" then common.message(store.close(id)); sync() end end })
 		runButton = actionBar.add("Run", run, { variant = "primary", name = "RunCode", tight = true, minWidth = 52 })
-		actionBar.add("Save", function() save(false) end, { name = "SaveCodeFile", tight = true, minWidth = 56 })
+		saveButton = actionBar.add("Save", function() save(false) end, { name = "SaveCodeFile", tight = true, minWidth = 56 })
 		stopButton = actionBar.add("", function() runner.stop() end, { icon = "square", iconOnly = true, name = "StopCode" })
 		stopButton.instance.Visible = false
 		moreButton = actionBar.add("", more, { icon = "ellipsis", iconOnly = true, name = "CodeActions" })
@@ -125,20 +157,25 @@ return function(env)
 		end, true)
 		layout = function()
 			if not panel.alive or layingOut then return end; layingOut = true
+			if views["Large source"] and views["Large source"].sourceId ~= store.workspace.sourceId then
+				views["Large source"].destroy(); containers["Large source"]:Destroy(); views["Large source"], containers["Large source"] = nil, nil
+			end
 			local id = store.workspace.destination
 			local editing = id == "Editor"
 			local barHeight = common.barHeight()
+			local compact = root.AbsoluteSize.Y < 360
+			saveButton.instance.Visible = root.AbsoluteSize.X >= 380
 			local actionsWidth = actionBar.width()
-			documentTabs.root.Visible, actionBar.root.Visible, filePath.Visible = editing, editing, editing
+			documentTabs.root.Visible, actionBar.root.Visible, filePath.Visible = editing, editing, editing and not compact
 			documentTabs.root.Size = UDim2.new(1, -actionsWidth, 0, barHeight)
 			actionBar.root.Position, actionBar.root.Size = UDim2.new(1, -actionsWidth, 0, barHeight), UDim2.fromOffset(actionsWidth, barHeight)
 			filePath.Position, filePath.Size = UDim2.fromOffset(12, barHeight * 2), UDim2.new(1, -24, 0, 24)
-			local top = editing and barHeight * 2 + 24 or barHeight
+			local top = editing and barHeight * 2 + (compact and 0 or 24) or barHeight
 			body.Position, body.Size = UDim2.fromOffset(0, top), UDim2.new(1, 0, 1, -top - theme.size.codeStatus)
 			status.Position, status.Size = UDim2.new(0, 10, 1, -theme.size.codeStatus), UDim2.new(1, -20, 0, theme.size.codeStatus)
 			statusRule.Position = UDim2.new(0, 0, 1, -theme.size.codeStatus)
 			local actual = editing and store.workspace.sourceId and "Large source" or id
-			local dockFiles = editing and root.AbsoluteSize.X >= 640 and store.workspace.filesVisible ~= false
+			local dockFiles = editing and root.AbsoluteSize.X >= 640 and not compact and store.workspace.filesVisible ~= false
 			local dockOutput = editing and root.AbsoluteSize.X >= 620 and body.AbsoluteSize.Y >= 250 and store.workspace.outputVisible == true
 			getView(actual); if dockFiles then getView("Files") end; if dockOutput then getView("Output") end
 			for key, view in pairs(views) do
@@ -176,13 +213,13 @@ return function(env)
 			end
 			documents[#documents + 1] = { id = "new", label = "+", closable = false }
 			documentTabs.set(documents, store.activeId())
-			runButton.setEnabled(caps.exec and doc ~= nil and not store.workspace.sourceId and not runner.busy())
+			runButton.setEnabled(caps.exec and doc ~= nil and not store.workspace.sourceId and not doc.readOnly and not runner.busy())
 			stopButton.setEnabled(runner.busy())
 			local stopping = runner.busy()
 			if stopButton.instance.Visible ~= stopping then stopButton.instance.Visible = stopping; layout() end
 			local binding = doc and files.binding(doc.id)
 			filePath.Text = store.workspace.sourceId and "Read-only source · extract a selection to edit" or binding and (files.root .. " / " .. binding.path:gsub("/", " / ")) or doc and (doc.provenance or ("Workspace draft / " .. doc.name)) or "Open a file or create a script with +"
-			local states = { saved = "Workspace saved", dirty = "Autosave pending", saving = "Saving workspace…", session_only = "Session only", failed = "Autosave failed", protected = "Workspace protected" }
+			local states = { saved = "Workspace saved", dirty = "Autosave pending", saving = "Saving workspace…", session_only = "Session only", failed = "Retry required", conflict = "Conflict · external workspace change", protected = "Workspace protected" }
 			local text = states[store.storage.state] or store.storage.state
 			if store.workspace.destination == "Editor" and doc then
 				local line, column = 1, 1; if editor() then line, column = editor().position() end
@@ -202,7 +239,13 @@ return function(env)
 			end
 			layout(); sync()
 		end
-		local offStore = store.changed:connect(function(event) sync(); if event.kind == "large_source" or event.kind == "preference" then layout() end end)
+		local offStore = store.changed:connect(function(event)
+			if activeDocument ~= store.activeId() or activeDestination ~= store.workspace.destination or activeSource ~= store.workspace.sourceId then
+				cancelSource()
+				activeDocument, activeDestination, activeSource = store.activeId(), store.workspace.destination, store.workspace.sourceId
+			end
+			sync(); if event.kind == "large_source" or event.kind == "preference" then layout() end
+		end)
 		local offStorage = store.storageChanged:connect(sync)
 		local offRun = runner.changed:connect(function(event) sync(); if event.kind == "rejected" then common.message(nil, event.text) end end)
 		local offCapture = capture.changed:connect(sync)
@@ -214,12 +257,13 @@ return function(env)
 			if focused and (not editor() or focused ~= editor().box) then return end
 			local modifier = held("LeftControl") or held("RightControl") or held("LeftMeta") or held("RightMeta")
 			if modifier then
+				local editing = store.workspace.destination == "Editor"
 				if key.KeyCode == Enum.KeyCode.Return and store.workspace.destination == "Editor" then run()
-				elseif key.KeyCode == Enum.KeyCode.S then save(held("LeftShift") or held("RightShift"))
-				elseif key.KeyCode == Enum.KeyCode.F then find()
+				elseif key.KeyCode == Enum.KeyCode.S and editing then save(held("LeftShift") or held("RightShift"))
+				elseif key.KeyCode == Enum.KeyCode.F and editing then find()
 				elseif key.KeyCode == Enum.KeyCode.O or key.KeyCode == Enum.KeyCode.P then navigate("Files")
 				elseif key.KeyCode == Enum.KeyCode.N then newDocument()
-				elseif key.KeyCode == Enum.KeyCode.Z and not focused then if held("LeftShift") or held("RightShift") then common.message(store.redoSource()) else common.message(store.undoSource()) end end
+				elseif key.KeyCode == Enum.KeyCode.Z and editing and not focused and not store.workspace.sourceId then if held("LeftShift") or held("RightShift") then common.message(store.redoSource()) else common.message(store.undoSource()) end end
 			elseif focused and key.KeyCode == Enum.KeyCode.Tab then editor().indent(held("LeftShift") or held("RightShift"))
 			elseif not focused and not processed then
 				local view = views[store.workspace.destination]
@@ -233,12 +277,12 @@ return function(env)
 			end
 		end)
 		root:GetPropertyChangedSignal("AbsoluteSize"):Connect(layout)
-		function panel.setVisible(visible) panel.visible = visible; layout(); sync() end
+		function panel.setVisible(visible) panel.visible = visible; if not visible then cancelSource() end; layout(); sync() end
 		function panel.destroy()
 			if not panel.alive then return end; panel.alive = false
 			input:Disconnect(); offStore(); offStorage(); offRun(); offCapture(); fileDivider.destroy(); outputDivider.destroy()
 			for _, view in pairs(views) do if view.destroy then view.destroy() end end
-			store.saveNow(); root:Destroy()
+			cancelSource(); store.saveNow(); root:Destroy()
 		end
 		panel.navigate, panel.views = navigate, views
 		layout(); sync(); return panel

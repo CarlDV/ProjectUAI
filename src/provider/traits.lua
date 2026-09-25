@@ -92,7 +92,8 @@ return function(env)
 	function M.contextWindow(model)
 		local id = tostring(model or ""):lower()
 		local over = tonumber((config.get("agent.forceContext", {}) or {})[id])
-		return over or M.of(model).context
+		if over and over >= 1 and over < math.huge then return math.floor(over) end
+		return M.of(model).context
 	end
 
 	function M.maxOutput(model)

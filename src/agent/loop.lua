@@ -16,6 +16,7 @@ return function(env)
 	local hooks = env.require("agent/hooks")
 	local providers = env.require("provider/registry")
 	local chat = env.require("provider/chat")
+	local stream = env.require("agent/stream")
 
 	local M = {}
 
@@ -48,6 +49,8 @@ return function(env)
 	-- has failed does the turn fail, and the message names the first failure --
 	-- which is almost always the informative one.
 	local function complete(session, request, recoverContext)
+		local epoch = session.toolEpoch
+		local function aborted() return session.toolEpoch ~= epoch or session.aborted() end
 		local chain = providers.chain()
 		if #chain == 0 then
 			return nil, "No provider is configured. Open the Providers panel and add one."
@@ -55,7 +58,7 @@ return function(env)
 
 		local firstError
 		for index, record in ipairs(chain) do
-			if session.aborted() then return nil, "aborted" end
+			if aborted() then return nil, "aborted" end
 			if index > 1 then
 				session.emit("provider:switch", {
 					from = chain[index - 1].label,
@@ -66,11 +69,14 @@ return function(env)
 
 			local recovered = false
 			while true do
-				if session.aborted() then return nil, "aborted" end
+				if aborted() then return nil, "aborted" end
 				local payload = { record = record, request = request, session = session }
 				hooks.run("preRequest", payload)
+				local accounting = session.ctx.observeRequest(payload.request.messages, payload.request.tools, record)
+				local preview = stream.new(session, record.model, aborted)
 
 				session.emit("request:start", {
+					streamId = preview.id,
 					provider = record.label,
 					providerId = record.id,
 					model = record.model,
@@ -89,8 +95,9 @@ return function(env)
 					temperature = payload.request.temperature,
 					maxTokens = payload.request.maxTokens,
 					extra = payload.request.extra,
-					aborted = session.aborted,
+					aborted = aborted,
 					onRetry = function(info)
+						if aborted() then return end
 						session.emit("request:retry", {
 							provider = record.label,
 							attempt = info.attempt,
@@ -100,11 +107,18 @@ return function(env)
 							reason = info.reason,
 						})
 					end,
-					onFrame = request.onFrame,
+					onFrame = function(frame)
+						if aborted() then return end
+						preview.feed(frame)
+						if request.onFrame then request.onFrame(frame) end
+					end,
 				})
+				preview.close()
 
+				if aborted() then return nil, "aborted" end
 				if result then
 					session.emit("request:done", {
+						streamId = preview.id,
 						provider = record.label,
 						model = result.model or record.model,
 						ms = clock.since(started),
@@ -113,17 +127,20 @@ return function(env)
 					})
 					local after = { result = result, record = record, session = session }
 					hooks.run("postResponse", after)
-					return after.result, nil, record
+					if util.trim(after.result.model) == "" then after.result.model = record.model end
+					after.result.streamId = preview.id
+					return after.result, nil, record, accounting
 				end
 
 				session.emit("request:done", {
+					streamId = preview.id,
 					provider = record.label,
 					model = record.model,
 					ms = clock.since(started),
 					error = err,
 				})
 				if err == "aborted" or session.aborted() then return nil, "aborted" end
-				if response and response.terminal then return nil, err end
+				if (response and response.terminal) or env.require("net/http").terminal(err) then return nil, err end
 				-- Recover against the provider that actually refused the prompt, before
 				-- failover. A smaller fallback model can have a different window.
 				if recovered or not chat.contextOverflow(err) or not recoverContext or not recoverContext(record) then
@@ -142,6 +159,7 @@ return function(env)
 	-- affordable. If it fails, the context still trims -- it just loses the note.
 	local function summariser(session)
 		return function(transcript)
+			local epoch = session.toolEpoch
 			local record = providers.active()
 			if not record then return nil end
 			local result = chat.complete(record, { session = session,
@@ -154,6 +172,7 @@ return function(env)
 				attempts = 1,
 				aborted = session.aborted,
 			})
+			if session.toolEpoch ~= epoch or session.aborted() then return nil end
 			return result and result.content or nil
 		end
 	end
@@ -210,16 +229,6 @@ return function(env)
 			session.emit("status", { text = turn == 1 and "Thinking" or ("Working (step " .. turn .. ")") })
 
 			local record = providers.active()
-			local before = ctx.tokens()
-			-- The "Summarise old turns" switch gates the paid summary call, not the
-			-- trimming: a live conversation is always kept inside the window, but with
-			-- the switch off the dropped turns leave a plain note rather than an
-			-- LLM-written summary. The budget adapts to the model's own context window.
-			local summarise = config.get("agent.compaction", true) ~= false and summariser(session) or nil
-			local summary = ctx.compact(summarise, { model = record and record.model })
-			if summary then
-				session.emit("compact", { summary = summary, before = before, after = ctx.tokens() })
-			end
 			-- A session may carry its own brief. A subagent does: it answers to the
 			-- parent agent rather than to the user, so inheriting the main prompt
 			-- would have it write a chat reply instead of a report.
@@ -249,7 +258,14 @@ return function(env)
 				onFrame = session.onFrame,
 			}
 
-			local result, err, usedRecord = complete(session, request, function(refusedRecord)
+			ctx.observeRequest(request.messages, request.tools, record)
+			local before = ctx.tokens()
+			local summarise = config.get("agent.compaction", true) ~= false and summariser(session) or nil
+			local summary = ctx.compact(summarise, { model = record and record.model })
+			if summary then session.emit("compact", { summary = summary, before = before, after = ctx.tokens() }) end
+			request.messages = ctx.wire(systemText)
+
+			local result, err, usedRecord, accounting = complete(session, request, function(refusedRecord)
 				if session.aborted() then return false end
 				local prior = ctx.tokens()
 				local folded = ctx.compact(summarise, { model = refusedRecord.model, force = true })
@@ -269,33 +285,34 @@ return function(env)
 			end
 
 			local spent = usage.record(result.usage, result.model or (record and record.model), {
-				prompt = usage.estimateMessages(request.messages),
+				prompt = accounting and (accounting.history + accounting.estimate) or usage.estimateMessages(request.messages),
 				completion = usage.estimateText(result.content) + usage.estimateText(result.reasoning),
 			}, record)
 			session.emit("usage", { session = usage.session, turn = usage.turn })
 
 			if util.trim(result.reasoning) ~= "" then
-				session.emit("assistant:reasoning", { text = result.reasoning, requestId = result.requestId })
+				session.emit("assistant:reasoning", { text = result.reasoning, requestId = result.requestId, streamId = result.streamId, model = result.model })
 			end
-			if util.trim(result.content) ~= "" then
-				session.emit("assistant:text", { text = result.content, final = #result.toolCalls == 0, requestId = result.requestId })
+			local displayed = result.content or ""
+			if #result.toolCalls == 0 and result.finish == "length" then
+				displayed = displayed .. "\n\n[The provider reached its output limit before finishing this reply.]"
+			elseif #result.toolCalls == 0 and result.finish == "content_filter" then
+				displayed = displayed .. "\n\n[The provider filtered part of this reply.]"
 			end
+			if util.trim(displayed) ~= "" then
+				session.emit("assistant:text", { text = displayed, final = #result.toolCalls == 0, requestId = result.requestId, streamId = result.streamId, model = result.model })
+			end
+			session.emit("assistant:complete", { streamId = result.streamId })
 
 			-- Calibrate the context estimate against what the provider actually
 			-- counted for this prompt, before the reply is stored: the real figure
 			-- includes the system prompt and tool schemas the message estimate omits,
 			-- so the next compaction check measures true window pressure.
-			if spent and not spent.estimated then ctx.calibrate(spent.prompt) end
+			if spent and not spent.estimated then ctx.calibrate(spent.prompt, accounting) end
 			ctx.pushAssistant(result)
 
 			if #result.toolCalls == 0 then
-				finalText = result.content
-				if result.finish == "length" then
-					finalText = finalText .. "\n\n[the reply was cut off by the token limit]"
-				elseif result.finish == "content_filter" then
-					finalText = (util.trim(finalText) ~= "" and finalText or "") ..
-						"\n\n[the provider filtered part of this reply]"
-				end
+				finalText = displayed
 				break
 			end
 

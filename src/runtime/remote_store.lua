@@ -7,6 +7,11 @@ return function(env)
 	local M = { changed = env.require("runtime/signal").new("remote-records"), generation = 0, sequence = 0,
 		limits = { records = 1000, bytes = 4 * 1024 * 1024, pending = 128, pins = 10, pinBytes = 1024 * 1024 } }
 	local records, index, pins, cursors, bytes, pending = {}, {}, {}, {}, 0, 0
+	local function measure(record)
+		local size = #util.encode(record)
+		repeat record.bytes = size; size = #util.encode(record) until size == record.bytes
+		return record.bytes
+	end
 	local function counters() return { admitted = 0, ignored = 0, evicted = 0, truncated = 0, observerFailed = 0, pendingOverflow = 0 } end
 	M.counters, M.lifetime = counters(), counters()
 	function M.count(kind, count) M.counters[kind] = (M.counters[kind] or 0) + (count or 1); M.lifetime[kind] = (M.lifetime[kind] or 0) + (count or 1) end
@@ -16,6 +21,11 @@ return function(env)
 			name = record.name, className = record.className, method = record.method, direction = record.direction, origin = record.origin,
 			outcome = record.outcome, argumentCount = record.arguments.count, resultCount = record.results and record.results.count,
 			complete = record.arguments.complete, replayOf = record.replayOf, startedAt = record.startedAt, invocationId = record.invocationId, offline = record.offline == true }
+	end
+	function M.capabilities(record)
+		local outgoing = record and record.direction == "outgoing"
+		return { diagnostic = record ~= nil, export = record ~= nil, caller = record and record.caller and record.caller.scriptId ~= nil or false,
+			replay = outgoing and not record.offline, portable = outgoing and not record.offline, editArguments = outgoing == true }
 	end
 	local function evict()
 		while #records > M.limits.records or bytes > M.limits.bytes do
@@ -35,6 +45,7 @@ return function(env)
 			if pending >= M.limits.pending then record.outcome = "completion_unobserved"; M.count("pendingOverflow") else pending = pending + 1 end
 		end
 		if not graph.complete then M.count("truncated") end
+		measure(record)
 		records[#records + 1], index[record.id], bytes = record, record, bytes + record.bytes
 		M.count("admitted"); evict(); notify("record", record.id)
 		return { id = record.id, generation = M.generation }
@@ -42,20 +53,36 @@ return function(env)
 	function M.finish(token, outcome, result, reason)
 		if not token or token.generation ~= M.generation then return end
 		local record = index[token.id] or pins[token.id]
-		if not record or record.outcome ~= "pending" then return end
-		pending = math.max(0, pending - 1); record.outcome, record.revision = outcome, record.revision + 1
+		if not record or (record.outcome ~= "pending" and not record.awaitingCompletion) then return end
+		if record.outcome == "pending" then pending = math.max(0, pending - 1) end
+		local before = record.bytes
+		record.awaitingCompletion = outcome == "completion_unobserved" or nil
+		record.outcome, record.revision = outcome, record.revision + 1
 		record.error = reason and util.ellipsis(reason, 1000) or nil
 		if result then
-			record.results = values.snapshot(result); local added = record.results.bytes
-			record.bytes = record.bytes + added; if index[record.id] then bytes = bytes + added end
+			record.results = values.snapshot(result)
 			if not record.results.complete then M.count("truncated") end
 		end
-		record.ms = clock.ms() - record.startedAt; evict(); notify("outcome", record.id)
+		record.ms = clock.ms() - record.startedAt; measure(record)
+		if index[record.id] then bytes = bytes + record.bytes - before end
+		evict(); M.enforcePins(); notify("outcome", record.id)
 	end
 	function M.stopPending()
-		for _, record in ipairs(records) do if record.outcome == "pending" then record.outcome, record.revision = "completion_unobserved", record.revision + 1 end end
-		for _, record in pairs(pins) do if record.outcome == "pending" then record.outcome, record.revision = "completion_unobserved", record.revision + 1 end end
-		pending = 0; notify("stop")
+		local seen = {}
+		local function stop(record)
+			if seen[record.id] then return end
+			seen[record.id] = true
+			if record.outcome == "pending" or record.awaitingCompletion then
+				local before = record.bytes
+				record.outcome, record.awaitingCompletion = "completion_unobserved", nil
+				record.revision, record.ms = record.revision + 1, clock.ms() - record.startedAt
+				measure(record)
+				if index[record.id] then bytes = bytes + record.bytes - before end
+			end
+		end
+		for _, record in ipairs(records) do stop(record) end
+		for _, record in pairs(pins) do stop(record) end
+		pending = 0; evict(); M.enforcePins(); notify("stop")
 	end
 	function M.get(key, revision)
 		local record = index[key] or pins[key]
@@ -72,12 +99,31 @@ return function(env)
 		pins[key] = record; if not record.offline then refs.pin(record.remoteId, record) end; return true
 	end
 	function M.unpin(key) if pins[key] then if not index[key] and pins[key].outcome == "pending" then pending = math.max(0, pending - 1) end; refs.release(pins[key]); pins[key] = nil end end
+	function M.enforcePins()
+		local total, ordered = 0, {}
+		for _, record in pairs(pins) do total = total + record.bytes; ordered[#ordered + 1] = record end
+		table.sort(ordered, function(a, b) return a.sequence < b.sequence end)
+		for _, record in ipairs(ordered) do
+			if total <= M.limits.pinBytes then break end
+			total = total - record.bytes; M.unpin(record.id); M.count("pinsExpired")
+		end
+	end
+	function M.annotateCaller(key, provenance)
+		local record = index[key] or pins[key]; if not record then return nil, "expired: capture was cleared or evicted" end
+		local before = record.bytes
+		record.sourceProvenance = util.deepCopy(provenance); record.revision = record.revision + 1
+		measure(record); if index[key] then bytes = bytes + record.bytes - before end
+		evict(); M.enforcePins(); notify("caller", key); return true
+	end
 	function M.clear()
 		for key in pairs(pins) do M.unpin(key) end
 		records, index, cursors, bytes, pending = {}, {}, {}, 0, 0
 		M.generation = M.generation + 1; M.counters = counters(); notify("clear")
 	end
-	function M.state() return { retained = #records, bytes = bytes, generation = M.generation, oldest = records[1] and records[1].sequence, newest = M.sequence, counters = util.copy(M.counters), lifetime = util.copy(M.lifetime), offlineSessionId = "offline:" .. refs.epoch } end
+	function M.state()
+		local pinBytes = 0; for _, record in pairs(pins) do pinBytes = pinBytes + record.bytes end
+		return { retained = #records, bytes = bytes, pins = util.count(pins), pinBytes = pinBytes, generation = M.generation, oldest = records[1] and records[1].sequence, newest = M.sequence, counters = util.copy(M.counters), lifetime = util.copy(M.lifetime), offlineSessionId = "offline:" .. refs.epoch }
+	end
 	-- The UI follows the newest *matching* calls. Filtering only the last N raw
 	-- sequences hides quiet remotes as soon as a busy remote fills that window.
 	function M.latest(args)
@@ -178,7 +224,27 @@ return function(env)
 			offset = offset, nextByteOffset = last < #raw and last + 1 or nil, retainedBytes = #raw, originalBytes = node.length or #raw, truncated = node.truncated == true }
 	end
 	function M.exportRecords(keys)
-		local out = {}; for _, key in ipairs(keys) do local record, why = M.get(key); if not record then return nil, why end; out[#out + 1] = record end; return out
+		local snapshot, why = M.freeze(keys); if not snapshot then return nil, why end; return snapshot.items
+	end
+	function M.freeze(keys)
+		if keys and (type(keys) ~= "table" or not util.isArray(keys) or #keys > 1000) then return nil, "Export selection exceeds 1,000 records" end
+		local snapshot = { items = {}, throughSequence = M.sequence, generation = M.generation, snapshotAt = clock.ms(), bytes = 0 }
+		local seen = {}
+		local function append(record)
+			if seen[record.id] then return nil, "Duplicate export record" end
+			seen[record.id] = true
+			if snapshot.bytes + record.bytes > M.limits.bytes + M.limits.pinBytes then return nil, "Export snapshot exceeds its byte budget" end
+			snapshot.items[#snapshot.items + 1] = util.deepCopy(record); snapshot.bytes = snapshot.bytes + record.bytes; return true
+		end
+		if keys then for _, key in ipairs(keys) do local record, why = M.get(key); if not record then return nil, why end; local ok, err = append(record); if not ok then return nil, err end end
+		else for _, record in ipairs(records) do if record.sequence <= snapshot.throughSequence then local ok, why = append(record); if not ok then return nil, why end end end end
+		return snapshot
+	end
+	function M.exportPage(snapshot, offset, limit)
+		offset, limit = math.max(1, math.floor(tonumber(offset) or 1)), math.max(1, math.min(100, math.floor(tonumber(limit) or 100)))
+		local page = { items = {}, throughSequence = snapshot.throughSequence, generation = snapshot.generation }
+		for i = offset, math.min(#snapshot.items, offset + limit - 1) do page.items[#page.items + 1] = snapshot.items[i] end
+		page.nextOffset = offset + #page.items <= #snapshot.items and offset + #page.items or nil; return page
 	end
 	function M.import(list)
 		if type(list) ~= "table" or not util.isArray(list) or #list > M.limits.records then return nil, "Import record limit exceeded" end

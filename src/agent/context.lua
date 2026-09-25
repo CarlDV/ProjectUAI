@@ -49,6 +49,16 @@ return function(env)
 			overhead = 0,
 			calibrated = false,
 		}
+		local calibration, promptEstimate, promptKey
+		local function providerKey(record)
+			if type(record) ~= "table" then return record end
+			return tostring(record.id or "") .. "|" .. tostring(record.baseUrl or "") .. "|" .. tostring(record.model or "")
+		end
+		local function overheadFor(record)
+			local key = providerKey(record)
+			if key ~= nil and promptKey ~= nil and key ~= promptKey then return promptEstimate or 0, false end
+			return math.max(ctx.overhead or 0, 0), ctx.calibrated
+		end
 
 		function ctx.push(message)
 			message.at = message.at or clock.ms()
@@ -118,27 +128,51 @@ return function(env)
 		-- context window is known, compaction starts at a fraction of it, so a small-
 		-- window model compacts on its own without the user tuning a number for it.
 		function ctx.limitFor(model)
-			local configured = math.max(tonumber(config.get("agent.contextTokens", 24000)) or 24000, 1000)
+			local configured = tonumber(config.get("agent.contextTokens", 24000)) or 24000
+			if configured ~= configured or configured == math.huge then configured = 24000 end
+			configured = math.max(configured, 1000)
 			local window = model and env.require("provider/traits").contextWindow(model) or nil
 			if not window then return configured end
 			local fraction = tonumber(config.get("agent.contextFraction", 0.8)) or 0.8
+			if fraction ~= fraction then fraction = 0.8 end
 			fraction = math.max(0.3, math.min(fraction, 0.95))
 			return math.max(1000, math.min(configured, math.floor(window * fraction)))
 		end
 
 		-- What the next request is expected to actually cost the window: the message
 		-- estimate plus the measured overhead of the system prompt and tool schemas.
-		function ctx.pressure()
-			return ctx.tokens() + math.max(ctx.overhead or 0, 0)
+		function ctx.pressure(record)
+			return ctx.tokens() + overheadFor(record)
+		end
+
+		function ctx.observeRequest(messages, tools, record)
+			local history = ctx.tokens()
+			local toolTokens = tools and #tools > 0 and usage.estimateText(util.encode(tools)) or 0
+			promptEstimate = math.max(0, usage.estimateMessages(messages) + toolTokens - history)
+			promptKey = providerKey(record)
+			ctx.calibrated = calibration ~= nil and calibration.key == promptKey
+			ctx.overhead = ctx.calibrated and math.max(0, calibration.overhead + promptEstimate - calibration.estimate) or promptEstimate
+			return { history = history, estimate = promptEstimate, key = promptKey }
+		end
+
+		function ctx.breakdown(record)
+			local system, calibrated = overheadFor(record)
+			local messages = usage.estimateMessages(ctx.messages)
+			local summary = ctx.summary and usage.estimateText(ctx.summary) or 0
+			return { system = system, messages = messages, summary = summary, used = system + messages + summary,
+				calibrated = calibrated, estimatedPrompt = promptEstimate ~= nil }
 		end
 
 		-- Fold the provider's reported prompt-token count for the request just sent
 		-- into the overhead estimate. Called before the reply is stored, so
 		-- ctx.tokens() still reflects exactly what was on the wire.
-		function ctx.calibrate(promptTokens)
+		function ctx.calibrate(promptTokens, request)
 			local real = tonumber(promptTokens)
-			if not real or real <= 0 then return end
-			ctx.overhead = math.max(0, real - ctx.tokens())
+			if not real or real <= 0 or real ~= real or real == math.huge then return end
+			request = request or { history = ctx.tokens(), estimate = promptEstimate or 0, key = promptKey }
+			calibration = { key = request.key, estimate = request.estimate, overhead = math.max(0, real - request.history) }
+			promptKey, promptEstimate = request.key, request.estimate
+			ctx.overhead = calibration.overhead
 			ctx.calibrated = true
 		end
 
@@ -373,6 +407,7 @@ return function(env)
 			ctx.dropped = 0
 			ctx.overhead = 0
 			ctx.calibrated = false
+			calibration, promptEstimate, promptKey = nil, nil, nil
 		end
 
 		-- Persistence keeps the fields a reload needs and drops the derived ones.

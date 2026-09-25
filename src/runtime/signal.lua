@@ -13,10 +13,12 @@ return function(env)
 	end
 
 	function Signal:connect(fn)
+		if type(fn) ~= "function" then return function() end end
 		local entry = { fn = fn, alive = true }
 		self.handlers[#self.handlers + 1] = entry
 		return function()
 			entry.alive = false
+			entry.fn = nil; self:compact()
 		end
 	end
 
@@ -34,15 +36,18 @@ return function(env)
 	-- contained: one broken subscriber must not stop the rest of the interface
 	-- from seeing an event.
 	function Signal:fire(...)
+		self.depth = (self.depth or 0) + 1
+		if self.depth > 32 then self.depth = self.depth - 1; self.dropped = (self.dropped or 0) + 1; return end
+		self.firing = true
 		local snapshot = {}
 		for index, entry in ipairs(self.handlers) do snapshot[index] = entry end
 		for _, entry in ipairs(snapshot) do
 			if entry.alive then
 				local ok, err = pcall(entry.fn, ...)
-				if not ok and self.onError then self.onError(err) end
+				if not ok and self.onError then pcall(self.onError, err) end
 			end
 		end
-		self:compact()
+		self.depth = self.depth - 1; self.firing = self.depth > 0; self:compact()
 	end
 
 	function Signal:compact()
@@ -63,7 +68,7 @@ return function(env)
 	end
 
 	function Signal:clear()
-		for _, entry in ipairs(self.handlers) do entry.alive = false end
+		for _, entry in ipairs(self.handlers) do entry.alive, entry.fn = false, nil end
 		self.handlers = {}
 	end
 

@@ -11,6 +11,7 @@ return function(env)
 	local M = { changed = env.require("runtime/signal").new("remote-session"), status = "idle", revision = 0,
 		ruleRevision = 0, rules = {}, filter = { include = {}, exclude = {} }, view = { y = 0, draft = {}, filter = "" } }
 	local connections, incoming, serial, disposed = {}, {}, 0, false
+	local durationTick
 	local incomingCount, incomingLimit = 0, 2048
 	local correlation = setmetatable({}, { __mode = "k" })
 	local main = {}; local root, scope, mode, owner = nil, {}, "uai", nil
@@ -18,6 +19,9 @@ return function(env)
 	local function emit() M.revision = M.revision + 1; M.changed:fire({ status = M.status, revision = M.revision, sessionId = M.sessionId }) end
 	local function remote(object) local class = object.ClassName; return class == "RemoteEvent" or class == "UnreliableRemoteEvent" or class == "RemoteFunction" end
 	function M.state()
+		if M.expiresAt and clock.ms() >= M.expiresAt and (M.status == "running" or M.status == "paused") then
+			M.stop("duration reached")
+		end
 		local result = store.state()
 		result.status, result.sessionId, result.revision = M.status, M.sessionId, M.revision
 		result.mode, result.backend, result.monitored, result.omitted = mode, M.backend, incomingCount, M.omitted or 0
@@ -36,7 +40,8 @@ return function(env)
 		text[#text + 1] = "Direct methods: " .. direct.state .. ". " .. (direct.reason or "")
 		text[#text + 1] = "Intercepted Invoke results: " .. outcomes.state .. ". " .. (outcomes.reason or "Original calls are forwarded; completion is not claimed.")
 		text[#text + 1] = "Selected mode: " .. mode .. (M.backend and (" / " .. M.backend) or "") .. ". Scope omissions: " .. current.omitted .. "."
-		text[#text + 1] = "Routing probes use owned detached objects and send no game traffic. They do not prove every host's error, yield, or hook-coexistence behavior."
+		text[#text + 1] = "Routing probes use owned detached objects and do not invoke the predecessor when intercepted. Network behavior is host-dependent; probes do not prove forwarding, errors, yields, or hook coexistence."
+		text[#text + 1] = "After Stop: " .. current.coverage.wrapperStatus .. "."
 		return table.concat(text, "\n")
 	end
 	function M.ruleFor(object, method)
@@ -62,7 +67,10 @@ return function(env)
 		local caller = { status = "unavailable" }
 		if options.hook and caps.fn.getcallingscript then
 			local got, script = pcall(caps.fn.getcallingscript)
-			if got and typeof(script) == "Instance" then caller = { status = "available", scriptId = refs.id(script, true), provenance = "host getcallingscript" } end
+			if got and typeof(script) == "Instance" then
+				local description = refs.describe(script, true)
+				caller = { status = "available", scriptId = description.instanceId, name = description.name, className = description.className, runtimeEpoch = refs.epoch, capturedAt = clock.ms(), provenance = "host getcallingscript (unverified attribution)" }
+			end
 		end
 		local outcome = options.blocked and "blocked" or options.unobserved and "completion_unobserved" or direction == "incoming" and "received" or "pending"
 		local good, token = pcall(store.begin, { sessionId = M.sessionId, remoteId = info.instanceId, name = util.ellipsis(info.name or "Remote", 160), className = info.className,
@@ -87,8 +95,8 @@ return function(env)
 		end
 		local current = correlation[thread()]
 		if current and current.object == object and current.method == method then return nil end
-		local origin = "unknown"
-		if caps.fn.checkcaller then local ok, own = pcall(caps.fn.checkcaller); if ok then origin = own and "executor" or "game" end end
+		local origin = "hooked_unknown"
+		if caps.remoteHooks.attribution == "verified" and caps.fn.checkcaller then local ok, own = pcall(caps.fn.checkcaller); if ok then origin = own and "executor" or "game" end end
 		return M.begin(object, method, packed, { hook = true, origin = origin, blocked = blocked,
 			unobserved = method == "InvokeServer" and caps.remoteHooks.invokeOutcomes.state ~= "verified" })
 	end
@@ -100,7 +108,8 @@ return function(env)
 		M.rules = {}; M.ruleRevision = M.ruleRevision + 1
 	end
 	function M.stop(reason)
-		M.status = disposed and "disposed" or "stopped"; M.expiresAt = nil
+		if durationTick then durationTick(); durationTick = nil end
+		M.status = disposed and "disposed" or reason == "duration reached" and "expired" or "stopped"; M.expiresAt = nil
 		disconnect(); store.stopPending(); refs.release(M); root, scope = nil, {}; M.reason = reason; emit(); return M.state()
 	end
 	local function subscribe(object, sessionId)
@@ -136,13 +145,14 @@ return function(env)
 			if M.configuration == desired then return M.state() end
 			if options.expected_revision ~= M.revision then return nil, "stale_revision: a capture is already active" end
 		end
-		if type(options.ids or {}) ~= "table" or #(options.ids or {}) > 128 then return nil, "Choose at most 128 exact remotes" end
+		if type(options.ids or {}) ~= "table" or not util.isArray(options.ids or {}) or #(options.ids or {}) > 128 then return nil, "Choose at most 128 exact remotes" end
 		local targets, newScope, newRoot = {}, {}, nil
-		for _, key in ipairs(options.ids or {}) do local object, why = refs.resolve(key); if not object then return nil, why end; if not remote(object) then return nil, "Capture targets must be remotes" end; targets[#targets + 1], newScope[key] = object, true end
+		for _, key in ipairs(options.ids or {}) do local object, why = refs.resolve(key); if not object then return nil, why end; if not remote(object) then return nil, "Capture targets must be remotes" end; if not newScope[key] then targets[#targets + 1], newScope[key] = object, true end end
 		if options.rootId then local object, why = refs.resolve(options.rootId); if not object then return nil, why end; newRoot = object end
 		if options.mode ~= "uai" and #targets == 0 and not newRoot then return nil, "Choose explicit remotes or a subtree before starting capture" end
 		if ctx and ctx.aborted and ctx.aborted() then return nil, "aborted" end
-		if M.status == "running" or M.status == "paused" then M.stop("reconfigured") end
+		local replacing = M.status == "running" or M.status == "paused"
+		if replacing then M.stop("reconfigured") end
 		serial = serial + 1; M.sessionId = "capture:" .. refs.epoch .. ":" .. serial
 		local sessionId = M.sessionId
 		M.status, M.configuration, M.omitted, M.reason = "starting", desired, 0, nil
@@ -179,12 +189,17 @@ return function(env)
 			if ctx and ctx.aborted and ctx.aborted() then error("aborted", 0) end
 		end)
 		if M.sessionId ~= sessionId or M.status ~= "starting" then return nil, "aborted: capture startup was stopped or superseded" end
-		if not success then disconnect(); refs.release(M); M.status = "faulted"; M.reason = tostring(why); emit(); return nil, tostring(why) end
+		if not success then
+			disconnect(); refs.release(M); M.status = "faulted"
+			M.reason = (replacing and "Reconfiguration failed; the previous capture was stopped and all rules were disarmed. " or "Capture failed; all rules were disarmed. ") .. util.ellipsis(tostring(why), 600)
+			emit(); return nil, M.reason
+		end
 		for key in pairs(scope) do refs.pin(key, M) end
 		M.status = "running"
 		if not options.persistent then
 			local duration = options.duration or 30; M.expiresAt = clock.ms() + duration * 1000
-			clock.delay(duration, function() if M.sessionId == sessionId and (M.status == "running" or M.status == "paused") then M.stop("duration reached") end end)
+			local function expire() if M.sessionId == sessionId and M.expiresAt and clock.ms() >= M.expiresAt and (M.status == "running" or M.status == "paused") then M.stop("duration reached") end end
+			durationTick = clock.interval(0.25, expire)
 		end
 		emit(); return M.state()
 	end

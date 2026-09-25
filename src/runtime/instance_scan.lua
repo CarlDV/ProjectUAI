@@ -5,10 +5,10 @@ return function(env)
 
 	function M.descendants(root, ctx, visit, limit, offset)
 		local stats = { scanned = 0, unreadable = 0, complete = true }
-		local stack = {}
+		local stack, seen = {}, { [root] = true }
 		local function children(node)
 			local ok, items = pcall(function() return node:GetChildren() end)
-			if not ok then
+			if not ok or type(items) ~= "table" then
 				stats.unreadable = stats.unreadable + 1
 				return false
 			end
@@ -46,11 +46,15 @@ return function(env)
 						break
 					end
 				end
-				if stats.scanned >= (offset or 1) and visit(node, stats.scanned) == false then
-					stats.complete, stats.reason = false, "page full"
-					break
-				end
-				children(node)
+				if not seen[node] then
+					seen[node] = true
+					if stats.scanned >= (offset or 1) then
+						local ok, keep = pcall(visit, node, stats.scanned)
+						if not ok then stats.complete, stats.reason = false, "visitor error"; break end
+						if keep == false then stats.complete, stats.reason = false, "page full"; break end
+					end
+					children(node)
+				else stats.duplicates = (stats.duplicates or 0) + 1 end
 			end
 		end
 		if stats.unreadable > 0 then stats.complete = false end

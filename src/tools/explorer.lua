@@ -73,8 +73,9 @@ return function(env)
 		return N.result(result)
 	end, prepareEdits)
 	N.add(tools, "code_open_source", "write", "Open a script/file/capture as a source snapshot in the shared Code workspace. Large source stays in a bounded reader. Never overwrites a modified document or executes source.",
-		{ instance_id = str, source_id = str, path = str, record_id = str, record_revision = num, name = str, focus = boolean }, {}, function(args, ctx)
-		local result, why = sources.open({ instanceId = args.instance_id, sourceId = args.source_id, path = args.path, recordId = args.record_id, recordRevision = args.record_revision, name = args.name, focus = args.focus }, ctx)
+		{ instance_id = str, source_id = str, path = str, record_id = str, record_revision = num, name = str, focus = boolean, decompile = boolean, refresh = boolean }, {}, function(args, ctx)
+		local result, why, detail = sources.open({ instanceId = args.instance_id, sourceId = args.source_id, path = args.path, recordId = args.record_id, recordRevision = args.record_revision, name = args.name, focus = args.focus, decompile = args.decompile, refresh = args.refresh }, ctx)
+		if not result and detail then return { ok = false, text = why, data = detail } end
 		if result and args.focus then focus("Editor") end; return N.result(result, why or "Opened source snapshot")
 	end)
 	local export = N.add(tools, "explorer_export", "write", "Export explicitly selected object metadata to a verified user file. Model export and full-place saving are not provided.",
@@ -93,6 +94,12 @@ return function(env)
 			return N.result({ batchId = batch.id, status = batch.status, items = items, nextOffset = at + #items <= #batch.records and at + #items or nil }, "Recorded field changes")
 		end end
 		return N.fail("expired: game-change batch is no longer retained")
+	end)
+	N.add(tools, "code_extract_source", "write", "Extract a UTF-8 byte range from an immutable source snapshot into a separate editable document. Opening or extracting never runs source.",
+		{ source_id = str, document_id = str, first = num, after = num, name = str }, {}, function(args)
+		if (args.source_id and args.document_id) or (not args.source_id and not args.document_id) then return N.fail("Choose exactly one source_id or document_id") end
+		local doc, why = sources.extract({ sourceId = args.source_id, documentId = args.document_id, first = args.first, after = args.after, name = args.name })
+		return N.result(doc and { documentId = doc.id, revision = doc.revision, bytes = #doc.source, readOnly = false }, why or "Editable source extraction created")
 	end)
 	return tools
 end

@@ -14,6 +14,8 @@ end)()
 
 package.path = ROOT .. "/test/?.lua;" .. package.path
 local luau = require("luau")
+local excluded = dofile(ROOT .. "/tools/native_scope.lua")
+local nativeOnly = false
 
 local WINDOWS = package.config:sub(1, 1) == "\\"
 
@@ -132,11 +134,11 @@ local function suspiciousGlobals(src)
 end
 
 local targets = {}
-if arg and arg[1] then
-	for i = 1, #arg do targets[#targets + 1] = arg[i] end
-else
-	targets = { ROOT .. "/src" }
+for _, option in ipairs(arg or {}) do
+	if option == "--native" then nativeOnly = true else targets[#targets + 1] = option end
 end
+local wholeTree = #targets == 0
+if wholeTree then targets = { ROOT .. "/src" } end
 
 local files = {}
 local function moduleId(path)
@@ -159,7 +161,7 @@ for _, target in ipairs(targets) do
 		addTree(target)
 	end
 end
-if not (arg and arg[1]) then
+if wholeTree then
 	local entry = ROOT .. "/init.lua"
 	if readAll(entry) then files[#files + 1] = { path = entry:gsub("\\", "/") } end
 end
@@ -169,6 +171,11 @@ local known, order = {}, {}
 for _, path in ipairs(listFiles(ROOT .. "/src")) do
 	local id = moduleId(path)
 	if id then known[id] = path end
+end
+if nativeOnly then
+	local kept = {}
+	for _, item in ipairs(files) do if not excluded[item.id] then kept[#kept + 1] = item end end
+	files = kept
 end
 for _, item in ipairs(files) do
 	if item.id then

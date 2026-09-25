@@ -2,8 +2,9 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local config = env.require("runtime/config")
-	local usage = env.require("agent/usage")
+	local clock = env.require("runtime/clock")
 	local providers = env.require("provider/registry")
+	local sessions = env.require("agent/session")
 	local traits = env.require("provider/traits")
 	local theme = env.require("ui/theme")
 	local P = env.require("ui/primitives")
@@ -12,8 +13,9 @@ return function(env)
 
 	function M.open(session)
 		if not session then return nil end
-		local unsubscribes = {}
+		local unsubscribes, pending, closed = {}, false, false
 		local function cleanup()
+			closed = true
 			for _, unsubscribe in ipairs(unsubscribes) do unsubscribe() end
 			unsubscribes = {}
 		end
@@ -42,6 +44,7 @@ return function(env)
 			{ id = "summary", label = "Rolling summary", color = theme.color.contextSummary },
 			{ id = "unused", label = "Unused context", color = theme.color.contextUnused },
 		}
+		local valueWidth = math.max(theme.size.keyColumn, P.measureText("1,000,000 tokens", { role = "caption" }).X)
 		for index, category in ipairs(categories) do
 			if category.id ~= "unused" then
 				category.segment = P.frame(chart, {
@@ -58,12 +61,12 @@ return function(env)
 			P.statusDot(swatch, { color = category.color, diameter = theme.size.dot,
 				anchor = Vector2.new(0.5, 0.5), position = UDim2.fromScale(0.5, 0.5) })
 			category.labelNode = P.text(row, {
-				text = category.label, role = "small", wrap = true, auto = "Y",
-				size = UDim2.new(0, 0, 0, 0), flex = "Fill", layoutOrder = 2,
+				name = "ContextLabel_" .. category.id, text = category.label, role = "small", wrap = true, auto = "Y",
+				size = UDim2.new(1, -(valueWidth + theme.size.dot + theme.space.sm * 2), 0, 0), layoutOrder = 2,
 			})
 			category.valueNode = P.text(row, {
 				name = "ContextValue_" .. category.id, text = "", role = "caption", color = theme.color.textSecondary,
-				align = "Right", wrap = true, auto = "Y", size = UDim2.new(0, theme.size.keyColumn, 0, 0), layoutOrder = 3,
+				align = "Right", wrap = true, auto = "Y", size = UDim2.new(0, valueWidth, 0, 0), layoutOrder = 3,
 			})
 		end
 		local marker = P.frame(chart, {
@@ -85,28 +88,26 @@ return function(env)
 
 		local function tokens(value) return util.formatNumber(value) .. " tokens" end
 		local function refresh()
-			if modal.closed then return end
+			if closed or modal.closed then return end
+			if session.removed then modal.close(); return end
 			local ctx, record = session.ctx, providers.active()
 			local model = record and record.model
 			local window = traits.contextWindow(model)
 			local compactAt = math.max(ctx.limitFor(model), 1)
 			local scale = math.max(window or compactAt, 1)
-			local used = ctx.pressure()
-			local values = {
-				system = math.max(ctx.overhead or 0, 0),
-				messages = usage.estimateMessages(ctx.messages),
-				summary = ctx.summary and usage.estimateText(ctx.summary) or 0,
-				unused = math.max(0, scale - used),
-			}
-			total.Text = "Next request: about " .. tokens(used)
+			local values = ctx.breakdown(record)
+			local used = values.used
+			values.unused = math.max(0, scale - used)
+			local partial = not values.calibrated and not values.estimatedPrompt
+			total.Text = (partial and "Stored context: about " or "Next request: about ") .. tokens(used)
 			pressure.Text = string.format("%d%% of the compaction point", math.floor(used / compactAt * 100 + 0.5))
 			pressure.TextColor3 = used >= compactAt and theme.color.warn or theme.color.textSecondary
 			local offset = 0
 			for _, category in ipairs(categories) do
 				local count = values[category.id]
 				category.valueNode.Text = tokens(count) .. string.format("\n%.1f%%", count / scale * 100)
-				if category.id == "system" and not ctx.calibrated and count == 0 then
-					category.valueNode.Text = "After first reply"
+				if category.id == "system" and partial then
+					category.valueNode.Text = "After first request"
 				elseif category.id == "unused" then
 					category.labelNode.Text = window and "Unused context" or "Until compaction"
 				end
@@ -123,14 +124,23 @@ return function(env)
 				or "Model window unknown. Full bar = compaction point."
 			limits.Text = "Compaction point: " .. tokens(compactAt) .. "\nModel window: "
 				.. (window and tokens(window) or "unknown; learned automatically from a context-length error")
+			if model and model ~= "" then limits.Text = limits.Text .. "\nModel: " .. util.ellipsis(model, 120) end
+			if used > scale then limits.Text = limits.Text .. "\nOver " .. (window and "model window" or "compaction point") .. " by " .. tokens(used - scale) end
 			estimates.Text = "Message and summary counts are estimates. "
-				.. (ctx.calibrated and "System prompt and tool schemas are estimated from the last provider reply."
-					or "System prompt and tool schemas will be counted after the first provider reply; totals are partial until then.")
+				.. (values.calibrated and "System prompt and tool schemas are calibrated from this provider's last reply."
+					or values.estimatedPrompt and "System prompt and tool schemas are estimated from the last prepared request."
+					or "System prompt and tool schemas are counted when the first request is prepared; totals are partial until then.")
+		end
+		local function queue()
+			if pending or closed or modal.closed then return end
+			pending = true
+			clock.delay(0.1, function() pending = false; refresh() end)
 		end
 		refresh()
-		unsubscribes[#unsubscribes + 1] = session.events:connect(refresh)
-		unsubscribes[#unsubscribes + 1] = config.changed:connect(refresh)
-		unsubscribes[#unsubscribes + 1] = providers.changed:connect(refresh)
+		unsubscribes[#unsubscribes + 1] = session.events:connect(queue)
+		unsubscribes[#unsubscribes + 1] = config.changed:connect(queue)
+		unsubscribes[#unsubscribes + 1] = providers.changed:connect(queue)
+		unsubscribes[#unsubscribes + 1] = sessions.listChanged:connect(queue)
 		modal.scrim.Destroying:Connect(cleanup)
 		return modal
 	end

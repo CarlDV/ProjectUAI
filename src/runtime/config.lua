@@ -59,6 +59,8 @@ return function(env)
 			-- sets it. "0.0.0" rather than the shipping version so a first run
 			-- shows the marker -- a new user is exactly who the notes are for.
 			lastSeenVersion = "0.0.0",
+			-- Note revisions can change without changing the client version.
+			lastSeenChangelog = "",
 		},
 		agent = {
 			maxTurns = 60,
@@ -116,10 +118,6 @@ return function(env)
 			forceReasoning = {},
 			forceContext = {},
 			maxTokens = 128000,
-			-- Effective reply ceiling for buffered executor HTTP. Streaming transports
-			-- and explicit per-request/provider token overrides retain their ceilings.
-			-- This does not change maxTokens; set 0 to disable the transport clamp.
-			executorReplyCeiling = 8192,
 			-- Characters, not tokens, and it is the last word on how much of a tool
 			-- result reaches the model. Eight thousand rather than four so that the
 			-- tools' own defaults -- a six thousand character file read, a five thousand

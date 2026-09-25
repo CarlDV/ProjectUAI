@@ -18,8 +18,9 @@ return function(env)
 	local state = env.require("agent/state")
 
 	local THREAD_DIR = "sessions"
-	-- Keep all sessions indefinitely; no thread limit is enforced.
-	local THREAD_LIMIT = math.huge
+	-- Disk history survives eviction. Unsaved/ephemeral threads stay in memory.
+	local THREAD_LIMIT = 64
+	local running, alive = 0, true
 
 	-- Which events are the transcript, as opposed to the running commentary around one.
 	--
@@ -29,6 +30,8 @@ return function(env)
 	-- answers it, and encoding that would fail the whole write.
 	local DURABLE = {
 		["user"] = true,
+		["turn:start"] = true,
+		["turn:end"] = true,
 		["assistant:text"] = true,
 		["assistant:reasoning"] = true,
 		["tool:call"] = true,
@@ -46,8 +49,7 @@ return function(env)
 		["abort"] = true,
 	}
 
-	-- Keep full conversation history; no arbitrary event count cap.
-	local TRANSCRIPT_LIMIT = math.huge
+	local TRANSCRIPT_LIMIT = 400
 	local FIELD_CAP = 24000
 	local TRANSCRIPT_BYTES = 1048576
 
@@ -156,22 +158,41 @@ return function(env)
 			toolEpoch = {},
 			abortFlag = false,
 			log = {},
+			logBytes = 0,
 			-- The plan for this conversation's job. agent/state owns the shape of it;
 			-- the list lives here so two conversations cannot overwrite each other's.
 			todos = {},
 		}
 
-		-- Every event is mirrored into a bounded per-session log so a panel opened
-		-- mid-turn can render what it missed, and so the transcript survives a
-		-- switch away and back.
+		-- Retain transcript events; transient progress must not evict conversation.
+		function session.appendLog(payload)
+			if not DURABLE[tostring(payload.kind)] then return end
+			local copy, cost = {}, 64
+			for key, value in pairs(payload) do
+				if type(value) == "string" then copy[key] = util.truncate(value, FIELD_CAP); cost = cost + #copy[key] + #tostring(key)
+				elseif type(value) == "number" or type(value) == "boolean" then copy[key] = value; cost = cost + 16 end
+			end
+			copy.retainedBytes = cost
+			session.log[#session.log + 1], session.logBytes = copy, session.logBytes + cost
+			while #session.log > TRANSCRIPT_LIMIT or session.logBytes > TRANSCRIPT_BYTES do
+				local old = table.remove(session.log, 1); session.logBytes = math.max(0, session.logBytes - (old.retainedBytes or 64))
+			end
+		end
 		function session.emit(kind, payload)
-			payload = payload or {}
+			if session.removed or not alive then return end
+			payload = util.copy(payload or {})
 			payload.kind = kind
 			payload.at = clock.ms()
 			session.updatedAt = payload.at
 			if kind == "status" then session.status = payload.text or session.status end
+			if kind == "request:start" then session.liveRequest, session.livePreview = payload, nil
+			elseif kind == "assistant:preview" then session.livePreview = payload
+			elseif kind == "request:done" then session.liveRequest = nil; if payload.error then session.livePreview = nil end
+			elseif kind == "assistant:complete" or kind == "abort" or kind == "error" or kind == "cleared" or (kind == "status" and payload.text == "Ready") then
+				session.liveRequest, session.livePreview = nil, nil
+			end
 			if not session.headless then
-				session.log[#session.log + 1] = payload
+				session.appendLog(payload)
 			end
 			hooks.run("onEvent", { session = session, event = payload })
 			session.events:fire(payload)
@@ -179,7 +200,7 @@ return function(env)
 		end
 
 		function session.aborted()
-			return session.abortFlag == true
+			return session.abortFlag == true or session.removed == true or not alive
 		end
 
 		function session.toolContext()
@@ -187,20 +208,21 @@ return function(env)
 			-- life when that happens after a stopped or failed turn.
 			local epoch = session.toolEpoch
 			local cancelled = false
+			local function aborted()
+				cancelled = cancelled or session.toolEpoch ~= epoch or session.aborted()
+				return cancelled
+			end
 			return {
 				env = env,
 				session = session,
 				depth = session.depth,
 				emit = function(kind, text)
-					session.emit(kind, type(text) == "table" and text or { text = text })
+					if not aborted() then session.emit(kind, type(text) == "table" and text or { text = text }) end
 				end,
 				progress = function(text)
-					session.emit("tool:progress", { text = tostring(text) })
+					if not aborted() then session.emit("tool:progress", { text = tostring(text) }) end
 				end,
-				aborted = function()
-					cancelled = cancelled or session.toolEpoch ~= epoch or session.aborted()
-					return cancelled
-				end,
+				aborted = aborted,
 			}
 		end
 
@@ -248,6 +270,8 @@ return function(env)
 				clean = prepared
 			end
 
+			if not alive or running >= 8 then return false, "Eight native session workers are already active; wait for a turn to finish" end
+			running = running + 1
 			session.busy = true
 			session.abortFlag = false
 			session.turns = session.turns + 1
@@ -265,7 +289,9 @@ return function(env)
 					return env.require("agent/loop").run(session, clean)
 				end)
 				if not ok then session.abortFlag = true end
+				running = math.max(0, running - 1)
 				session.busy = false
+				if session.removed or not alive then return end
 				-- Only this conversation's prompts. It used to clear every pending
 				-- request in the client, so one conversation finishing a turn silently
 				-- denied whatever another was waiting on -- and a denied write is
@@ -276,19 +302,23 @@ return function(env)
 				pcall(function() env.require("ui/panels/ask").sweep(session) end)
 				if not ok then
 					log.error("session", "loop crashed", reply)
-					session.emit("error", { message = "Internal error: " .. tostring(reply), fatal = true })
-					reply = "Something went wrong inside the agent: " .. tostring(reply)
+					session.emit("error", { message = "The native agent stopped after an internal error", fatal = true })
+					reply = "The native agent stopped after an internal error. Your conversation is retained."
 					session.emit("turn:end", { text = reply, failed = true })
 					session.emit("status", { text = "Ready" })
 				end
 				M.persist(session)
 				M.listChanged:fire()
-				if onDone then pcall(onDone, reply) end
+				if onDone and not session.removed then pcall(onDone, reply) end
 			end)
 			return true
 		end
 
 		function session.abort()
+			session.toolEpoch = {}
+			session.abortFlag = session.busy == true
+			local capture = env.loadedModules and env.loadedModules["runtime/remote_capture"]
+			if capture then capture.revokeAgent(session.id) end
 			if session.preparing then session.preparing = nil; return true end
 			local loops = env.loadedModules and env.loadedModules["runtime/chatloops"]
 			local stoppedLoops = loops and loops.stop(nil, session) or 0
@@ -306,6 +336,8 @@ return function(env)
 		function session.compact(onDone)
 			if session.busy or session.preparing then return false, "already working" end
 			if session.removed then return false, "conversation no longer exists" end
+			if not alive or running >= 8 then return false, "Eight native session workers are already active; wait for a turn to finish" end
+			running = running + 1
 			session.busy = true
 			session.abortFlag = false
 			session.emit("status", { text = "Compacting" })
@@ -314,7 +346,9 @@ return function(env)
 				local ok, summary = pcall(function()
 					return env.require("agent/loop").compact(session)
 				end)
+				running = math.max(0, running - 1)
 				session.busy = false
+				if session.removed or not alive then return end
 				session.emit("status", { text = "Ready" })
 				if not ok then log.error("session", "manual compaction crashed", summary) end
 				if ok and summary then M.persist(session) end
@@ -325,12 +359,18 @@ return function(env)
 		end
 
 		function session.clear()
+			if session.busy then return false, "Stop this turn before clearing its conversation" end
 			session.preparing = nil
 			attachments.clearUploads(session.id)
+			local loops = env.loadedModules and env.loadedModules["runtime/chatloops"]
+			if loops then loops.stop(nil, session) end
+			local subagents = env.loadedModules and env.loadedModules["agent/subagent"]
+			if subagents then subagents.stopAll(session) end
 			session.ctx.clear()
-			session.log = {}
+			session.log, session.logBytes = {}, 0
 			session.turns = 0
 			session.toolEpoch = {}
+			session.abortFlag = false
 			session.title = "New chat"
 			-- The plan goes with the conversation it belonged to.
 			state.clearTodos(session)
@@ -403,7 +443,10 @@ return function(env)
 	function M.list()
 		local out = {}
 		for _, session in pairs(M.threads) do out[#out + 1] = session end
-		table.sort(out, function(a, b) return (a.updatedAt or 0) > (b.updatedAt or 0) end)
+		table.sort(out, function(a, b)
+			if a.updatedAt ~= b.updatedAt then return (a.updatedAt or 0) > (b.updatedAt or 0) end
+			return a.id < b.id
+		end)
 		return out
 	end
 
@@ -501,7 +544,9 @@ return function(env)
 		if not session then return false end
 		session.preparing, session.removed = nil, true
 		attachments.clearUploads(id)
-		if session.busy then session.abort() end
+		session.abort(); session.events:clear()
+		local subagents = env.loadedModules and env.loadedModules["agent/subagent"]
+		if subagents then subagents.stopAll(session) end
 		M.threads[id] = nil
 		if fsx.enabled then fsx.delete(THREAD_DIR .. "/" .. id .. ".json") end
 		if M.activeId == id then
@@ -514,12 +559,15 @@ return function(env)
 	end
 
 	function M.trimThreads()
-		-- Keep all sessions: no limit is enforced, preserving all history indefinitely.
-		if THREAD_LIMIT == math.huge then return end
 		local ordered = M.list()
 		for index = THREAD_LIMIT + 1, #ordered do
 			local victim = ordered[index]
-			if not victim.busy and victim.id ~= M.activeId then M.remove(victim.id) end
+			if not victim.busy and not victim.preparing and victim.id ~= M.activeId and fsx.enabled and M.persist(victim) then
+				victim.removed = true; victim.abort(); victim.events:clear(); M.threads[victim.id] = nil
+				attachments.clearUploads(victim.id)
+				local subagents = env.loadedModules and env.loadedModules["agent/subagent"]
+				if subagents then subagents.stopAll(victim) end
+			end
 		end
 	end
 
@@ -534,7 +582,7 @@ return function(env)
 	-- it keeps what the *model* needs to continue, which has no reasoning, no timings,
 	-- no risk levels and no tool arguments.
 	function M.persist(session)
-		if not fsx.enabled or session.headless then return false end
+		if not fsx.enabled or session.headless or session.removed then return false end
 		if session.depth and session.depth > 0 then return false end
 		if session.ephemeral then return false end
 		return fsx.writeJson(THREAD_DIR .. "/" .. session.id .. ".json", {
@@ -553,35 +601,58 @@ return function(env)
 
 	function M.restore()
 		if not fsx.enabled then return 0 end
-		local restored = 0
+		local restored, candidates = 0, {}
+		local function timestamp(value)
+			local number = tonumber(value)
+			return number and number == number and number > 0 and number < math.huge and number or 0
+		end
+		local function readThread(entry)
+			if entry.isDir or not entry.name:match("%.json$") then return nil end
+			local raw = fsx.read(entry.path)
+			local data = raw and #raw <= 4 * 1024 * 1024 and util.decode(raw)
+			if type(data) ~= "table" or type(data.id) ~= "string" or #data.id > 120
+				or not data.id:match("^[%w_-]+$") or entry.name ~= data.id .. ".json" then return nil end
+			return data
+		end
+		-- Keep only candidate metadata while finding the newest files; a host listing
+		-- is alphabetic, not ordered by conversation activity.
 		for _, entry in ipairs(fsx.list(THREAD_DIR)) do
-			if entry.name:match("%.json$") then
-				local data = fsx.readJson(entry.path, nil)
-				if type(data) == "table" and data.id then
-					local session = M.create({
-						id = data.id,
-						title = data.title,
-						placeId = tonumber(data.placeId),
-						placeName = data.placeName,
-					})
-					session.named = data.named == true
-					session.createdAt = data.createdAt or session.createdAt
-					session.updatedAt = data.updatedAt or session.updatedAt
-					session.turns = data.turns or 0; session.opencodeSession = data.opencodeSession
-					session.ctx.restore(data.context)
-					-- Replayed by the view in the order it happened. A file written before
-					-- transcripts were stored simply has none, and that conversation opens on
-					-- the greeting exactly as it used to.
-					if type(data.transcript) == "table" then
-						for _, event in ipairs(data.transcript) do
-							if type(event) == "table" and event.kind then
-								session.log[#session.log + 1] = event
-							end
+			local data = readThread(entry)
+			if data and not M.threads[data.id] then
+				candidates[#candidates + 1] = { entry = entry, id = data.id, updatedAt = timestamp(data.updatedAt) }
+				table.sort(candidates, function(a, b)
+					if a.updatedAt ~= b.updatedAt then return a.updatedAt > b.updatedAt end
+					return a.id < b.id
+				end)
+				if #candidates > THREAD_LIMIT then table.remove(candidates) end
+			end
+		end
+		local slots = math.max(0, THREAD_LIMIT - #M.list())
+		for index = 1, math.min(slots, #candidates) do
+			local candidate = candidates[index]
+			local data = readThread(candidate.entry)
+			if data and data.id == candidate.id and not M.threads[data.id] then
+				local session = M.create({
+					id = data.id,
+					title = type(data.title) == "string" and util.ellipsis(data.title, 60) or nil,
+					placeId = tonumber(data.placeId),
+					placeName = type(data.placeName) == "string" and data.placeName or nil,
+				})
+				session.named = data.named == true
+				session.createdAt = timestamp(data.createdAt)
+				session.updatedAt = timestamp(data.updatedAt)
+				session.turns = math.floor(timestamp(data.turns)); session.opencodeSession = data.opencodeSession
+				session.ctx.restore(data.context)
+				-- Older files may have context without a stored transcript.
+				if type(data.transcript) == "table" then
+					for _, event in ipairs(data.transcript) do
+						if type(event) == "table" and event.kind then
+							session.appendLog(event)
 						end
 					end
-					M.threads[session.id] = session
-					restored = restored + 1
 				end
+				M.threads[session.id] = session
+				restored = restored + 1
 			end
 		end
 		if restored > 0 then
@@ -593,5 +664,11 @@ return function(env)
 		return restored
 	end
 
+	M.limits = { threads = THREAD_LIMIT, workers = 8, events = TRANSCRIPT_LIMIT, transcriptBytes = TRANSCRIPT_BYTES }
+	env.require("runtime/dispose").add(function()
+		alive = false
+		for _, item in pairs(M.threads) do item.abort(); item.events:clear() end
+		M.anyEvent:clear(); M.listChanged:clear()
+	end, "native sessions")
 	return M
 end

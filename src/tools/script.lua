@@ -88,29 +88,13 @@ return function(env)
 				},
 				required = { "path" },
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local instance, err = H.resolve(args.path)
 				if not instance then return H.fail(err) end
-
-				local okA, isScript = pcall(function() return instance:IsA("LuaSourceContainer") end)
-				if not okA or not isScript then
-					return H.fail(instance.ClassName .. " is not a script")
-				end
-
-				local source
-				local okSource, value = pcall(function() return instance.Source end)
-				if okSource and type(value) == "string" and value ~= "" then
-					source = value
-				elseif caps.fn.decompile then
-					local okDecomp, decompiled = pcall(caps.fn.decompile, instance)
-					if okDecomp and type(decompiled) == "string" then source = decompiled end
-				end
-
-				if not source or util.trim(source) == "" then
-					return "The source is not readable from here. Roblox hides Source from client scripts, and this host has no decompiler."
-				end
-
-				return H.readSlice(H.pathOf(instance), source, args, 3000)
+				local sources = env.require("runtime/script_sources")
+				local item, why = sources.inspect(env.require("runtime/instance_refs").id(instance), ctx)
+				if not item then return H.fail(why) end
+				return H.readSlice(item.name, item.source, args, 3000)
 			end,
 		},
 	}

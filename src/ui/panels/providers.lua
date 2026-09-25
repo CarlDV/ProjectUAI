@@ -925,6 +925,7 @@ return function(env)
 			horizontal = not wide,
 			alignX = "Left",
 		})
+		railScroll.layout.VerticalAlignment = wide and Enum.VerticalAlignment.Top or Enum.VerticalAlignment.Center
 		-- Under the list where there is a column to put it under, and at the end of the
 		-- strip where there is not -- so there is exactly one of it either way.
 		local addButton = P.button(rail, {
@@ -1070,6 +1071,7 @@ return function(env)
 				or UDim2.new(1, 0, 0, theme.stroke.hair)
 			detailHolder.Size = wide and UDim2.new(0, 0, 1, 0) or UDim2.new(1, 0, 0, 0)
 			railScroll.layout.FillDirection = wide and Enum.FillDirection.Vertical or Enum.FillDirection.Horizontal
+			railScroll.layout.VerticalAlignment = wide and Enum.VerticalAlignment.Top or Enum.VerticalAlignment.Center
 			railScroll.instance.AutomaticCanvasSize = wide and Enum.AutomaticSize.Y or Enum.AutomaticSize.X
 			railScroll.instance.ScrollingDirection = wide and Enum.ScrollingDirection.Y or Enum.ScrollingDirection.X
 			railScroll.instance.VerticalScrollBarInset = wide and Enum.ScrollBarInset.ScrollBar or Enum.ScrollBarInset.None

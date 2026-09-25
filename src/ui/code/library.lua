@@ -6,6 +6,7 @@ return function(env)
 	local compare = env.require("ui/code/compare")
 	local overlay = env.require("ui/overlay")
 	local store = env.require("runtime/code_store")
+	local limits = env.require("runtime/code_limits")
 	local actions = env.require("runtime/code_actions")
 	local runner = env.require("tools/code_runner")
 	local util = env.require("runtime/util")
@@ -95,13 +96,26 @@ return function(env)
 		local query = store.workspace.libraryQuery or ""
 		local bar = common.toolbar(root)
 		local mode, search, list
+		local function remove(row)
+			local item = row.kind == "document" and store.resolve(row.id) or store.action(row.id)
+			if not item then return end
+			local revision = item.revision
+			overlay.confirm({ title = "Delete " .. item.name .. "?",
+				description = "This removes the saved " .. row.kind .. ". Closing a script view keeps it in the library.",
+				danger = true, confirmText = "Delete", onConfirm = function()
+					local current = row.kind == "document" and store.resolve(row.id) or store.action(row.id)
+					if not current or current.revision ~= revision then common.message(nil, "This entry changed; review it before deleting."); return end
+					if row.kind == "document" then common.message(store.delete(row.id)) else common.message(store.deleteAction(row.id)) end
+				end })
+		end
 		local function render()
 			if not list then return end
 			local items, needle = {}, query:lower()
 			for _, doc in ipairs(store.list()) do if doc.name:lower():find(needle, 1, true) then items[#items + 1] = { kind = "document", id = doc.id, label = "Script · " .. doc.name .. " · r" .. doc.revision .. " · " .. #doc.source .. " bytes" } end end
 			for _, action in ipairs(store.actions()) do if action.name:lower():find(needle, 1, true) then items[#items + 1] = { kind = "action", id = action.id, label = "Action · " .. action.name .. " · " .. #action.inputs .. " inputs · r" .. action.revision } end end
 			list.set(items, true)
-			mode.setText(#items .. " scripts & actions")
+			local scripts, acts = #store.list(), #store.actions()
+			mode.setText(scripts .. "/" .. limits.documents .. " scripts · " .. acts .. "/" .. limits.actions .. " actions")
 		end
 		mode = bar.add("Scripts & actions", function() end, { flex = true })
 		bar.add("New", function()
@@ -112,7 +126,9 @@ return function(env)
 		search = P.field(root, { name = "LibrarySearch", placeholder = "Search script and action names", text = query, onChange = function(value) query = value; store.workspace.libraryQuery = value; render() end })
 		search.shell.Position, search.shell.Size = UDim2.fromOffset(common.inset(), common.barHeight() + theme.space.xs), UDim2.new(1, -common.inset() * 2, 0, common.controlHeight())
 		local top = common.barHeight() * 2 + theme.space.sm
-		list = common.virtualList(root, { position = UDim2.fromOffset(0, top), size = UDim2.new(1, 0, 1, -top), onSelect = function(row, _, button)
+		list = common.virtualList(root, { position = UDim2.fromOffset(0, top), size = UDim2.new(1, 0, 1, -top),
+			onClose = remove,
+			onSelect = function(row, _, button)
 			local item = row.kind == "document" and store.resolve(row.id) or store.action(row.id); if not item then render(); return end
 			local options = row.kind == "document" and { { label = "Open script", value = "open" }, { label = "Rename", value = "rename" }, { label = "Save as action", value = "save" }, { label = "Export source", value = "export" }, { label = "Delete script", value = "delete" } }
 				or { { label = "Run with inputs", value = "run" }, { label = "Inspect / edit source snapshot", value = "open" }, { label = "Update from active script…", value = "save" }, { label = "Delete action", value = "delete" } }
@@ -125,7 +141,7 @@ return function(env)
 				elseif action == "save" then M.saveAction(row.kind == "document" and item or store.active(), row.kind == "action" and item or nil)
 				elseif action == "rename" then forms.form("Rename script", { { key = "name", label = "Name", default = item.name, required = true } }, function(data) return store.rename(item.id, data.name) end)
 				elseif action == "export" then common.work(function() return env.require("runtime/native_exports").write(item.source, "exports/" .. store.id("script") .. ".lua") end, function(result) common.copy(result.path); overlay.toast("Exported " .. result.path, "good") end)
-				elseif action == "delete" then overlay.confirm({ title = "Delete " .. item.name .. "?", description = "This removes the saved " .. row.kind .. ". Closing a script view keeps it in the library.", danger = true, confirmText = "Delete", onConfirm = function() if row.kind == "document" then common.message(store.delete(item.id)) else common.message(store.deleteAction(item.id)) end end }) end
+				elseif action == "delete" then remove(row) end
 			end)
 		end })
 		local off = store.changed:connect(function(event) if event.kind ~= "source" then render() end end)

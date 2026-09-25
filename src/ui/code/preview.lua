@@ -6,7 +6,7 @@ return function(env)
 	function M.new(parent, source, name)
 		local scroll = P.scroll(parent, { name = name or "SourcePreview", bg = theme.color.codeSurface })
 		scroll.layout:Destroy(); scroll.instance.AutomaticCanvasSize = Enum.AutomaticSize.None; scroll.instance.ScrollingDirection = Enum.ScrollingDirection.XY
-		local field = P.field(scroll.instance, { name = "PreviewText", role = "mono", multiline = true, bare = true, text = source, padX = 10 })
+		local field = P.field(scroll.instance, { name = "PreviewText", role = "mono", multiline = true, bare = true, syntax = false, text = source, padX = 10 })
 		field.instance.TextEditable, field.instance.TextWrapped, field.instance.TextTransparency = false, false, 0
 		field.instance.TextColor3 = theme.color.codeText
 		local function layout()

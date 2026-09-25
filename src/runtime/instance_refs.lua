@@ -38,9 +38,9 @@ return function(env)
 		if not alive or type(key) ~= "string" or key:sub(1, #M.epoch + 6) ~= "inst:" .. M.epoch .. ":" then return nil, "stale_handle: this reference belongs to another runtime" end
 		local instance = byId[key]
 		if not instance or (byObject[instance] and byObject[instance].destroyed) then return nil, "stale_handle: object is no longer available" end
-		local readable = pcall(function() return instance.ClassName end)
+		local readable, parent = pcall(function() local _ = instance.ClassName; return instance.Parent end)
 		if not readable then return nil, "unavailable: object cannot be read" end
-		if byObject[instance].hookOnly and instance ~= game and instance.Parent == nil then return nil, "stale_handle: an untracked detached object must be explicitly rediscovered" end
+		if byObject[instance].hookOnly and instance ~= game and parent == nil then return nil, "stale_handle: an untracked detached object must be explicitly rediscovered" end
 		return instance
 	end
 	function M.select(args)

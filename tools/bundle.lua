@@ -8,14 +8,21 @@
 -- comment records the manifest so the artifact can be identified after the fact.
 package.path = "test/?.lua;" .. package.path
 local luau = require("luau")
+local excluded = dofile("tools/native_scope.lua")
+local checkOnly, nativeOnly = false, false
+for _, option in ipairs(arg or {}) do
+	if option == "--check" then checkOnly = true
+	elseif option == "--native" then nativeOnly = true
+	else error("Unknown bundle option: " .. tostring(option)) end
+end
 
-pcall(function()
+do
 	local fh = io.open("tools/pack_icons.lua", "r")
 	if fh then
 		fh:close()
 		dofile("tools/pack_icons.lua")
 	end
-end)
+end
 
 local WINDOWS = package.config:sub(1, 1) == "\\"
 
@@ -63,7 +70,9 @@ for _, path in ipairs(listFiles("src")) do
 			io.stderr:write("cannot read " .. path .. "\n")
 			os.exit(1)
 		end
-		local fn, problems = luau.load(source, id)
+		source = source:gsub("\r\n", "\n"):gsub("%s+$", "")
+		local fn, problems = true, nil
+		if not nativeOnly or not excluded[id] then fn, problems = luau.load(source, id) end
 		if not fn then
 			io.stderr:write("bundle refused: " .. id .. " does not pass the checker\n")
 			for _, problem in ipairs(problems or {}) do
@@ -97,7 +106,16 @@ do
 end
 
 local version = bootSource:match('local VERSION = "([^"]+)"') or "0.0.0"
-local buildId = dofile("tools/build_id.lua")(version, modules, bootSource)
+local identify = dofile("tools/build_id.lua")
+local buildId = identify(version, modules, bootSource)
+local manifest = { '{"format":"uai-build","version":1,"hashAlgorithm":"uai-dual32-v1",',
+	'"buildId":' .. string.format("%q", buildId) .. ',"bootstrapHash":' .. string.format("%q", identify("init", {}, bootSource)) .. ',"modules":[' }
+for index, module in ipairs(modules) do
+	module.hash = identify("module", { module }, "")
+	manifest[#manifest + 1] = (index > 1 and "," or "") .. string.format('{"id":%q,"bytes":%d,"hash":%q}', module.id, module.bytes, module.hash)
+end
+manifest[#manifest + 1] = "]}\n"
+manifest = table.concat(manifest)
 
 local out = {}
 local function emit(line)
@@ -117,7 +135,7 @@ emit("-- Usage:")
 emit('--     loadstring(game:HttpGet("<url>/dist/uai.lua"))()')
 emit("--")
 for _, module in ipairs(modules) do
-	emit(string.format("--   %-28s %6d bytes", module.id, module.bytes))
+	emit(string.format("--   %-28s %6d bytes  %s", module.id, module.bytes, module.hash))
 end
 emit("")
 emit(string.format("local __UAI_BUILD = %q", buildId))
@@ -153,11 +171,24 @@ if not check then
 	os.exit(1)
 end
 
+if checkOnly then
+	for path, expected in pairs({ ["dist/uai.lua"] = bundle, ["dist/uai.manifest.json"] = manifest }) do
+		local current = read(path)
+		if not current or current:gsub("\r\n", "\n") ~= expected then
+			io.stderr:write(path .. " is stale; run luajit tools/bundle.lua --native\n"); os.exit(1)
+		end
+	end
+	print("Bundle, module manifest and embedded icons are current: " .. buildId)
+	return
+end
+
 os.execute(WINDOWS and "if not exist dist mkdir dist" or "mkdir -p dist")
 local ok, err = write("dist/uai.lua", bundle)
 if not ok then
 	io.stderr:write(tostring(err) .. "\n")
 	os.exit(1)
 end
+local manifestOk, manifestError = write("dist/uai.manifest.json", manifest)
+if not manifestOk then io.stderr:write(tostring(manifestError) .. "\n"); os.exit(1) end
 
 print(string.format("dist/uai.lua written: %d modules, %d bytes", #modules, #bundle))

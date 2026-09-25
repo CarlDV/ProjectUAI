@@ -96,7 +96,7 @@
 
     <div class="container">
       <dl class="capability-strip" aria-label="Current release capabilities">
-        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->154<!-- site:tool-count:end --></dd></div>
+        <div><dt>Registered tools</dt><dd><!-- site:tool-count:start -->158<!-- site:tool-count:end --></dd></div>
         <div><dt>Tool groups</dt><dd><!-- site:group-count:start -->21<!-- site:group-count:end --></dd></div>
         <div><dt>Files per batch read</dt><dd>12</dd></div>
         <div><dt>Edits in one write</dt><dd>20</dd></div>
@@ -197,15 +197,15 @@
         </div>
         <div class="catalog-toolbar" id="toolFilters" role="search" aria-label="Search the tool catalog" hidden>
           <div class="search-field"><label for="toolSearch">Find a tool</label><input type="search" id="toolSearch" placeholder="Try files, raycast, or Luau" autocomplete="off" spellcheck="false" aria-controls="toolCatalog"></div>
-          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (24)</option><option value="script">Code (5)</option><option value="fs">Files (9)</option><option value="agentself">Agent (12)</option><option value="character">Character (4)</option><option value="coding">Code workspace (14)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (10)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="gravity">Project Gravity (13)</option><option value="remotes">Remotes (17)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
+          <div class="category-field"><label for="toolCategory">Category</label><select id="toolCategory" aria-controls="toolCatalog"><option value="">All categories</option><!-- site:categories:start --><option value="instance">Instance tree (25)</option><option value="script">Code (5)</option><option value="fs">Files (9)</option><option value="agentself">Agent (12)</option><option value="character">Character (4)</option><option value="coding">Code workspace (14)</option><option value="perf">Diagnostics (3)</option><option value="net">HTTP (3)</option><option value="chat">In-game chat (8)</option><option value="iy">Infinite Yield (10)</option><option value="gui">Interface (7)</option><option value="meta">Metadata (4)</option><option value="players">Players (3)</option><option value="gravity">Project Gravity (13)</option><option value="remotes">Remotes (20)</option><option value="screen">Screen &amp; aiming (1)</option><option value="skills">Skills (5)</option><option value="templates">Templates (2)</option><option value="input">Virtual input (2)</option><option value="web">Web (2)</option><option value="world">World (6)</option><!-- site:categories:end --></select></div>
           <button class="button button-outline clear-filters" type="button" id="clearFilters" disabled>Clear filters</button>
         </div>
-        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->154<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->21<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.7.0<!-- site:version:end --></span></div>
+        <div class="catalog-meta"><p id="catalogStatus" role="status" aria-live="polite" aria-atomic="true"><!-- site:tool-count:start -->158<!-- site:tool-count:end --> tools across <!-- site:group-count:start -->21<!-- site:group-count:end --> groups</p><span>Included in v<!-- site:version:start -->1.7.0<!-- site:version:end --></span></div>
         <noscript><p class="catalog-help">Open a category to browse its tools. Enable JavaScript to search and filter.</p></noscript>
         <div id="toolCatalog" class="tool-catalog">
           <!-- site:catalog:start -->
           <details class="tool-group" data-group="instance" open>
-            <summary><span class="tool-group-label">Instance tree</span><span class="tool-group-count">24 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
+            <summary><span class="tool-group-label">Instance tree</span><span class="tool-group-count">25 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
             <ul class="tool-list">
               <li class="tool-row" data-tool-name="changes_list">
                 <div class="tool-row-heading"><code>changes_list</code><span class="risk risk-read">Read</span></div>
@@ -218,6 +218,10 @@
               <li class="tool-row" data-tool-name="changes_undo">
                 <div class="tool-row-heading"><code>changes_undo</code><span class="risk risk-write">Write</span></div>
                 <p>Undo one recorded property/attribute batch. Rechecks every target/value and never overwrites a conflicting newer edit.</p>
+              </li>
+              <li class="tool-row" data-tool-name="code_extract_source">
+                <div class="tool-row-heading"><code>code_extract_source</code><span class="risk risk-write">Write</span></div>
+                <p>Extract a UTF-8 byte range from an immutable source snapshot into a separate editable document. Opening or extracting never runs source.</p>
               </li>
               <li class="tool-row" data-tool-name="code_open_source">
                 <div class="tool-row-heading"><code>code_open_source</code><span class="risk risk-write">Write</span></div>
@@ -751,8 +755,12 @@
             </ul>
           </details>
           <details class="tool-group" data-group="remotes">
-            <summary><span class="tool-group-label">Remotes</span><span class="tool-group-count">17 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
+            <summary><span class="tool-group-label">Remotes</span><span class="tool-group-count">20 tools</span><span class="disclosure" aria-hidden="true">+</span></summary>
             <ul class="tool-list">
+              <li class="tool-row" data-tool-name="remote_caller_source">
+                <div class="tool-row-heading"><code>remote_caller_source</code><span class="risk risk-write">Write</span></div>
+                <p>Open a captured caller as a read-only source/decompile snapshot and annotate likely remote-name call sites outside interception hooks.</p>
+              </li>
               <li class="tool-row" data-tool-name="remote_capture_bytes">
                 <div class="tool-row-heading"><code>remote_capture_bytes</code><span class="risk risk-read">Read</span></div>
                 <p>Read retained text/binary bytes from a large captured value. Offsets address original bytes; hex output is explicit. Truncated prefixes never imply complete original data.</p>
@@ -784,6 +792,14 @@
               <li class="tool-row" data-tool-name="remote_rule">
                 <div class="tool-row-heading"><code>remote_rule</code><span class="risk risk-danger">High impact</span></div>
                 <p>Explicit exact-target outgoing blocking rule. InvokeServer requires local_error policy. Stop disarms all rules; excluding logs is a separate operation.</p>
+              </li>
+              <li class="tool-row" data-tool-name="remote_script_export">
+                <div class="tool-row-heading"><code>remote_script_export</code><span class="risk risk-write">Write</span></div>
+                <p>Export the exact portable script that was reviewed. Requires its current review ID and digest; target or argument changes invalidate review.</p><span class="tool-needs">Requires fs</span>
+              </li>
+              <li class="tool-row" data-tool-name="remote_script_prepare">
+                <div class="tool-row-heading"><code>remote_script_prepare</code><span class="risk risk-read">Read</span></div>
+                <p>Prepare a portable Luau script for review. The script uses an exact game path and typed arguments, and requires no UAI binding. Preparation sends no traffic.</p>
               </li>
               <li class="tool-row" data-tool-name="remote_watch">
                 <div class="tool-row-heading"><code>remote_watch</code><span class="risk risk-read">Read</span></div>

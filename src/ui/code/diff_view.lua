@@ -14,6 +14,7 @@ return function(env)
 		local list = common.virtualList(root, { name = "DiffLines", position = UDim2.fromOffset(0, common.barHeight()), size = UDim2.new(1, 0, 1, -common.barHeight()),
 			role = "mono", passive = true, rowHeight = theme.text.mono.height + 2, horizontal = true, bg = theme.color.codeSurface,
 			label = function(row) return string.format("%4s %4s %s %s", row.oldLine or "", row.newLine or "", row.kind == "add" and "+" or row.kind == "remove" and "−" or " ", row.text) end,
+			richLabel = function(row) return string.format("%4s %4s %s ", row.oldLine or "", row.newLine or "", row.kind == "add" and "+" or row.kind == "remove" and "−" or " ") .. env.require("ui/markdown").highlight(row.text, "luau") end,
 			background = function(row) return row.kind == "add" and theme.color.codeAddSurface or row.kind == "remove" and theme.color.codeRemoveSurface or nil end,
 		})
 		for index, row in ipairs(comparison.rows) do

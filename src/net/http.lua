@@ -13,6 +13,19 @@ return function(env)
 	local signal = env.require("runtime/signal")
 
 	local HISTORY_LIMIT = 60
+	local MAX_BODY, MAX_WORKERS = 8 * 1024 * 1024, 8
+	local workers, alive = 0, true
+	local function aborted(spec)
+		if not alive then return true end
+		if not spec.aborted then return false end
+		local ok, value = pcall(spec.aborted); return not ok or value == true
+	end
+	local function terminal(err)
+		local value = tostring(err or ""):lower()
+		return value == "aborted" or value:find("deadline", 1, true) ~= nil or value:find("timed out", 1, true) ~= nil
+			or value:find("timeout", 1, true) ~= nil or value:find("response_limit:", 1, true) ~= nil or value:find("malformed:", 1, true) ~= nil
+			or value:find("malformed_stream:", 1, true) ~= nil
+	end
 
 	-- A browser agent for the public web: search engines and CDNs answer 403 to
 	-- anything else, so the web tools opt into this explicitly. Everything else,
@@ -208,6 +221,8 @@ return function(env)
 		local headers = res.Headers or res.ResponseHeaders or {}
 		if type(headers) ~= "table" then headers = {} end
 		local body = res.Body or res.ResponseData or ""
+		if type(body) ~= "string" then return nil, "malformed: transport body is not text" end
+		if #body > MAX_BODY then return nil, "response_limit: response exceeds 8 MiB" end
 		if body == "" and next(headers) == nil then
 			local said = util.trim(tostring(res.StatusMessage or ""))
 			return nil, said ~= "" and said or "the transport returned no response"
@@ -254,10 +269,27 @@ return function(env)
 		local headers = buildHeaders(spec, attempt)
 		local started = clock.ms()
 
-		local res, err
-		if spec.relay then
-			res, err = env.require("net/relay").request(spec, headers, M.request)
-		else res, err = send(url, method, headers, spec.body, spec.timeout) end
+		if aborted(spec) then return nil, "aborted", 0 end
+		if workers >= MAX_WORKERS then return nil, "deadline: native HTTP worker limit reached", 0 end
+		local deadline = math.min(tonumber(spec.deadlineMs) or math.huge, started + math.max(1, math.min(300, tonumber(spec.timeout) or 120)) * 1000)
+		if deadline <= started then return nil, "deadline: request budget expired", 0 end
+		local pending = { done = false, accepting = true }
+		workers = workers + 1
+		clock.spawn(function()
+			local ok, response, problem = pcall(function()
+				if spec.relay then return env.require("net/relay").request(spec, headers, M.request) end
+				return send(url, method, headers, spec.body, math.max(0.001, (deadline - clock.ms()) / 1000))
+			end)
+			workers = math.max(0, workers - 1)
+			if pending.accepting then pending.res, pending.err, pending.done = ok and response or nil, ok and problem or "Native HTTP transport failed", true end
+		end)
+		while not pending.done and not aborted(spec) and clock.ms() < deadline do clock.wait(0.05) end
+		pending.accepting = false
+		local res, err = pending.res, pending.err
+		if aborted(spec) then res, err = nil, "aborted"
+		elseif not pending.done or clock.ms() > deadline then res, err = nil, "deadline: transport outcome is unknown; automatic retry is disabled" end
+		if res and (type(res.body) ~= "string" or #res.body > MAX_BODY) then res, err = nil, "response_limit: response exceeds its text budget" end
+		if err then err = log.redact(util.ellipsis(tostring(err), 1000)) end
 		local elapsed = clock.since(started)
 
 		-- `spec.silent` keeps a request out of the history and out of the log. The web
@@ -284,7 +316,7 @@ return function(env)
 			-- Cloudflare 403 carries `server` and `cf-ray` and usually `cf-mitigated`,
 			-- and the API's own 403 carries a JSON body. Kept short -- this is what the
 			-- Requests view shows, not an archive.
-			response = res and util.ellipsis(res.body, 400) or nil,
+			response = res and log.redact(util.ellipsis(res.body, 400)) or nil,
 			server = res and M.header(res, "server") or nil,
 			trace = res and (M.header(res, "cf-ray") or M.header(res, "x-request-id")) or nil,
 			mitigated = res and M.header(res, "cf-mitigated") or nil,
@@ -339,7 +371,7 @@ return function(env)
 	-- itself: a provider with a key pool passes 429 so the transport does not sleep
 	-- its way through a backoff on a key that rotation can replace at once.
 	function M.shouldRetry(res, err, info)
-		if (res and res.terminal) or err == "aborted" then return false end
+		if (res and res.terminal) or terminal(err) then return false end
 		local elapsed = tonumber(info and info.elapsed) or 0
 		local status = res and res.status or 0
 		local body = tostring(res and res.body or "")
@@ -400,12 +432,14 @@ return function(env)
 	-- lets the caller report the wait to the interface, and `spec.aborted` lets a
 	-- user cancel during the sleep rather than after it.
 	function M.send(spec)
-		local attempts = math.max(spec.attempts or 1, 1)
+		local attempts = math.max(1, math.min(8, tonumber(spec.attempts) or 1))
+		local deadline = tonumber(spec.deadlineMs) or (clock.ms() + math.max(1, math.min(300, tonumber(spec.timeout) or 120)) * 1000)
 		local lastRes, lastErr
 		for attempt = 1, attempts do
-			if spec.aborted and spec.aborted() then return nil, "aborted" end
+			if aborted(spec) then return nil, "aborted" end
 			local copy = util.copy(spec)
-			copy.attempt = attempt
+			copy.attempt, copy.deadlineMs = attempt, deadline
+			if clock.ms() >= deadline then return nil, "deadline: request budget expired" end
 			local res, err, failedMs = M.request(copy)
 			lastRes, lastErr = res, err
 			-- Asked before the success check, because a 200 can carry the failure in
@@ -421,7 +455,7 @@ return function(env)
 				-- from inside the executor ("Argument 1 missing or nil") and say nothing
 				-- a reader can act on, where the wait and its cause do.
 				if why and not res then
-					return nil, why .. " -- the transport gave up while the request was still " ..
+					return nil, "deadline: " .. why .. " -- the transport gave up while the request was still " ..
 						"running. A smaller context budget or reply ceiling fits inside it."
 				end
 				return res, err
@@ -429,7 +463,7 @@ return function(env)
 			if attempt >= attempts then return res, err end
 			local wait, source = retryDelay(res, attempt, spec.backoff)
 			if spec.onRetry then
-				spec.onRetry({
+				local callbackOk = pcall(spec.onRetry, {
 					attempt = attempt,
 					attempts = attempts,
 					wait = wait,
@@ -437,12 +471,14 @@ return function(env)
 					status = res and res.status or 0,
 					error = err,
 				})
+				if not callbackOk then log.warn("http", "retry callback failed safely") end
 			end
 			-- Slice the sleep so an abort lands promptly instead of after the full
 			-- backoff, which at the top of the curve is twenty seconds.
 			local slept = 0
 			while slept < wait do
-				if spec.aborted and spec.aborted() then return nil, "aborted" end
+				if clock.ms() >= deadline then return nil, "deadline: request budget expired during backoff" end
+				if aborted(spec) then return nil, "aborted" end
 				local step = math.min(0.25, wait - slept)
 				clock.wait(step)
 				slept = slept + step
@@ -464,6 +500,10 @@ return function(env)
 		M.changed:fire(nil)
 	end
 
+	M.terminal = terminal
+	M.limits = { body = MAX_BODY, workers = MAX_WORKERS }
+	function M.workers() return workers end
+	env.require("runtime/dispose").add(function() alive = false; M.changed:clear() end, "native HTTP workers")
 	M.BROWSER_UA = BROWSER_UA
 
 	return M

@@ -78,6 +78,7 @@ return function(env)
 						-- keep: the child's context, and the conversation that was waiting on
 						-- it. `parentTitle` is a string and stays, because the card still says
 						-- where the dispatch came from.
+						if record.disconnect then record.disconnect(); record.disconnect = nil end
 						record.session = nil
 						record.parent = nil
 					end
@@ -167,17 +168,23 @@ return function(env)
 		local record = M.get(id)
 		if not record or not record.session then return false end
 		if not isLive(record) then return false end
-		record.session.abortFlag = true
+		-- Preserve the stop request in the record as well as the child session. The child
+		-- may finish between the click and its next cooperative check, and the record must
+		-- still report the user-requested stop rather than a normal completion.
 		record.stopping = true
+		record.stopRequested = true
+		record.session.abortFlag = true
+		record.session.abort()
+		record.session.abortFlag = true
 		announceChange()
 		log.info("subagent", "stop requested for " .. tostring(record.label))
 		return true
 	end
 
-	function M.stopAll()
+	function M.stopAll(parent)
 		local stopped = 0
 		for _, record in ipairs(M.running()) do
-			if M.stop(record.id) then stopped = stopped + 1 end
+			if (not parent or record.parent == parent) and M.stop(record.id) then stopped = stopped + 1 end
 		end
 		return stopped
 	end
@@ -186,7 +193,7 @@ return function(env)
 	function M.clearHistory()
 		local kept = {}
 		for _, record in ipairs(M.records) do
-			if isLive(record) then kept[#kept + 1] = record end
+			if isLive(record) then kept[#kept + 1] = record elseif record.disconnect then record.disconnect(); record.disconnect = nil end
 		end
 		M.records = kept
 		announceChange()
@@ -248,7 +255,9 @@ return function(env)
 	M.live = 0
 
 	function M.concurrencyLimit()
-		return math.max(tonumber(config.get("agent.subagentConcurrency", 8)) or 8, 1)
+		local limit = tonumber(config.get("agent.subagentConcurrency", 12))
+		if not limit or limit ~= limit then limit = 12 end
+		return math.max(1, math.min(12, math.floor(limit)))
 	end
 
 	-- A dispatch over the ceiling waits for a slot instead of failing: the model has
@@ -309,7 +318,10 @@ return function(env)
 	local function wire(record, child)
 		local function announce(kind, payload)
 			local parent = record.parent
-			if not parent then return end
+			-- A stale child must not narrate into a different, still-live parent turn.
+			-- An aborted turn moved the epoch too, but its child's final "stopped" still
+			-- belongs on the card, so that one is allowed through.
+			if not parent or parent.removed or (record.parentEpoch and parent.toolEpoch ~= record.parentEpoch and not parent.aborted()) then return end
 			payload = payload or {}
 			payload.id = record.id
 			payload.call = record.callId
@@ -325,10 +337,11 @@ return function(env)
 		child.aborted = function()
 			if child.abortFlag == true then return true end
 			local parent = record.parent
-			return parent ~= nil and parent.aborted() == true
+			if parent and (parent.aborted() or parent.removed or parent.toolEpoch ~= record.parentEpoch) then child.abortFlag = true end
+			return child.abortFlag == true
 		end
 
-		child.events:connect(function(event)
+		record.disconnect = child.events:connect(function(event)
 			if event.kind == "tool:call" then
 				record.calls = (record.calls or 0) + 1
 				record.currentTool = tostring(event.name)
@@ -406,19 +419,25 @@ return function(env)
 		local unlimited = M.unlimited()
 		local announce = record.announce
 
-		local budget = waitForSlot(unlimited and nil or (opts.budgetSeconds or M.budgetSeconds()),
-			record.parent and record.parent.aborted or nil)
-		if budget == false then
+		record.parentEpoch = record.parent and record.parent.toolEpoch
+		record.stopRequested, record.stopping, record.currentTool = nil, nil, nil
+		record.status, record.startedAt = "queued", clock.ms()
+		child.toolEpoch = {}
+		child.abortFlag = false
+		announceChange()
+		local requestedBudget
+		if not unlimited then requestedBudget = opts.budgetSeconds or M.budgetSeconds() end
+		local budget = waitForSlot(requestedBudget, child.aborted)
+		if budget == false or child.aborted() or M.live >= M.concurrencyLimit() then
 			record.status = "stopped"
+			record.stopping = nil
 			record.ms = clock.since(record.startedAt)
 			record.report = "Stopped before it started."
 			announceChange()
 			return nil, "the turn was stopped before this subagent started"
 		end
 
-		child.abortFlag = false
 		child.turns = child.turns + 1
-		child.toolEpoch = {}
 		child.unlimited = unlimited
 		child.budgetSeconds = budget
 		if opts.turns then child.maxTurns = opts.turns end
@@ -454,6 +473,7 @@ return function(env)
 			log.warn("subagent", "failed", reply)
 			local note = "the subagent failed: " .. util.ellipsis(tostring(reply), 200)
 			record.status = "failed"
+			record.stopping = nil
 			record.ms = elapsed
 			record.report = note
 			record.currentTool = nil
@@ -463,7 +483,7 @@ return function(env)
 		end
 
 		local stats = child.ctx.stats()
-		local aborted = child.aborted() == true
+		local aborted = record.stopRequested == true or child.aborted() == true
 		log.info("subagent", string.format("finished in %s over %d messages%s",
 			util.formatDuration(elapsed), stats.messages, aborted and " (stopped)" or ""))
 
@@ -551,14 +571,8 @@ return function(env)
 			-- says so, because a model that knows it cannot ask writes a complete
 			-- report instead of stopping at a question.
 			toolExclude = excluded,
-			-- Streaming is left to the provider and the Ask-for-streams setting, the
-			-- same as the main conversation. It used to be refused here, on the reading
-			-- that a child with no interface has nothing to stream into -- but no Roblox
-			-- transport delivers a body incrementally anyway, so that bought nothing and
-			-- cost the two things the streamed shape carries: reasoning text, and the
-			-- per-request usage block some gateways report token counts in at all. Every
-			-- subagent request landing without one was enough to mark the whole session's
-			-- cost readout estimated.
+			-- Keep the provider's stream setting: buffered HTTP can carry reasoning and
+			-- usage metadata, while a compatible socket can also deliver live previews.
 		})
 		-- The record is what the Subagents panel reads, so it is kept whether or not
 		-- there is a parent transcript to narrate into. The wiring below is therefore
@@ -621,5 +635,10 @@ return function(env)
 		return runChild(record, text, { turns = opts.turns })
 	end
 
+	env.require("runtime/dispose").add(function()
+		M.stopAll()
+		for _, record in ipairs(M.records) do if record.disconnect then record.disconnect(); record.disconnect = nil end end
+		M.changed:clear()
+	end, "native subagents")
 	return M
 end

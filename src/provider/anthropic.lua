@@ -244,7 +244,6 @@ return function(env)
 		for key, value in pairs(record.params or {}) do body[key] = value end
 		for key, value in pairs(request.extra or {}) do body[key] = value end
 		-- This adapter has no WebSocket path; SSE here still arrives over HTTP.
-		openai.limitExecutorReply(record, request, body)
 		return body
 	end
 
@@ -310,16 +309,23 @@ return function(env)
 	-- The streamed form. Frame splitting is shared with net/sse -- that part is the
 	-- SSE spec, not a vendor decision -- but the events inside are Anthropic's own:
 	-- message_start, content_block_start/delta/stop, message_delta, message_stop.
-	function M.parseStream(body)
+	local function parseStream(body)
 		local content, reasoning = {}, {}
 		local slots, order = {}, {}
 		local model, id, usage, stop, streamError
-		local frames = sse.frames(body)
+		local frames, frameError = sse.frames(body)
+		streamError = frameError
+		local done = false
+		local function validIndex(index)
+			if index ~= nil and (type(index) ~= "number" or index < 0 or index > 1024 or index ~= math.floor(index)) then error("invalid block index", 0) end
+		end
 
 		local function slotFor(index)
+			validIndex(index)
 			local key = tostring(index or 0)
 			if not slots[key] then
-				slots[key] = { index = tonumber(index) or 0, json = {} }
+				if #order >= sse.limits.calls then error("tool call limit", 0) end
+				slots[key] = { index = tonumber(index) or 0, json = {}, bytes = 0 }
 				order[#order + 1] = key
 			end
 			return slots[key]
@@ -333,8 +339,10 @@ return function(env)
 		local thinking, thinkingOrder = {}, {}
 
 		local function thinkingFor(index)
+			validIndex(index)
 			local key = tostring(index or 0)
 			if not thinking[key] then
+				if #thinkingOrder >= sse.limits.calls then error("thinking block limit", 0) end
 				thinking[key] = { index = tonumber(index) or 0, text = {} }
 				thinkingOrder[#thinkingOrder + 1] = key
 			end
@@ -348,8 +356,8 @@ return function(env)
 				if type(event) == "table" then
 					local kind = event.type or frame.event
 					if kind == "error" then
-						streamError = (type(event.error) == "table" and event.error.message)
-							or tostring(event.error)
+						streamError = "malformed_stream: provider reported a stream error"
+					elseif kind == "message_stop" then done = true
 					elseif kind == "message_start" and type(event.message) == "table" then
 						model, id, usage = event.message.model, event.message.id, event.message.usage
 					elseif kind == "content_block_start" and type(event.content_block) == "table" then
@@ -384,6 +392,8 @@ return function(env)
 							slot.signature = (slot.signature or "") .. delta.signature
 						elseif delta.type == "input_json_delta" and type(delta.partial_json) == "string" then
 							local slot = slotFor(event.index)
+							slot.bytes = slot.bytes + #delta.partial_json
+							if slot.bytes > sse.limits.arguments then error("tool argument limit", 0) end
 							slot.json[#slot.json + 1] = delta.partial_json
 						end
 					elseif kind == "message_delta" then
@@ -394,7 +404,7 @@ return function(env)
 							usage = usage and util.merge(usage, event.usage) or event.usage
 						end
 					end
-				end
+				else streamError = "malformed_stream: invalid JSON frame" end
 			end
 		end
 
@@ -451,8 +461,14 @@ return function(env)
 			raw = raw,
 			chunks = #frames,
 			frames = #frames,
-			streamError = streamError,
+			streamError = streamError or (not done and not stop and "malformed_stream: stream ended before completion" or nil),
 		}
+	end
+	function M.parseStream(body)
+		local ok, result = pcall(parseStream, body)
+		if ok then return result end
+		return { role = "assistant", content = "", reasoning = "", toolCalls = {}, raw = {}, chunks = 0, frames = 0,
+			streamError = "malformed_stream: invalid chunk or stream budget exceeded" }
 	end
 
 	-- Performs one completion against one provider. Same return contract as
@@ -475,6 +491,11 @@ return function(env)
 	end
 
 	function M.complete(record, request)
+		request = util.copy(request or {})
+		if request.onRetry then
+			local callback = request.onRetry
+			request.onRetry = function(info) if not pcall(callback, info) then log.warn("provider", "retry callback failed safely") end end
+		end
 		local wantStream = request.stream
 		if wantStream == nil then
 			wantStream = record.stream ~= false and config.get("agent.stream", true)
@@ -577,7 +598,7 @@ return function(env)
 		-- can finish inside the wall. Only after 20-130 seconds without a response,
 		-- and only when the smaller ask is actually smaller.
 		local recoveredTokens
-		if not res and err and err ~= "aborted" and lastRequestMs >= 20000 and lastRequestMs <= 130000 then
+		if not res and err and not http.terminal(err) and lastRequestMs >= 20000 and lastRequestMs <= 130000 then
 			local lowered, note = smallerAsk(body)
 			if lowered and util.encode(lowered) ~= util.encode(body) then
 				log.info("provider", record.label .. ": hit the transport wall, retrying smaller (" .. note .. ")")

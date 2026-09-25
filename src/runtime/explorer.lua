@@ -9,8 +9,9 @@ return function(env)
 	local clock = env.require("runtime/clock")
 	local caps = env.require("runtime/caps")
 	local M = { changed = env.require("runtime/signal").new("explorer"), selectedIds = {}, selectionRevision = 0,
-		expanded = {}, drafts = {}, bookmarks = {}, view = { rows = {}, y = 0 }, primaryId = nil }
+		 expanded = {}, drafts = {}, bookmarks = {}, view = { rows = {}, y = 0 }, primaryId = nil, anchorId = nil, focusId = nil, clickedId = nil, selectionMode = "replace", runtimeEpoch = refs.epoch }
 	local branches, cursors, snapshots, queries, sequence = {}, {}, {}, {}, 0
+	local alive = true
 	local function token(prefix) sequence = sequence + 1; return prefix .. ":" .. refs.epoch .. ":" .. sequence end
 	local SERVICE_ORDER = {
 		Workspace = 1, Players = 2, Lighting = 3, MaterialService = 4, NetworkClient = 5,
@@ -25,6 +26,9 @@ return function(env)
 		item.name, item.displayPath = util.ellipsis(item.name or "Unavailable", 160), util.ellipsis(item.displayPath or "", 512)
 		local ok, ch = pcall(function() return object:GetChildren() end)
 		item.hasChildren = ok and type(ch) == "table" and #ch > 0
+		item.childrenReadable = ok and type(ch) == "table"
+		item.sourceCapable = item.className == "Script" or item.className == "LocalScript" or item.className == "ModuleScript"
+		item.decompileCapable = item.sourceCapable and caps.fn.decompile ~= nil
 		return item
 	end
 	local function querySignature(args)
@@ -33,36 +37,96 @@ return function(env)
 	local function prune(map, max)
 		local list = {}; for key, item in pairs(map) do
 			if item.at and clock.ms() - item.at > 300000 then
-				refs.release(item); if item.disconnect then item.disconnect() end; map[key] = nil
+				item.cancelled = true; refs.release(item); if item.disconnect then item.disconnect() end; map[key] = nil
 			else list[#list + 1] = { key = key, at = item.at or 0 } end
 		end
 		table.sort(list, function(a, b) return a.at < b.at end)
-		for i = 1, math.max(0, #list - max) do local item = map[list[i].key]; refs.release(item); if item.disconnect then item.disconnect() end; map[list[i].key] = nil end
+		for i = 1, math.max(0, #list - max) do local item = map[list[i].key]; item.cancelled = true; refs.release(item); if item.disconnect then item.disconnect() end; map[list[i].key] = nil end
 	end
 	function M.state()
 		return { epoch = refs.epoch, rootId = refs.id(game), selectedIds = util.copy(M.selectedIds), primaryId = M.primaryId,
-			selectionRevision = M.selectionRevision, metadata = schema.coverage, metadataVersion = schema.version,
-			nilInstances = caps.fn.getnilinstances ~= nil, query = M.querySummary }
+			selectionRevision = M.selectionRevision, runtimeEpoch = refs.epoch, anchorId = M.anchorId, focusId = M.focusId, clickedId = M.clickedId, selectionMode = M.selectionMode, metadata = schema.coverage, metadataVersion = schema.version,
+			nilInstances = caps.fn.getnilinstances ~= nil, query = M.querySummary and util.copy(M.querySummary) }
 	end
-	function M.select(ids, mode, expected)
-		mode = mode or "replace"
-		if expected ~= nil and expected ~= M.selectionRevision then return nil, "stale_revision: selection changed" end
+	function M.validateSelection(snapshot, ids)
+		if not alive or type(snapshot) ~= "table" or type(snapshot.selectedIds) ~= "table" or not util.isArray(snapshot.selectedIds)
+			or (ids ~= nil and (type(ids) ~= "table" or not util.isArray(ids)))
+			or (snapshot.runtimeEpoch or snapshot.epoch) ~= refs.epoch or snapshot.selectionRevision ~= M.selectionRevision
+			or snapshot.primaryId ~= M.primaryId then return nil, "stale_selection: inspect the current selection before changing it" end
+		if #snapshot.selectedIds ~= #M.selectedIds then return nil, "stale_selection: selected objects changed" end
+		for i, key in ipairs(M.selectedIds) do
+			if snapshot.selectedIds[i] ~= key or (ids and ids[i] ~= key) then return nil, "stale_selection: selected identities changed" end
+			if not refs.resolve(key) then return nil, "stale_selection: a selected object is no longer available" end
+		end
+		if ids and #ids ~= #M.selectedIds then return nil, "ambiguous_selection: action targets differ from the Inspector" end
+		return true
+	end
+	function M.focus(key)
+		if key and not refs.resolve(key) then return nil, "Focused object is no longer available" end
+		M.focusId = key; M.changed:fire({ kind = "focus", focusId = key }); return true
+	end
+	function M.setSelectionMode(mode)
+		if mode ~= "replace" and mode ~= "multiple" then return nil, "Invalid selection mode" end
+		M.selectionMode = mode; M.changed:fire({ kind = "selection_mode" }); return true
+	end
+	function M.select(ids, mode, expected, options)
+		if not alive then return nil, "stale_selection: Explorer belongs to an expired runtime" end
+		mode, options, ids = mode or "replace", options or {}, ids or {}
+		if type(expected) == "table" then local valid, why = M.validateSelection(expected); if not valid then return nil, why end
+		elseif expected ~= nil and expected ~= M.selectionRevision then return nil, "stale_revision: selection changed" end
 		if mode ~= "replace" and mode ~= "add" and mode ~= "remove" and mode ~= "clear" then return nil, "Invalid selection mode" end
-		if type(ids or {}) ~= "table" or #(ids or {}) > 20 then return nil, "Select at most 20 objects" end
+		if type(ids) ~= "table" or not util.isArray(ids) or #ids > 20 then return nil, "Select at most 20 objects" end
 		local result, present = {}, {}
-		if mode == "add" or mode == "remove" then for _, key in ipairs(M.selectedIds) do present[key] = true end end
-		for _, key in ipairs(ids or {}) do
-			if mode ~= "clear" then local object, why = refs.resolve(key); if not object then return nil, why end end
+		if mode == "add" or mode == "remove" then for _, key in ipairs(M.selectedIds) do if refs.resolve(key) then present[key] = true end end end
+		for _, key in ipairs(ids) do
+			if mode ~= "clear" and mode ~= "remove" then local object, why = refs.resolve(key); if not object then return nil, why end end
 			if mode == "remove" then present[key] = nil elseif mode ~= "clear" then present[key] = true end
 		end
 		for _, key in ipairs(M.selectedIds) do if present[key] then result[#result + 1] = key; present[key] = nil end end
-		for _, key in ipairs(ids or {}) do if present[key] then result[#result + 1] = key; present[key] = nil end end
+		for _, key in ipairs(ids) do if present[key] then result[#result + 1] = key; present[key] = nil end end
 		if #result > 20 then return nil, "Select at most 20 objects" end
+		local membership = {}; for _, key in ipairs(result) do membership[key] = true end
+		local primary = options.primaryId or ((mode == "add" or mode == "replace") and ids[#ids]) or M.primaryId
+		if not membership[primary] then primary = result[#result] end
 		refs.release(M); for _, key in ipairs(result) do refs.pin(key, M) end
-		M.selectedIds, M.primaryId, M.selectionRevision = result, result[#result], M.selectionRevision + 1
+		M.selectedIds, M.primaryId, M.selectionRevision = result, primary, M.selectionRevision + 1
+		M.clickedId, M.focusId = options.clickedId or ids[#ids], options.focusId or primary
+		if not options.range then M.anchorId = M.clickedId or primary end
+		if not membership[M.anchorId] then M.anchorId = primary end
+		if #result == 0 then M.anchorId, M.focusId, M.clickedId = nil, nil, nil end
 		M.changed:fire({ kind = "selection", revision = M.selectionRevision }); return M.state()
 	end
-	function M.children(parentId, cursor, limit, root)
+	function M.reconcileSelection()
+		local ids = {}; for _, key in ipairs(M.selectedIds) do if refs.resolve(key) then ids[#ids + 1] = key end end
+		if #ids ~= #M.selectedIds then return M.select(ids, "replace", nil, { primaryId = M.primaryId, range = true }) end
+		return M.state()
+	end
+	function M.mergePage(previous, page, maximum)
+		if not page then return nil, "Page unavailable" end
+		if previous and (previous.queryId ~= page.queryId or previous.parentId ~= page.parentId or previous.revision ~= page.revision) then return nil, "stale_cursor: result identity changed; refresh" end
+		local merged, seen = util.copy(page), {}; merged.items = {}
+		if previous then merged.omittedBefore, merged.uiTruncated = previous.omittedBefore, previous.uiTruncated end
+		for _, list in ipairs({ previous and previous.items or {}, page.items }) do
+			for _, item in ipairs(list) do
+				if not seen[item.instanceId] then
+					seen[item.instanceId] = true
+					if #merged.items < (maximum or 4000) then merged.items[#merged.items + 1] = util.copy(item) else merged.uiTruncated = true end
+				end
+			end
+		end
+		merged.displayed = #merged.items
+		if merged.uiTruncated then merged.nextCursor = nil end
+		return merged
+	end
+	function M.cancelQuery(queryId)
+		local query = queries[queryId]
+		if query then query.cancelled = true; queries[queryId] = nil; refs.release(query) end
+		for key, cursor in pairs(cursors) do if cursor.queryId == queryId then cursors[key] = nil end end
+		if M.querySummary and M.querySummary.queryId == queryId then M.querySummary = nil end
+	end
+
+	function M.children(parentId, cursor, limit, root, focusId)
+		if not alive then return nil, "expired: Explorer runtime ended" end
 		if root and root ~= "nil" and root ~= "bookmarks" then return nil, "Unknown logical root" end
 		limit = math.max(1, math.min(math.floor(tonumber(limit) or 25), 100))
 		local parent, why, children, readable
@@ -88,7 +152,7 @@ return function(env)
 			end
 		end
 		branch.at = clock.ms(); prune(branches, 64)
-		local sortable, signature = {}, 5381
+		local sortable, signature, unreadable, filtered = {}, 5381, 0, 0
 		local isGameRoot = parentId == refs.id(game)
 		for i = 1, math.min(#children, 20000) do
 			local object = children[i]
@@ -100,8 +164,8 @@ return function(env)
 					sortable[#sortable + 1] = { object = object, name = name, class = class, id = key }
 					local identity = key .. ":" .. class .. ":" .. name
 					for j = 1, #identity do signature = (signature * 33 + identity:byte(j)) % 4294967296 end
-				end
-			end
+				else filtered = filtered + 1 end
+			else unreadable = unreadable + 1 end
 		end
 		if isGameRoot then
 			table.sort(sortable, function(a, b)
@@ -121,6 +185,7 @@ return function(env)
 			end)
 		end
 		local at = 1
+		if focusId then for i, item in ipairs(sortable) do if item.id == focusId then at = math.max(1, i - math.floor(limit / 2)); break end end end
 		if cursor then
 			local stored = cursors[cursor]
 			if not stored or stored.parentId ~= parentId or stored.revision ~= branch.revision or stored.signature ~= signature or clock.ms() - stored.at > 300000 then return nil, "stale_cursor: refresh this branch" end
@@ -132,7 +197,8 @@ return function(env)
 		if at + #items <= #sortable then
 			nextCursor = token("children"); cursors[nextCursor] = { parentId = parentId, revision = branch.revision, signature = signature, next = at + #items, at = clock.ms() }; prune(cursors, 128)
 		end
-		return { items = items, parentId = parentId, revision = branch.revision, nextCursor = nextCursor, total = #children, omitted = math.max(0, #children - #sortable), complete = #children == #sortable }
+		return { items = items, parentId = parentId, revision = branch.revision, nextCursor = nextCursor, total = #children, accessible = #sortable, returned = #items, omitted = math.max(0, #children - #sortable),
+			unreadable = unreadable, filtered = filtered, limited = math.max(0, #children - 20000), omittedBefore = at - 1, limit = 20000, complete = #children == #sortable }
 	end
 	function M.collapse(parentId)
 		local branch = branches[parentId]
@@ -141,7 +207,8 @@ return function(env)
 		for key, cursor in pairs(cursors) do if cursor.parentId == parentId then cursors[key] = nil end end
 	end
 	function M.query(args, ctx)
-		args = args or {}; prune(queries, 8)
+		if not alive then return nil, "expired: Explorer runtime ended" end
+		args = args or {}; prune(queries, args.cursor and 8 or 7)
 		local signature = querySignature(args)
 		local query, at
 		if args.cursor then
@@ -151,21 +218,29 @@ return function(env)
 			local root, why = refs.resolve(args.rootId or refs.id(game)); if not root then return nil, why end
 			local needle, class, tag = tostring(args.name or ""):lower(), tostring(args.class or ""), args.tag
 			if args.pattern then local good = pcall(string.find, "", needle); if not good then return nil, "Invalid name pattern" end end
-			query = { id = token("query"), at = clock.ms(), items = {}, signature = signature }; queries[query.id] = query; at = 1
-			query.stats = scan.descendants(root, ctx, function(object)
+			query = { id = token("query"), at = clock.ms(), items = {}, signature = signature, seen = {}, generation = args.generation }; queries[query.id] = query; at = 1
+			query.stats = scan.descendants(root, { aborted = function() return not alive or query.cancelled or (ctx and ctx.aborted and ctx.aborted()) end }, function(object)
 				local ok, matches = pcall(function()
 					local remote = object.ClassName == "RemoteEvent" or object.ClassName == "RemoteFunction" or object.ClassName == "UnreliableRemoteEvent"
 					return (args.kind ~= "remote" or remote) and (needle == "" or object.Name:lower():find(needle, 1, not args.pattern)) and (class == "" or object:IsA(class)) and (not tag or object:HasTag(tag))
 				end)
-				if ok and matches then query.items[#query.items + 1] = projection(object) end
+				if ok and matches then
+					local key = refs.id(object, true)
+					if not query.seen[key] then query.seen[key] = true; query.items[#query.items + 1] = projection(object) end
+				elseif not ok then query.unreadable = (query.unreadable or 0) + 1 end
 				return #query.items < 1000
 			end, 20000)
 		end
-		local result = { items = {}, queryId = query.id, scanned = query.stats.scanned, complete = query.stats.complete, reason = query.stats.reason, snapshotAt = query.at, unreadable = query.stats.unreadable, elapsedMs = clock.ms() - query.at }
+		if not alive or query.cancelled or query.stats.reason == "aborted" or (ctx and ctx.aborted and ctx.aborted()) then M.cancelQuery(query.id); return nil, "cancelled: query was superseded" end
+		local complete = query.stats.complete and (query.unreadable or 0) == 0
+		local reason = query.stats.reason or (not complete and "inaccessible object metadata" or nil)
+		local result = { items = {}, queryId = query.id, generation = query.generation, total = #query.items, totalKnown = complete, omitted = complete and 0 or nil, limit = 20000, resultLimit = 1000, scanned = query.stats.scanned, complete = complete, reason = reason, snapshotAt = query.at, unreadable = query.stats.unreadable + (query.unreadable or 0), elapsedMs = clock.ms() - query.at }
 		local limit = math.max(1, math.min(tonumber(args.limit) or 25, 100))
-		for i = at, math.min(#query.items, at + limit - 1) do result.items[#result.items + 1] = query.items[i] end
+		for i = at, math.min(#query.items, at + limit - 1) do result.items[#result.items + 1] = util.copy(query.items[i]) end
 		if at + #result.items <= #query.items then result.nextCursor = token("query-page"); cursors[result.nextCursor] = { queryId = query.id, next = at + #result.items, at = clock.ms() }; prune(cursors, 128) end
-		M.querySummary = { queryId = query.id, scanned = query.stats.scanned, matches = #query.items, complete = query.stats.complete }
+		result.returned = #result.items
+		result.filtered = math.max(0, query.stats.scanned - #query.items - (query.unreadable or 0) - (query.stats.duplicates or 0))
+		M.querySummary = { queryId = query.id, scanned = query.stats.scanned, matches = #query.items, complete = complete }
 		return result
 	end
 	function M.properties(ids, section, names)
@@ -173,8 +248,8 @@ return function(env)
 		if type(ids) ~= "table" or #ids < 1 or #ids > 20 or (names and #names > 100) then return nil, "Choose 1–20 objects and up to 100 fields" end
 		if section ~= "properties" and section ~= "attributes" and section ~= "tags" then return nil, "Invalid property section" end
 		prune(snapshots, 19)
-		local snapshot = { id = token("properties"), at = clock.ms(), fields = {} }
-		local result = { items = {}, snapshotId = snapshot.id, expiresAt = snapshot.at + 300000, coverage = schema.coverage }
+		local snapshot = { id = token("properties"), at = clock.ms(), fields = {}, selection = M.state() }
+		local result = { items = {}, snapshotId = snapshot.id, expiresAt = snapshot.at + 300000, coverage = schema.coverage, selection = snapshot.selection }
 		local common
 		for _, key in ipairs(ids) do
 			local object, why = refs.resolve(key); if not object then return nil, why end
@@ -240,6 +315,8 @@ return function(env)
 		M.bookmarks[#M.bookmarks + 1] = key; return true
 	end
 	env.require("runtime/dispose").add(function()
+		alive = false
+		for _, query in pairs(queries) do query.cancelled = true; refs.release(query) end
 		for _, branch in pairs(branches) do if branch.disconnect then branch.disconnect() end end
 		for _, snapshot in pairs(snapshots) do refs.release(snapshot) end
 		refs.release(M); refs.release(M.bookmarks); M.changed:clear(); branches, queries, snapshots, cursors = {}, {}, {}, {}

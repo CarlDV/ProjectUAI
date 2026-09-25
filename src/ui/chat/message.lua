@@ -668,11 +668,11 @@ return function(env)
 			gap = theme.space.sm,
 			layoutOrder = order or 0,
 		})
-		-- Replay keeps the attribution from the request that produced this response.
+		-- Keep response attribution when replaying or completing a live preview.
 		local record = env.require("provider/registry").active()
 		local model = attribution or (record and util.trim(tostring(record.model or "")) or "")
 		if model == "" then model = record and record.label or "no model" end
-		byline(holder, {
+		local attributionRow = byline(holder, {
 			name = "Assistant",
 			detail = model,
 			icon = "brand",
@@ -694,6 +694,12 @@ return function(env)
 		local streamLabel = nil
 
 		local handle = { root = holder, column = column }
+		local modelLabel = attributionRow:FindFirstChild("ModelAttribution")
+
+		function handle.setModel(value)
+			local text = util.trim(tostring(value or ""))
+			if text ~= "" then modelLabel.Text = text end
+		end
 
 		function handle.setText(value)
 			currentText = value or ""
@@ -702,35 +708,20 @@ return function(env)
 		end
 
 		function handle.stream(partial)
-			local color = theme.color.accentHot
-			local cursor = string.format(' <font color="#%02x%02x%02x">●</font>',
-				math.floor(color.R * 255), math.floor(color.G * 255), math.floor(color.B * 255))
-			if partial:find("\n", 1, true) then
-				M.renderBlocks(column, partial)
-				P.text(column, { name = "StreamCursor", text = cursor, role = "body", rich = true,
-					auto = "Y", layoutOrder = #markdown.blocks(partial) + 1 })
-				streamLabel = nil
-			else
-				if not streamLabel or streamLabel.Parent ~= column then
-					for _, child in ipairs(column:GetChildren()) do
-						if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then child:Destroy() end
-					end
-					streamLabel = P.text(column, {
-						text = markdown.inline(partial) .. cursor,
-						role = "body",
-						rich = true,
-						wrap = true,
-						auto = "Y",
-						layoutOrder = 1,
-					})
-					streamLabel.Size = UDim2.new(1, 0, 0, 0)
-				else
-					streamLabel.Text = markdown.inline(partial) .. cursor
+			currentText = tostring(partial or "")
+			-- Incomplete tables/code fences stay in one label until the final render.
+			if not streamLabel or streamLabel.Parent ~= column then
+				for _, child in ipairs(column:GetChildren()) do
+					if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then child:Destroy() end
 				end
+				streamLabel = P.text(column, { name = "StreamText", text = "", role = "body", wrap = true,
+					auto = "Y", size = UDim2.new(1, 0, 0, 0), layoutOrder = 1 })
 			end
+			streamLabel.Text = currentText .. " ●"
 		end
 
-		function handle.finish(finalText)
+		function handle.finish(finalText, finalModel)
+			handle.setModel(finalModel)
 			handle.setText(finalText or currentText)
 		end
 
@@ -868,14 +859,16 @@ return function(env)
 		if config.get("ui.showReasoning", true) == false then holder.Visible = false end
 
 		local handle = { root = holder, body = body }
-		function handle.append(value)
-			value = tostring(value or "")
-			if value == "" or value == text then return end
-			text = text .. "\n\n" .. value
+		function handle.setText(value)
+			text = tostring(value or "")
 			body.Text = markdown.inline(text)
 			tokenText.Text = "~" .. util.formatNumber(usage.estimateText(text)) .. " tokens"
 			fitHeader()
 			if open then fit() end
+		end
+		function handle.append(value)
+			value = tostring(value or "")
+			if value ~= "" and value ~= text then handle.setText(text .. "\n\n" .. value) end
 		end
 		return handle
 	end

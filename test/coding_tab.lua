@@ -124,7 +124,7 @@ case("Explorer expands parents, clears search and targets the right-clicked obje
 	f.healthy(); explorer.destroy(); f.close()
 end)
 
-case("one-click capture has a useful scope and observes more than 128 remotes", function()
+case("capture requires a selected target and explicit subtree scope observes more than 128 remotes", function()
 	local f = ui(800, 650); local caps = f.env.require("runtime/caps")
 	caps.fn.hookmetamethod, caps.fn.hookfunction = nil, nil
 	local last
@@ -132,8 +132,13 @@ case("one-click capture has a useful scope and observes more than 128 remotes", 
 	local capture, records = f.env.require("runtime/remote_capture"), f.env.require("runtime/remote_store")
 	local view = f.env.require("ui/code/remotes").new(f.host, function() end)
 	view.start(); f.h.sched.advance(0.5)
+	check("Start without a target stays idle", capture.status == "idle" and capture.state().monitored == 0)
+	local refs = f.env.require("runtime/instance_refs")
+	assert(f.env.require("runtime/explorer").select({ refs.id(f.h.workspace) }))
+	capture.view.scope = "Selected subtree"
+	view.start(); f.h.sched.advance(0.5)
 	local state = capture.state()
-	check("Start uses the game scope and available incoming capture", state.status == "running" and state.mode == "incoming" and state.rootId == f.env.require("runtime/instance_refs").id(f.h.game))
+	check("Start uses the explicit subtree and a bounded incoming capture", state.status == "running" and state.mode == "incoming" and state.rootId == refs.id(f.h.workspace) and state.expiresAt ~= nil)
 	check("all 300 incoming events are subscribed", state.monitored == 300 and state.omitted == 0)
 	last.OnClientEvent:Fire(false, nil, 7, nil); f.h.sched.advance(0.2)
 	local record = assert(records.get(assert(records.latest()).items[1].id))

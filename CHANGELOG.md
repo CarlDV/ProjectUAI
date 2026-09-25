@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased — native client improvements
+
+Available in game under **App menu → What's new**, also reachable from
+**About → What's new**. Reload the updated native bundle to see the bundled notes.
+
+- Include these changes in the in-game notes and restore the unread marker when
+  notes change within the same client version.
+- Remove the 8,192-token executor reply ceiling from both provider adapters,
+  including native HTTP fallback. Keep configured output budgets and model limits.
+  Render buffered replies immediately, forward real socket previews, and request
+  concise progress messages between work steps. Center Add in the horizontal
+  provider list, including after resizing.
+- Repair the token context breakdown's category widths and shared accounting.
+  Estimate prepared system/schema overhead, calibrate against dispatched history,
+  invalidate measurements after provider/endpoint/model changes, and coalesce
+  live refreshes with cleanup on close.
+- Unify source/decompile provenance, explicit errors, deduplicated bounded requests,
+  refresh generations, display pinning and expiry. Inspected Source and decompiled
+  documents are read-only; editable extraction is explicit and never runs source.
+- Guard Explorer hierarchy actions with the displayed selection identity/revision;
+  distinguish primary, focus, anchor and clicked objects. Cancel stale queries,
+  retain canonical pages and show runtime/display limits and incomplete counts.
+- Reuse shifted syntax and line measurements, bound long-line drawing, share UTF-8
+  coordinates, show multiline selection and search matches, and recover source
+  expiry. Improve compact layouts, scoped shortcuts, autosave retry and conflicts.
+- Use one Remote Spy target resolver, selected-target/30-second defaults, neutral
+  hook attribution and explicit retained-wrapper status. Require portable-script
+  review, open caller source outside hooks, and export frozen capture/source
+  provenance. Account for late pinned completions and revoke agent capture promptly.
+- Bound native workers, logs, callbacks and response parsing. Clean up after errors
+  and preserve cancellation. Native timeout/unknown-outcome requests are terminal;
+  this supersedes the historical smaller-request timeout retry described below.
+- Keep transient progress out of retained transcripts, restore the newest saved
+  conversations, and preserve unsaved threads beyond the memory retention target.
+  Reject repeated run dispatch and stale Library removal confirmations.
+- Reset stopped subagents for follow-up, keep queued follow-ups cancellable and
+  reject duplicate dispatch. Honor the displayed concurrency range and prevent
+  unlimited workers from inheriting the disabled finite queue budget.
+- Add a fail-fast native verification command, performance contracts, actual Luau
+  syntax compilation, deterministic module manifests and generated-output checks.
+  Current features/limits: [native contract](docs/NATIVE_CLIENT.md). No version bump.
+
 ## Workspace organization — September 24, 2026
 
 - Guide the agent to organise game work under `files/<place name> (<PlaceId>)/`, with authored and edited scripts in the game folder root and decompiled or dumped source in its `dump/` subfolder. Reserved path characters in the place name are dropped so the folder stays valid.

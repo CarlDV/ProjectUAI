@@ -7,6 +7,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const check = process.argv.includes('--check');
+const bundleOnly = process.argv.includes('--bundle-only');
+const luajit = process.env.LUAJIT || 'luajit';
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const normalize = text => text.replace(/\r\n/g, '\n').trimEnd();
 
@@ -49,7 +51,7 @@ function replaceRegion(html, name, content) {
 
 function build() {
   verifyBundle();
-  const catalog = JSON.parse(execFileSync('luajit', ['tools/site_catalog.lua'], {
+  const catalog = JSON.parse(execFileSync(luajit, ['tools/site_catalog.lua'], {
     cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 4 * 1024 * 1024,
   }));
   const priority = ['instance', 'script', 'fs', 'agentself'];
@@ -115,5 +117,11 @@ function build() {
     ', ' + catalog.tools.length + ' tools, ' + groups.length + ' groups; root and docs synchronized.\n');
 }
 
-try { build(); }
+try {
+  if (bundleOnly) {
+    execFileSync(luajit, ['tools/bundle.lua', '--native', '--check'], {
+      cwd: root, stdio: 'inherit', windowsHide: true,
+    });
+  } else build();
+}
 catch (error) { process.stderr.write(error.message + '\n'); process.exitCode = 1; }

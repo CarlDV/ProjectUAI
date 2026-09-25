@@ -15,12 +15,15 @@ return function(env)
 	-- does not leave a dead entry behind for the drain to trip over.
 	function M.add(fn, label)
 		if type(fn) ~= "function" then return function() end end
+		if M.draining then pcall(fn); return function() end end
 		local entry = { fn = fn, label = label or "anonymous", alive = true }
 		M.entries[#M.entries + 1] = entry
 		return function()
 			if not entry.alive then return end
 			entry.alive = false
 			pcall(entry.fn)
+			entry.fn = nil
+			for index, candidate in ipairs(M.entries) do if candidate == entry then table.remove(M.entries, index); break end end
 		end
 	end
 
@@ -56,11 +59,13 @@ return function(env)
 		if M.draining then return 0 end
 		M.draining = true
 		local ran, failed = 0, {}
-		for index = #M.entries, 1, -1 do
-			local entry = M.entries[index]
+		local entries = M.entries; M.entries = {}
+		for index = #entries, 1, -1 do
+			local entry = entries[index]
 			if entry.alive then
 				entry.alive = false
 				local ok, err = pcall(entry.fn)
+				entry.fn = nil
 				ran = ran + 1
 				if not ok then failed[#failed + 1] = entry.label .. ": " .. tostring(err) end
 			end

@@ -6,9 +6,8 @@
 -- newest first because that is how a "what's new" is read -- the top entry
 -- is the one a returning user has not seen.
 --
--- `lastSeenVersion` is the read marker: the app menu offers the changelog
--- with a "new" marker while the running version is newer than the last one
--- seen, and opening the modal marks it read. Nothing is fetched remotely --
+-- Version and note revision track what the user opened, so updates within a
+-- version restore the menu's "new" marker. Nothing is fetched remotely --
 -- the notes a client can show offline are the notes it shipped with, and a
 -- version that has to be downloaded to learn what it contains is a version
 -- that cannot say anything on a bad network day.
@@ -21,10 +20,40 @@ return function(env)
 	local ENTRIES = {
 		{
 			version = "1.7.0",
-			date = "September 24, 2026",
-			title = "Code workspace, Explorer and Remotes",
-			highlights = "Browse workspace files, edit and run Luau, inspect live objects and remotes, and review source or game changes in the rebuilt Coding tab.",
+			revision = "2026-09-25-native",
+			date = "Updated September 25, 2026",
+			title = "Code workspace and native client improvements",
+			highlights = "Larger replies, immediate messages, clearer context totals, a centered Add Provider button, and fixes across Code, Explorer, Remotes and subagents.",
 			sections = {
+				{ category = "improved", label = "Replies and progress", items = {
+					"Removed the 8,192-token executor reply ceiling, including HTTP fallback. Your configured output budget and the model's own limits still apply.",
+					"Buffered replies appear immediately instead of using simulated typing. Compatible streams show received text and reasoning as they arrive; buffered HTTP cannot show tokens before the response arrives.",
+					"The agent is prompted to send one short progress message at a time between work steps and tool calls, then continue working.",
+				} },
+				{ category = "fixed", label = "Context and provider controls", items = {
+					"Context breakdown labels have room to display. Totals include prepared instructions and tools, distinguish estimates from provider measurements, and refresh correctly when providers or models change.",
+					"Add Provider is centered vertically in the horizontal provider strip, including after resizing or changing layouts.",
+				} },
+				{ category = "improved", label = "Source and decompilation", items = {
+					"Source views identify where their text came from. Inspected and decompiled snapshots are read-only; Extract editable copy creates a separate document without running it or writing back to the live script.",
+					"Source loading shares requests, supports refresh and reports unavailable, failed or expired snapshots. Switching or closing views prevents old requests from reopening them.",
+				} },
+				{ category = "fixed", label = "Explorer and editing", items = {
+					"Explorer actions use the selection shown in the Inspector and reject stale targets. Search cancels old work, avoids duplicate results and explains partial scans, row limits and deep paths.",
+					"Large documents reuse syntax colors and line measurements. Unicode selection, multiline highlights, horizontal caret reveal, Go to line, match counts, case and whole-word search, and searches across source pages are corrected.",
+					"Autosave handles maximum-size documents and interrupted writes. Retry required, Conflict and expired-source states preserve drafts, while stale delete confirmations and repeated run requests are rejected.",
+				} },
+				{ category = "improved", label = "Remote Spy", items = {
+					"Capture defaults to a selected remote and 30 seconds. Whole-game, subtree and continuous capture are explicit choices; selected-subtree capture uses the Explorer's primary object.",
+					"Inspect a captured caller, open its source or decompile it after capture, and see likely remote call sites. Exported records include source provenance.",
+					"Incoming calls offer diagnostics and caller actions. Outgoing calls also offer argument editing, reviewed one-shot replay and portable scripts that must be reviewed before copying or exporting.",
+					"Capture shows unknown hook attribution and any forwarding wrappers retained after Stop. Late results count toward storage limits, and exports remain consistent while new calls arrive.",
+				} },
+				{ category = "fixed", label = "Conversation and subagent reliability", items = {
+					"Recent saved chats restore correctly, progress updates preserve the transcript, and unsaved conversations remain available.",
+					"Stopped subagents can resume. Queued follow-ups remain cancellable, duplicate dispatch is rejected, configured concurrency is honored, and finished workers clear their Stopping label.",
+					"Unlimited subagents no longer inherit a disabled execution budget while waiting. Timed-out requests and remote replays are not automatically sent again when their outcome is unknown.",
+				} },
 				{ category = "added", label = "Workspace", items = {
 					"Shared Luau documents, native multiline input, syntax colors, line numbers, Find, Go to line, indentation, and Run/Stop with retained output.",
 					"Script/action library, typed action inputs, source versions, source Undo/Redo, guarded proposals, and wide or compact source comparisons.",
@@ -557,8 +586,7 @@ return function(env)
 		},
 	}
 
-	-- Labels are derived once rather than written per section, so a new
-	-- category cannot appear with the wrong label half the time.
+	-- Named sections keep their headings; other sections use shared category labels.
 	local LABELS = { added = "New", improved = "Improved", fixed = "Fixed" }
 
 	-- Newest first, as shipped above. Sorted rather than trusted so an edit in
@@ -574,7 +602,7 @@ return function(env)
 					if section.category == category then
 						sections[#sections + 1] = {
 							category = category,
-							label = LABELS[category] or category,
+							label = section.label or LABELS[category] or category,
 							items = section.items or {},
 						}
 					end
@@ -596,6 +624,7 @@ return function(env)
 			end
 			out[#out + 1] = {
 				version = entry.version,
+				revision = entry.revision,
 				date = entry.date,
 				title = entry.title,
 				highlights = entry.highlights,
@@ -613,13 +642,15 @@ return function(env)
 	function M.isUnread()
 		local latest = M.latest()
 		if not latest then return false end
-		return config.get("ui.lastSeenVersion", "0.0.0") ~= latest.version
+		if config.get("ui.lastSeenVersion", "0.0.0") ~= latest.version then return true end
+		return latest.revision ~= nil and config.get("ui.lastSeenChangelog", "") ~= latest.version .. ":" .. latest.revision
 	end
 
 	function M.markRead()
 		local latest = M.latest()
 		if not latest then return false end
 		config.set("ui.lastSeenVersion", latest.version)
+		config.set("ui.lastSeenChangelog", latest.version .. ":" .. (latest.revision or ""))
 		return true
 	end
 

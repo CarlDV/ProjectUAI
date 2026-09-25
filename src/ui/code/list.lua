@@ -96,9 +96,27 @@ return function(env)
 					if row.item and options.onToggle then options.onToggle(row.item, row.index) end
 				end)
 			end
+			if options.onClose then
+				-- A sibling of the row, not a child of it, so removing an entry cannot
+				-- also select it. Mirrors the chevron slot on the opposite edge.
+				local close = Instance.new("TextButton", list.root)
+				close.Name, close.Text, close.AutoButtonColor = "RowClose", "×", false
+				close.Font, close.TextSize, close.TextColor3 = theme.text.small.font, theme.text.small.size + 3, theme.color.textSecondary
+				close.BackgroundTransparency, close.BorderSizePixel, close.ZIndex = 1, 0, button.ZIndex + 2
+				close.Active, close.Selectable = true, true
+				row.closeSlot = close
+				close.InputBegan:Connect(function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then row.closePressed = row.key end
+				end)
+				close.Activated:Connect(function()
+					if row.closePressed and row.closePressed ~= row.key then row.closePressed = nil; return end
+					row.closePressed = nil
+					if row.item and options.onClose then options.onClose(row.item, row.index, row.button) end
+				end)
+			end
 			button.MouseEnter:Connect(function() row.hovered = not options.passive; paint(row) end)
 			button.MouseLeave:Connect(function() row.hovered = false; paint(row) end)
-			button.SelectionGained:Connect(function() row.focused = true; paint(row) end)
+			button.SelectionGained:Connect(function() row.focused = true; paint(row); if row.item and options.onFocus then options.onFocus(row.item) end end)
 			button.SelectionLost:Connect(function() row.focused = false; paint(row) end)
 			button.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then row.pressed = row.key end
@@ -133,11 +151,19 @@ return function(env)
 				row.item, row.index, row.key = item, index, identity
 				row.button.instance.Visible = item ~= nil
 				if row.chevronSlot then row.chevronSlot.Visible = false end
+				if row.closeSlot then row.closeSlot.Visible = false end
 				if item then
 					local top = (index - 1) * rowHeight
 					row.button.instance.Position, row.button.instance.Size = UDim2.fromOffset(0, top), UDim2.fromOffset(canvasWidth - theme.size.scrollbar, rowHeight)
 					row.button.instance.SelectionOrder = index
 					local left = 8 + indent(item)
+					local closeWidth = math.max(24, responsive.minTarget())
+					local closing = row.closeSlot ~= nil and (options.closable == nil or options.closable(item) ~= false)
+					local rightReserve = closing and closeWidth or 0
+					if row.closeSlot then
+						row.closeSlot.Visible = closing
+						row.closeSlot.Position, row.closeSlot.Size = UDim2.fromOffset(canvasWidth - theme.size.scrollbar - closeWidth, top), UDim2.fromOffset(closeWidth, rowHeight)
+					end
 					if row.chevronSlot then
 						local state = options.chevron(item)
 						row.chevronSlot.Visible = state ~= nil
@@ -154,10 +180,11 @@ return function(env)
 					end
 					local metaWidth = row.meta and (options.metaWidth or 60) or 0
 					local label = row.button.label
-					label.Text = labelOf(item, index)
+					label.RichText = options.richLabel ~= nil
+					label.Text = options.richLabel and options.richLabel(item, index) or labelOf(item, index)
 					label.TextColor3 = item.color or theme.color.text
 					label.Position = UDim2.fromOffset(left, row.detail and 4 or 0)
-					label.Size = UDim2.new(1, -left - 8 - metaWidth - (row.meta and 6 or 0), 0, row.detail and labelHeight or rowHeight)
+					label.Size = UDim2.new(1, -left - 8 - metaWidth - (row.meta and 6 or 0) - rightReserve, 0, row.detail and labelHeight or rowHeight)
 					if row.value then
 						label.Size = UDim2.new(0.43, -left - 6, 1, 0)
 						row.value.Text = options.value(item, index) or ""
@@ -166,11 +193,11 @@ return function(env)
 					end
 					if row.detail then
 						row.detail.Text = options.detail(item, index) or ""
-						row.detail.Position, row.detail.Size = UDim2.fromOffset(left, rowHeight - detailHeight - 4), UDim2.new(1, -left - 8, 0, detailHeight)
+						row.detail.Position, row.detail.Size = UDim2.fromOffset(left, rowHeight - detailHeight - 4), UDim2.new(1, -left - 8 - rightReserve, 0, detailHeight)
 					end
 					if row.meta then
 						row.meta.Text = options.meta(item, index) or ""
-						row.meta.Position, row.meta.Size = UDim2.new(1, -metaWidth - 8, 0, row.detail and 4 or 0), UDim2.fromOffset(metaWidth, row.detail and labelHeight or rowHeight)
+						row.meta.Position, row.meta.Size = UDim2.new(1, -metaWidth - 8 - rightReserve, 0, row.detail and 4 or 0), UDim2.fromOffset(metaWidth, row.detail and labelHeight or rowHeight)
 					end
 					paint(row)
 				end
@@ -178,6 +205,7 @@ return function(env)
 			for slot = count + 1, #list.rows do
 				list.rows[slot].button.instance.Visible = false
 				if list.rows[slot].chevronSlot then list.rows[slot].chevronSlot.Visible = false end
+				if list.rows[slot].closeSlot then list.rows[slot].closeSlot.Visible = false end
 			end
 			rendering = false
 		end

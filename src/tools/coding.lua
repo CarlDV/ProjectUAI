@@ -11,7 +11,7 @@ return function(env)
 	local str, num = { type = "string" }, { type = "integer" }
 	N.add(tools, "workspace_result_read", "read", "Read bounded retained detail for a large native tool result. Start with result_id; follow returned path arrays or offset. No source, object, or traffic is changed.",
 		{ result_id = str, path = { type = "array", items = str, maxItems = 16 }, section = str, offset = num }, { "result_id" }, function(args) return N.read(args) end)
-	local function metadata(doc, status) return { status = status or "applied", documentId = doc.id, name = doc.name, revision = doc.revision, bytes = #doc.source, storage = store.storage.state } end
+	local function metadata(doc, status) return { status = status or "applied", documentId = doc.id, name = doc.name, revision = doc.revision, bytes = #doc.source, readOnly = doc.readOnly == true, storage = store.storage.state } end
 	local function ref(args) return args.document_id or args.tab end
 	local function bind(args)
 		local doc, why = store.resolve(ref(args)); if not doc then return nil, why end
@@ -35,7 +35,9 @@ return function(env)
 		local offset = args.offset or 1
 		if args.start then local lines, starts = lexer.lines(source); if not starts[args.start] then return N.fail("Line is outside source") end; offset = starts[args.start]; if args.count then args.limit = math.min(3500, (starts[args.start + args.count] or #source + 1) - offset) end end
 		local result = H.readSlice(doc.name, source, { offset = offset, limit = math.min(args.limit or 3500, 3500) }, 3500)
-		result.data = result.data or {}; result.data.documentId, result.data.revision = doc.id, doc.revision; return result
+		result.data = result.data or {}; result.data.documentId, result.data.revision = doc.id, doc.revision
+		if not args.version_id and not args.proposal_id then result.data.source = sources.document(doc) end
+		return result
 	end)
 	N.add(tools, "code_write", "write", "Create or conditionally replace shared source. Existing nonempty source requires expected_revision. Saves a recoverable checkpoint and never changes the user's selection.",
 		{ code = str, tab = str, document_id = str, name = str, new = { type = "boolean" }, expected_revision = num }, { "code" }, function(args, ctx, prepared)
@@ -50,9 +52,9 @@ return function(env)
 		if not doc then return N.fail(why) end; return N.result(metadata(doc), "Applied line edit at revision " .. doc.revision)
 	end, bind)
 	N.add(tools, "code_search", "read", "Search live documents. Literal query is the default; pattern explicitly enables a Lua pattern. Results include source offsets and revisions.",
-		{ query = str, pattern = str, tab = str, document_id = str, offset = num }, {}, function(args)
-		local matches, why, cursor = store.search(args.query or args.pattern, { document = ref(args), pattern = args.pattern ~= nil and args.query == nil, offset = args.offset, limit = 10 })
-		if not matches then return N.fail(why) end; return N.result({ items = matches, nextOffset = cursor }, #matches .. " matches")
+		{ query = str, pattern = str, tab = str, document_id = str, offset = num, case_sensitive = { type = "boolean" }, whole_word = { type = "boolean" } }, {}, function(args)
+		local matches, why, cursor, counts = store.search(args.query or args.pattern, { document = ref(args), pattern = args.pattern ~= nil and args.query == nil, offset = args.offset, limit = 10, caseSensitive = args.case_sensitive, wholeWord = args.whole_word })
+		if not matches then return N.fail(why) end; return N.result({ items = matches, nextOffset = cursor, complete = counts.complete, retainedMatches = counts.retainedMatches }, #matches .. " matches")
 	end)
 	N.add(tools, "code_select", "write", "Explicitly select and open a document in the user's Code workspace.", { tab = str, document_id = str }, {}, function(args)
 		local doc, why = store.select(ref(args)); if not doc then return N.fail(why) end; store.workspace.sourceId = nil; return N.result(metadata(doc), "Selected " .. doc.name)

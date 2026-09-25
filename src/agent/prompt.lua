@@ -199,6 +199,11 @@ Scope:
 
 	local STYLE = [[
 Style:
+- During multi-step work, send one brief progress message at a time between work
+  steps. Put it in assistant content alongside the next tool calls, not only in
+  reasoning. State what you are checking or what changed; do not save every update
+  for the final answer or narrate private scratch work. Continue working after
+  each update and finish with a concise result.
 - Keep replies easy to scan: short paragraphs, a few bullets when useful, and
   fenced code with a language tag. Use headings only for genuinely long answers.
 - Avoid decorative emoji, repeated summaries, and narrating your internal reasoning.

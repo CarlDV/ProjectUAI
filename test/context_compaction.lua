@@ -70,6 +70,44 @@ scenario("auto compaction fires against the window-derived budget", function()
 	check("a note records the compaction", ctx.stats().compactions == 1)
 end)
 
+scenario("prepared requests include prompt and tool overhead before a provider reply", function()
+	local env, _, context = fixture()
+	local ctx, usage = context.new(), env.require("agent/usage")
+	local record = { id = "first", model = "fixture" }
+	ctx.pushUser("hello")
+	local tools = { { type = "function", ["function"] = { name = "inspect", parameters = { type = "object" } } } }
+	local wire = ctx.wire("System instructions")
+	local request = ctx.observeRequest(wire, tools, record)
+	local expected = usage.estimateMessages(wire) + usage.estimateText(env.require("runtime/util").encode(tools))
+	check("first-request pressure includes both system and schemas", ctx.pressure(record) == expected)
+	local parts = ctx.breakdown(record)
+	check("breakdown categories sum to pressure", parts.system + parts.messages + parts.summary == expected and parts.estimatedPrompt and not parts.calibrated)
+	ctx.pushAssistant({ content = "reply added after dispatch" })
+	ctx.calibrate(request.history + request.estimate + 300, request)
+	check("late usage is calibrated against the sent history", ctx.overhead == request.estimate + 300)
+	local nextRequest = ctx.observeRequest(ctx.wire("Longer system instructions"), tools, record)
+	check("changed prompts preserve only the matching provider correction", ctx.overhead == nextRequest.estimate + 300 and ctx.calibrated)
+	local changedEndpoint = { id = record.id, model = record.model, baseUrl = "https://changed.fixture.test" }
+	check("changing a provider endpoint invalidates measured overhead", not ctx.breakdown(changedEndpoint).calibrated and ctx.breakdown(changedEndpoint).system == nextRequest.estimate)
+	local other = { id = "other", model = record.model }
+	check("switching providers does not reuse the old provider's measurement", ctx.breakdown(other).system == nextRequest.estimate and not ctx.breakdown(other).calibrated)
+	ctx.observeRequest(ctx.wire("Longer system instructions"), {}, other)
+	check("removed tools change the prepared overhead", ctx.overhead < nextRequest.estimate and not ctx.calibrated)
+	ctx.clear()
+	check("clear discards prepared and measured prompt metadata", ctx.pressure() == 0 and not ctx.breakdown().estimatedPrompt)
+end)
+
+scenario("invalid provider counts and model limits cannot poison the breakdown", function()
+	local env, config, context = fixture()
+	local ctx = context.new(); ctx.pushUser("hello"); ctx.calibrate(100)
+	for _, invalid in ipairs({ math.huge, -math.huge, 0 / 0, -1, 0, "bad" }) do ctx.calibrate(invalid) end
+	check("invalid usage cannot replace a finite measurement", ctx.pressure() == 100)
+	for _, invalid in ipairs({ math.huge, -1, 0, 0 / 0, "bad" }) do
+		config.set("agent.forceContext", { fixture = invalid })
+		check("invalid context overrides stay unknown", env.require("provider/traits").contextWindow("fixture") == nil)
+	end
+end)
+
 scenario("a conversation under budget is left alone unless forced", function()
 	local _, config, context = fixture()
 	config.set("agent.forceContext", { tiny = 4000 })

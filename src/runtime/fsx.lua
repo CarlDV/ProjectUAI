@@ -17,9 +17,13 @@ return function(env)
 	local knownFolders = {}
 
 	function M.sanitise(path)
+		local original = tostring(path or "")
+		if original:match("^[\\/]") or original:match("^%a:") then return nil, "absolute paths are not allowed" end
 		local clean = tostring(path or ""):gsub("\\", "/"):gsub("^/+", ""):gsub("/+", "/")
 		if clean == "" then return nil, "empty path" end
 		for _, part in ipairs(util.split(clean, "/")) do
+			local device = part:upper():match("^[^%.]+") or ""
+			if device == "CON" or device == "PRN" or device == "AUX" or device == "NUL" or device:match("^COM[1-9]$") or device:match("^LPT[1-9]$") then return nil, "path contains a reserved device name" end
 			if part == ".." then return nil, "path may not contain '..'" end
 			if part == "." then return nil, "path may not contain '.'" end
 			if part:find("[%z\1-\31\127]") then return nil, "path contains a control character" end

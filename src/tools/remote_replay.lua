@@ -11,7 +11,7 @@ return function(env)
 	local M = {}
 	local plans, serial = {}, 0
 	local function digest(text) local hash = 5381; for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 4294967296 end; return string.format("%08x", hash) end
-	function M.prepare(args)
+	local function resolve(args)
 		local graph, remoteId, method, recordId = args.arguments, args.remoteId, args.method, args.recordId
 		local record
 		if recordId then
@@ -23,6 +23,11 @@ return function(env)
 			remoteId, method, graph = record.remoteId, record.method, graph or record.arguments
 		end
 		local valid, why = transport.validate(remoteId, method, graph); if not valid then return nil, why end
+		return { graph = graph, remoteId = remoteId, method = method, recordId = recordId, record = record, valid = valid }
+	end
+	function M.prepare(args)
+		local resolved, why = resolve(args); if not resolved then return nil, why end
+		local graph, remoteId, method, recordId, record, valid = resolved.graph, resolved.remoteId, resolved.method, resolved.recordId, resolved.record, resolved.valid
 		serial = serial + 1
 		local plan = { id = "replay:" .. refs.epoch .. ":" .. serial, remoteId = remoteId, method = method, arguments = util.deepCopy(graph),
 			recordId = recordId, recordRevision = record and record.revision, ruleRevision = capture.ruleRevision, at = clock.ms(), status = "prepared", target = refs.describe(valid.object) }
@@ -53,29 +58,34 @@ return function(env)
 		plan.result, plan.status = result, result.data and result.data.status or "errored"
 		return result
 	end
+	function M.portable(args)
+		local resolved, why = resolve(args); if not resolved then return nil, why end
+		return values.portable(resolved.graph, resolved.remoteId, resolved.method)
+	end
 	function M.source(args)
-		local plan, why = M.prepare(args); if not plan then return nil, why end
-		local binding = sources.bind({ remoteId = plan.remoteId, arguments = plan.arguments }, function()
-			local valid, err = transport.validate(plan.remoteId, plan.method, plan.arguments); return valid ~= nil, err
-		end)
-		local description = "-- Session-bound " .. plan.method .. ": " .. util.ellipsis(plan.target.displayPath, 500)
-		local source = description .. "\n-- Packed arguments: " .. util.encode(plan.arguments):gsub("\n", "\n-- ")
-			.. "\nlocal binding = ...\nassert(binding and binding.call, 'This script requires a current UAI binding')\nreturn binding.call()\n"
-		-- The binding is runtime data, separate from serializable source.
-		local data = sources.binding(binding)
-		data.call = function(ctx)
-			local result = transport.call(plan.remoteId, plan.method, plan.arguments, { replayOf = plan.recordId, rawReturns = true }, ctx)
-			if not result.ok then error(result.text, 0) end
-			local returned = result.returns or { n = 0 }
-			return unpack(returned, 1, returned.n)
-		end
-		local item, err = sources.keep(source, "Capture " .. tostring(plan.recordId or plan.id) .. " · session-bound", "Remote call.lua")
-		if item then item.bindingId = binding end
+		local source, why = M.portable(args); if not source then return nil, why end
+		local item, err = sources.keep(source, "Portable remote call · " .. tostring(args.recordId or args.remoteId), "Remote call.lua", nil, { method = "captured", origin = "portable remote script" })
+		if item then item.recordId, item.recordRevision = args.recordId, args.recordRevision end
 		return item, err
 	end
-	function M.portable(args)
-		local plan, why = M.prepare(args); if not plan then return nil, why end
-		return values.portable(plan.arguments, plan.remoteId, plan.method)
+	local reviews = {}
+	function M.reviewSource(args)
+		local item, why = M.source(args); if not item then return nil, why end
+		serial = serial + 1
+		local review = { id = "script-review:" .. refs.epoch .. ":" .. serial, digest = digest(item.source), source = item.source, sourceId = item.id, at = clock.ms(), args = util.deepCopy(args) }
+		reviews[#reviews + 1] = review; while #reviews > 20 do table.remove(reviews, 1) end
+		return util.copy(review)
 	end
+	function M.reviewedSource(key, expected)
+		for _, review in ipairs(reviews) do if review.id == key then
+			if clock.ms() - review.at > 300000 then return nil, "Script review expired; review the script again" end
+			if review.digest ~= expected then return nil, "Script review digest changed" end
+			local current, why = M.portable(review.args); if not current then return nil, why end
+			if current ~= review.source then return nil, "Remote target or arguments changed; review a fresh script" end
+			return review.source
+		end end
+		return nil, "Script review expired"
+	end
+	env.require("runtime/dispose").add(function() plans, reviews = {}, {} end, "replay plans and script reviews")
 	return M
 end

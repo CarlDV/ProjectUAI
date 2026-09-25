@@ -5,7 +5,10 @@ return function(env)
 	local P = env.require("ui/primitives")
 	local theme = env.require("ui/theme")
 	local store = env.require("runtime/code_store")
+	local sources = env.require("runtime/script_sources")
 	local lexer = env.require("runtime/code_lexer")
+	local codeText = env.require("runtime/code_text")
+	local metrics = env.require("ui/code/metrics")
 	local execution = env.require("tools/execution")
 	local caps = env.require("runtime/caps")
 	local clock = env.require("runtime/clock")
@@ -35,18 +38,25 @@ return function(env)
 		local document, ignore, focused, cache, pending = nil, false, false, nil, false
 		local restoring, layingOut = false, false
 		local pool, lineHeight, width, gutterWidth = {}, role.height, 0, theme.size.codeGutter
-		local measurements = {}
+		local measurements, widthCounts, maxLineWidth = {}, {}, 0
+		local searchState = { query = "", options = { caseSensitive = true }, items = {}, total = 0, current = 0 }
 		local caretMovedAt = clock.ms()
-		local findBar, findField
+		local findBar, findField, findCount
+		local function pinSource()
+			sources.release(handle)
+			if document and document.sourceId and handle.visible then
+				local item = sources.pin(document.sourceId, handle)
+				document.snapshotState = item and item.status or "expired"
+			end
+		end
 		local function colorHex(color) return string.format("#%02x%02x%02x", math.floor(color.R * 255 + 0.5), math.floor(color.G * 255 + 0.5), math.floor(color.B * 255 + 0.5)) end
-		local palette = {}; for _, key in ipairs({ "keyword", "string", "number", "comment" }) do palette[key] = colorHex(theme.code[key]) end
+		local palette = {}; for _, key in ipairs({ "keyword", "string", "number", "comment", "call" }) do palette[key] = colorHex(theme.code[key]) end
 		local function lineAt(offset)
-			local low, high = 1, #cache.starts
-			while low < high do local mid = math.ceil((low + high) / 2); if cache.starts[mid] <= offset then low = mid else high = mid - 1 end end
-			return low
+			return codeText.lineAt(cache.starts, codeText.clamp(box.Text, offset))
 		end
 		local function advance(index, offset)
-			return P.measureText(cache.lines[index]:sub(1, math.max(0, offset - cache.starts[index])), { role = "mono" }).X
+			local line = cache.lines[index]
+			return metrics.at(measurements[line], line, offset - cache.starts[index] + 1)
 		end
 		local function drawCaret()
 			local offset = box.CursorPosition
@@ -62,6 +72,20 @@ return function(env)
 			local view = store.view(document.id); if not view then return end
 			if box.CursorPosition > 0 then view.cursor, view.selection = box.CursorPosition, box.SelectionStart end
 			view.x, view.y = scroll.instance.CanvasPosition.X, scroll.instance.CanvasPosition.Y
+		end
+		local function matchCount()
+			local cursor = math.max(1, box.CursorPosition)
+			searchState.current = 0
+			for i, match in ipairs(searchState.items) do
+				if match.first <= cursor and match.after >= cursor then searchState.current = i; break end
+				if match.first > cursor then break end
+			end
+			if findCount then findCount.Text = searchState.current .. " / " .. #searchState.items .. (searchState.complete == false and "+ matches (limit)" or " matches") end
+		end
+		local function firstMatch(offset)
+			local low, high = 1, #searchState.items + 1
+			while low < high do local mid = math.floor((low + high) / 2); if searchState.items[mid].after <= offset then low = mid + 1 else high = mid end end
+			return low
 		end
 		local function draw()
 			if not handle.alive or not handle.visible or not cache then return end
@@ -85,15 +109,31 @@ return function(env)
 				end
 				local index = first + slot - 1; local value = cache.lines[index]
 				row.number.Visible, row.text.Visible, row.selection.Visible = value ~= nil, value ~= nil, false
+				for _, mark in ipairs(row.matches or {}) do mark.Visible = false end
 				if value then
 					local top = theme.space.sm + (index - 1) * lineHeight
 					row.number.Position, row.number.Size, row.number.Text = UDim2.fromOffset(theme.space.xs, top), UDim2.fromOffset(gutterWidth - theme.space.md, lineHeight), tostring(index)
-					row.text.Position, row.text.Size = UDim2.fromOffset(gutterWidth + theme.space.sm, top), UDim2.fromOffset(width, lineHeight)
-					if row.source ~= value or row.spans ~= cache.spans[index] then
-						row.text.Text = #value <= 32000 and lexer.rich(value, cache.spans[index], palette) or lexer.escape(value)
-						row.source, row.spans = value, cache.spans[index]
+					local left, firstByte, afterByte = metrics.window(measurements[value], value, x, scroll.instance.AbsoluteSize.X)
+					row.text.Position, row.text.Size = UDim2.fromOffset(gutterWidth + theme.space.sm + left, top), UDim2.fromOffset(math.max(1, width - left), lineHeight)
+					if row.source ~= value or row.spans ~= cache.spans[index] or row.first ~= firstByte or row.after ~= afterByte then
+						row.text.Text = lexer.richWindow(value, cache.spans[index], palette, firstByte, afterByte - 1)
+						row.source, row.spans, row.first, row.after = value, cache.spans[index], firstByte, afterByte
 					end
 					local start, finish = cache.starts[index], cache.starts[index] + #value
+					row.matches = row.matches or {}
+					local painted = 0
+					for matchIndex = firstMatch(start), #searchState.items do
+						local match = searchState.items[matchIndex]
+						if match.first > finish or painted >= 64 then break end
+						if match.after > start and painted < 64 then
+							painted = painted + 1
+							local mark = row.matches[painted]
+							if not mark then mark = P.frame(scroll.instance, { name = "SearchMatch", bg = theme.mix(theme.color.codeSurface, theme.color.accent, 0.25), zIndex = 1 }); mark.Active = false; row.matches[painted] = mark end
+							local left, right = advance(index, math.max(start, match.first)), advance(index, math.min(finish, match.after))
+							mark.Position, mark.Size, mark.Visible = UDim2.fromOffset(gutterWidth + theme.space.sm + left, top), UDim2.fromOffset(math.max(3, right - left), lineHeight), true
+						end
+					end
+					for i = painted + 1, #row.matches do row.matches[i].Visible = false end
 					if selecting and selectionFirst <= finish and selectionLast > start then
 						local left = advance(index, math.max(start, selectionFirst))
 						local right = advance(index, math.min(finish, selectionLast))
@@ -103,27 +143,43 @@ return function(env)
 					end
 				end
 			end
-			for i = count + 1, #pool do pool[i].number.Visible, pool[i].text.Visible, pool[i].selection.Visible = false, false, false end
+			for i = count + 1, #pool do
+				pool[i].number.Visible, pool[i].text.Visible, pool[i].selection.Visible = false, false, false
+				for _, mark in ipairs(pool[i].matches or {}) do mark.Visible = false end
+			end
 			box.TextTransparency = #box.Text == 0 and 0 or 1
 			drawCaret()
 		end
 		local function layout()
 			if not handle.alive or layingOut then return end
 			layingOut = true
+			local previous = cache
 			cache = lexer.scan(box.Text, cache)
+			if previous ~= cache then
+				for _, line in ipairs(cache.removed) do
+					local measure = measurements[line]
+					if measure then measure.count = measure.count - 1; widthCounts[measure.width] = (widthCounts[measure.width] or 1) - 1; if widthCounts[measure.width] <= 0 then widthCounts[measure.width] = nil end; if measure.count == 0 then measurements[line] = nil end end
+				end
+				for _, line in ipairs(cache.added) do
+					local measure = measurements[line]
+					if not measure then measure = metrics.line(line); measure.count = 0 end
+					measure.count = measure.count + 1; measurements[line] = measure
+					widthCounts[measure.width] = (widthCounts[measure.width] or 0) + 1; maxLineWidth = math.max(maxLineWidth, measure.width)
+				end
+				if (widthCounts[maxLineWidth] or 0) == 0 then maxLineWidth = 0; for value, count in pairs(widthCounts) do if count > 0 then maxLineWidth = math.max(maxLineWidth, value) else widthCounts[value] = nil end end end
+				if searchState.query ~= "" then
+					local found = codeText.search(box.Text, searchState.query, searchState.options)
+					searchState.items, searchState.total, searchState.complete = found and found.items or {}, found and found.total or 0, found and found.complete
+					matchCount()
+				end
+			end
 			-- Match the native line advance, including its fractional spacing. A
 			-- rounded-up theme height drifts by hundreds of pixels in a long file.
 			local measured = P.measureText("Mg", { role = "mono", line = 1 }).Y
 			lineHeight = math.max(1, measured * box.LineHeight)
 			gutterWidth = math.max(theme.size.codeGutter, P.measureText(tostring(#cache.lines), { role = "mono" }).X + theme.space.lg)
 			width = math.max(1, scroll.instance.AbsoluteSize.X - gutterWidth - theme.space.lg)
-			local nextMeasurements = {}
-			for _, line in ipairs(cache.lines) do
-				local measured = measurements[line]
-				if not measured then measured = P.measureText(line, { role = "mono" }).X end
-				nextMeasurements[line] = measured; width = math.max(width, measured + theme.space.lg)
-			end
-			measurements = nextMeasurements
+			width = math.max(width, maxLineWidth + theme.space.lg)
 			local height = math.max(scroll.instance.AbsoluteSize.Y - theme.space.md, #cache.lines * lineHeight + theme.space.lg)
 			box.Position, box.Size = UDim2.fromOffset(gutterWidth + theme.space.sm, theme.space.sm), UDim2.fromOffset(width, height)
 			scroll.instance.CanvasSize = UDim2.fromOffset(width + gutterWidth + theme.space.md, height + theme.space.md)
@@ -137,15 +193,20 @@ return function(env)
 			if pending then return end; pending = true
 			clock.delay(0.015, function() pending = false; if handle.alive and handle.visible then layout(); if handle.revealCursor then handle.revealCursor() end end end)
 		end
-		local syntaxGeneration = 0
+		local syntaxGeneration, syntaxWorker = 0, nil
 		local function checkSyntax()
 			syntaxGeneration = syntaxGeneration + 1; local generation = syntaxGeneration
+			if syntaxWorker and task.cancel then pcall(task.cancel, syntaxWorker); syntaxWorker = nil end
+			if not handle.visible or not caps.exec then handle.syntax = "Syntax checking unavailable"; return end
 			handle.syntax = caps.exec and "Checking…" or "Syntax checking unavailable"
 			if options.onStatus then options.onStatus(handle.syntax) end
-			local source, revision, key = box.Text, document and document.revision, document and document.id
-			clock.delay(0.5, function()
+			local revision, key = document and document.revision, document and document.id
+			syntaxWorker = clock.delay(0.5, function()
 				if not handle.alive or generation ~= syntaxGeneration or not document or document.id ~= key or document.revision ~= revision then return end
+				local source = box.Text
 				local result = util.trim(source) == "" and { ok = true, text = "Empty document" } or execution.check(source)
+				if not handle.alive or generation ~= syntaxGeneration or not document or document.id ~= key or document.revision ~= revision then return end
+				syntaxWorker = nil
 				handle.syntax = result.ok and (source == "" and "Empty document" or "Syntax valid") or result.text
 				if not caps.exec then handle.syntax = "Syntax checking unavailable" end
 				if options.onStatus then options.onStatus(handle.syntax) end
@@ -174,53 +235,59 @@ return function(env)
 			scroll.instance.CanvasPosition = Vector2.new(left, top)
 		end
 		handle.revealCursor = revealCursor
-		box:GetPropertyChangedSignal("CursorPosition"):Connect(function() caretMovedAt = clock.ms(); revealCursor(); draw(); saveView(); if options.onStatus then options.onStatus(handle.syntax) end end)
+		box:GetPropertyChangedSignal("CursorPosition"):Connect(function() caretMovedAt = clock.ms(); revealCursor(); matchCount(); draw(); saveView(); if options.onStatus then options.onStatus(handle.syntax) end end)
 		box:GetPropertyChangedSignal("SelectionStart"):Connect(function() caretMovedAt = clock.ms(); draw(); saveView() end)
 		local blink = env.run.Heartbeat:Connect(function() if handle.alive and handle.visible and focused then drawCaret() end end)
 		scroll.instance:GetPropertyChangedSignal("CanvasPosition"):Connect(function() draw(); saveView() end)
 		root:GetPropertyChangedSignal("AbsoluteSize"):Connect(queue)
-		function handle.select(doc)
-			saveView(); restoring = true; document = doc
+		function handle.select(doc, requestedView)
+			if not requestedView then saveView() end
+			restoring = true; document = doc
+			pinSource()
 			local view = doc and util.copy(store.view(doc.id))
 			ignore = true; box.Text = doc and doc.source or ""; ignore = false
-			box.TextEditable = doc ~= nil; box.PlaceholderText = doc and "-- Write Luau here" or "Open a file from Files or create a script with +"
+			box.TextEditable = doc ~= nil and not doc.readOnly; box.PlaceholderText = doc and (doc.readOnly and "-- Empty read-only source" or "-- Write Luau here") or "Open a file from Files or create a script with +"
 			layout()
 			if view then
 				box.CursorPosition, box.SelectionStart = view.cursor or -1, view.selection or -1
+				if view.sourceSearch then searchState.query = view.sourceSearch; local found = codeText.search(box.Text, view.sourceSearch); searchState.items, searchState.total, searchState.complete = found.items, found.total, found.complete; matchCount(); draw() end
 				scroll.instance.CanvasPosition = Vector2.new(view.x or 0, view.y or 0)
+				if requestedView and box.CursorPosition > 0 then
+					local line = codeText.lineAt(cache.starts, codeText.clamp(box.Text, box.CursorPosition))
+					scroll.instance.CanvasPosition = Vector2.new(0, math.max(0, (line - 1) * lineHeight - theme.space.sm))
+				end
 			end
 			restoring = false
 			checkSyntax()
 		end
 		function handle.gotoLine(line)
 			if not cache then return end
-			line = math.max(1, math.min(#cache.lines, tonumber(line) or 1))
+			line = math.max(1, math.min(#cache.lines, math.floor(tonumber(line) or 1)))
 			pcall(function() box:CaptureFocus() end)
 			box.CursorPosition, box.SelectionStart = cache.starts[line], -1
 			scroll.instance.CanvasPosition = Vector2.new(0, math.max(0, (line - 1) * lineHeight))
 		end
-		function handle.find(query, backwards)
+		function handle.find(query, backwards, options)
 			if not document or type(query) ~= "string" or query == "" then return nil, "Enter a search" end
 			layout()
-			local first, last
-			local cursor = box.CursorPosition > 0 and box.CursorPosition or (store.view(document.id).cursor or 1)
+			searchState.options, searchState.query = options or searchState.options, query
+			local result, why = codeText.search(document.source, query, searchState.options); if not result then return nil, why end
+			searchState.items, searchState.total, searchState.complete = result.items, result.total, result.complete
+			local cursor = codeText.clamp(box.Text, box.CursorPosition > 0 and box.CursorPosition or store.view(document.id).cursor)
+			local current = backwards and #result.items or 1
 			if backwards then
 				local before = box.SelectionStart > 0 and math.min(cursor, box.SelectionStart) or cursor
-				local at = 1
-				while true do local a, b = document.source:find(query, at, true); if not a or a >= before then break end; first, last, at = a, b, b + 1 end
-				if not first then
-					at = 1; while true do local a, b = document.source:find(query, at, true); if not a then break end; first, last, at = a, b, b + 1 end
-				end
-			else
-				first, last = document.source:find(query, math.max(1, cursor), true)
-				if not first then first, last = document.source:find(query, 1, true) end
-			end
-			if not first then return nil, "No match" end
-			local line = 1; for i, at in ipairs(cache.starts) do if at <= first then line = i else break end end
-			handle.gotoLine(line); box.SelectionStart, box.CursorPosition = first, last + 1; return true
+				for i, match in ipairs(result.items) do if match.first < before then current = i else break end end
+			else for i, match in ipairs(result.items) do if match.first >= cursor then current = i; break end end end
+			local match = result.items[current]; searchState.current = match and current or 0
+			if findCount then findCount.Text = searchState.current .. " / " .. #result.items .. (result.complete and " matches" or "+ matches (limit)") end
+			if not match then draw(); return nil, "No match" end
+			handle.gotoLine(codeText.lineAt(cache.starts, match.first)); box.SelectionStart, box.CursorPosition = match.first, match.after
+			draw(); return true
 		end
+		function handle.matches() return { current = searchState.current, total = searchState.total, complete = searchState.complete ~= false } end
 		function handle.indent(outdent)
-			if not document then return end
+			if not document or document.readOnly then return end
 			local cursor, selection = math.max(1, box.CursorPosition), box.SelectionStart
 			if not outdent and (selection < 1 or selection == cursor) then
 				box.Text = box.Text:sub(1, cursor - 1) .. "\t" .. box.Text:sub(cursor)
@@ -243,12 +310,11 @@ return function(env)
 		end
 		function handle.position()
 			local offset, line = math.max(1, box.CursorPosition), 1
-			if cache then for i, at in ipairs(cache.starts) do if at <= offset then line = i else break end end end
-			local prefix = cache and box.Text:sub(cache.starts[line], offset - 1) or ""
-			local _, characters = prefix:gsub("[^\128-\191]", "")
-			return line, characters + 1
+			if cache then line = codeText.lineAt(cache.starts, offset) end
+			return line, codeText.column(box.Text, cache and cache.starts[line] or 1, offset)
 		end
-		findBar = P.frame(root, { name = "EditorFind", size = UDim2.new(1, 0, 0, common.barHeight()), bg = theme.color.codeBar, visible = false, zIndex = 6 })
+		findBar = P.frame(root, { name = "EditorFind", size = UDim2.new(1, 0, 0, common.barHeight() * 2), bg = theme.color.codeBar, visible = false, zIndex = 6 })
+		findCount = P.text(findBar, { name = "FindMatchCount", text = "0 matches", role = "caption", position = UDim2.fromOffset(8, common.barHeight()), size = UDim2.new(1, -180, 0, common.barHeight()), zIndex = 7 })
 		local function findNext(backwards)
 			local ok, why = handle.find(findField.get(), backwards)
 			if not ok then common.message(nil, why) end
@@ -257,10 +323,19 @@ return function(env)
 		local previous = common.button(findBar, { name = "FindPrevious", text = "", icon = "arrowLeft", tight = true, fill = true, variant = "ghost", onClick = function() findNext(true) end })
 		local nextButton = common.button(findBar, { name = "FindNext", text = "", icon = "arrowRight", tight = true, fill = true, variant = "ghost", onClick = function() findNext(false) end })
 		local close = common.button(findBar, { name = "CloseFind", text = "", icon = "x", tight = true, fill = true, variant = "ghost", onClick = function() handle.closeFind() end })
+		local caseButton, wordButton
+		caseButton = common.button(findBar, { name = "FindCaseSensitive", text = "Aa: on", tight = true, onClick = function()
+			searchState.options.caseSensitive = not searchState.options.caseSensitive; caseButton.setText(searchState.options.caseSensitive and "Aa: on" or "Aa: off"); findNext(false)
+		end })
+		wordButton = common.button(findBar, { name = "FindWholeWord", text = "Word: off", tight = true, onClick = function()
+			searchState.options.wholeWord = not searchState.options.wholeWord; wordButton.setText(searchState.options.wholeWord and "Word: on" or "Word: off"); findNext(false)
+		end })
 		local function layoutFind()
 			local target, gap, padding = common.controlHeight(), common.gap(), common.inset()
 			local top = math.max(4, math.floor((common.barHeight() - target) / 2))
 			local actionsWidth = target * 3 + gap * 3 + padding
+			caseButton.instance.Position, caseButton.instance.Size = UDim2.new(1, -170, 0, common.barHeight() + top), UDim2.fromOffset(76, target)
+			wordButton.instance.Position, wordButton.instance.Size = UDim2.new(1, -90, 0, common.barHeight() + top), UDim2.fromOffset(82, target)
 			findField.shell.Position, findField.shell.Size = UDim2.fromOffset(padding, top), UDim2.new(1, -padding - actionsWidth, 0, target)
 			for index, button in ipairs({ previous, nextButton, close }) do
 				button.instance.Position = UDim2.new(1, -padding - target * (4 - index) - gap * (3 - index), 0, top)
@@ -270,10 +345,10 @@ return function(env)
 		findBar:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutFind); layoutFind()
 		function handle.openFind()
 			if box.SelectionStart > 0 and box.CursorPosition > 0 and box.SelectionStart ~= box.CursorPosition then
-				local selected = box.Text:sub(math.min(box.SelectionStart, box.CursorPosition), math.max(box.SelectionStart, box.CursorPosition) - 1)
+				local selected = codeText.slice(box.Text, box.SelectionStart, box.CursorPosition)
 				if not selected:find("\n", 1, true) then findField.set(selected) end
 			end
-			findBar.Visible = true; scroll.instance.Position, scroll.instance.Size = UDim2.fromOffset(0, common.barHeight()), UDim2.new(1, 0, 1, -common.barHeight())
+			findBar.Visible = true; scroll.instance.Position, scroll.instance.Size = UDim2.fromOffset(0, common.barHeight() * 2), UDim2.new(1, 0, 1, -common.barHeight() * 2)
 			layout(); findField.focus()
 		end
 		function handle.closeFind()
@@ -286,18 +361,26 @@ return function(env)
 		local off = store.changed:connect(function(event)
 			if not handle.alive then return end
 			local active = store.active()
+			if event.kind == "source_navigation" and active and event.documentId == active.id then handle.select(active, true); return end
+			if document and event.documentId == document.id and event.kind == "metadata" then pinSource(); box.TextEditable = not document.readOnly end
 			if not document or not active or document.id ~= active.id then handle.select(active)
 			elseif event.documentId == document.id and event.kind == "source" and event.origin ~= "typing" and box.Text ~= document.source then
 				local cursor, selection = box.CursorPosition, box.SelectionStart; ignore = true; box.Text = document.source; ignore = false
 				box.CursorPosition, box.SelectionStart = math.min(cursor, #box.Text + 1), math.min(selection, #box.Text + 1); queue(); checkSyntax()
 			end
 		end)
-		function handle.destroy() if not handle.alive then return end; saveView(); handle.alive = false; syntaxGeneration = syntaxGeneration + 1; blink:Disconnect(); findInput:Disconnect(); off(); root:Destroy() end
+		function handle.destroy()
+			if not handle.alive then return end; saveView(); handle.alive = false; syntaxGeneration = syntaxGeneration + 1
+			sources.release(handle)
+			if syntaxWorker and task.cancel then pcall(task.cancel, syntaxWorker) end
+			blink:Disconnect(); findInput:Disconnect(); off(); root:Destroy()
+		end
 		function handle.setVisible(visible)
 			if handle.visible == visible then return end
 			handle.visible = visible
+			pinSource()
 			if visible then handle.needsLayout = nil; layout(); checkSyntax()
-			else saveView(); caret.Visible = false; if focused then pcall(function() box:ReleaseFocus() end) end end
+			else syntaxGeneration = syntaxGeneration + 1; if syntaxWorker and task.cancel then pcall(task.cancel, syntaxWorker); syntaxWorker = nil end; saveView(); caret.Visible = false; if focused then pcall(function() box:ReleaseFocus() end) end end
 		end
 		handle.select(store.active())
 		return handle

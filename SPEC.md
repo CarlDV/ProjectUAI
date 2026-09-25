@@ -74,12 +74,12 @@ it; `ui/*` must not require `agent/*` except through `agent/session`.
 * Retries: 408/409/429/5xx and transport errors, exponential backoff with
   jitter, `Retry-After` honoured, capped attempts, then the next provider in the
   fallback chain.
-* An HTTP call that returns no response after 20–130 seconds permits one provider
-  retry with a smaller token ceiling and, when possible, one less reasoning-effort
-  level. Unchanged minimal requests and cancellations are not retried. A parsed,
-  usable completion is required before saving the working ceiling in
-  `record.maxTokensCap = { model, tokens }`; failed or empty responses teach no cap.
-  Both the OpenAI and Anthropic adapters use this recovery.
+* Native request deadlines, cancellation, malformed streams and response-limit
+  errors are terminal. A long unanswered transport failure cannot trigger a
+  smaller-request retry, key/provider fallback or a second dispatch after a socket
+  send with an unknown outcome. Explicit API refusals can still teach a reply
+  ceiling in `record.maxTokensCap = { model, tokens }`; a timeout teaches no cap.
+  Both provider adapters protect retry callbacks and enforce these terminal states.
 * Both adapters parse context-length refusals separately from output-token limits.
   A named window of at least 8000 tokens is saved under the lowercased model id in
   `agent.forceContext`, only lowering an existing value. Like `record.maxTokensCap`,
@@ -152,17 +152,27 @@ takes a typed id, and saving requires one.
 Rolling compaction feeds the previous summary back to the summarizer with newly
 removed turns. Failed or disabled summary calls preserve earlier facts and append
 a note about dropped messages. The context inspector uses the same pressure and
-limit calculation as compaction: estimated messages and summary plus overhead
-calibrated from a provider reply. Before that first reply, totals are labelled as
-partial. Its colored bar uses the model window when known and the compaction point
-otherwise; the marker and legend make that scale explicit.
+limit calculation as compaction: estimated messages and summary plus prepared
+system/schema overhead. Usage is calibrated against a dispatch-time snapshot and
+scoped to provider ID, endpoint and model; changing prompts adjusts the estimate.
+Before the first prepared request, totals are labelled partial. Its colored bar
+uses the model window when known and the compaction point otherwise; the marker
+and legend make that scale explicit. Category labels reserve the remaining row
+width, and live refreshes are coalesced and disconnected when the inspector closes.
+
+Native requests no longer apply an executor-specific output ceiling; saved
+`agent.executorReplyCeiling` values are ignored. Genuine socket frames produce
+transient `assistant:preview` events through `agent/stream`, with coalesced 64 KiB
+text/reasoning previews and cancellation. Final text/reasoning replace their
+previews and are retained once; buffered HTTP replies render immediately without
+simulated typing. The prompt requests brief assistant-content updates between
+tool steps. Tokens cannot be displayed before the host/provider delivers them.
 
 Generation settings live in `runtime/config` and are persisted in `UAI/config.json`:
 
 | Setting | Default | Behavior |
 | --- | --- | --- |
 | `agent.maxTokens` | 128000 | Saved reply limit; model limits and learned per-model caps apply when constructing requests. |
-| `agent.executorReplyCeiling` | 8192 | Additional default bound for buffered HTTP only; positive values tune it and 0 disables it. Does not rewrite `agent.maxTokens`. |
 | `agent.contextTokens` | 1000000 | Context budget before compaction. Larger contexts spend more of an executor's request window on upload and prefill. |
 
 ## 5. Tool contract
@@ -505,7 +515,7 @@ Persisted files, all under one folder (`env.info.folder`, default `UAI/`):
 | file | written by | holds |
 | --- | --- | --- |
 | `config.json` | `runtime/config` | every setting, the provider list, permission rules, memory |
-| `sessions/<id>.json` | `agent/session` | one conversation: the model's context, the transcript, its title, place and timestamps; capped at 20 |
+| `sessions/<id>.json` | `agent/session` | one conversation: context, transcript, title, place and timestamps; newest 64 restored, older disk history retained |
 | `stats.json` | `agent/stats` | per-day and per-model counters; days capped at 400 |
 | `export/*.json` | the Import & export pane | a shareable copy of the settings, with keys reduced to four characters |
 
@@ -655,7 +665,38 @@ pending Code work. Initial limits are 24 documents, 10 open views, 256,000 UTF-8
 bytes per editable source, 12 versions per document within 4 MiB of source history,
 24 actions and three proposals per document. The serialized envelope is capped at
 12 MiB; an oversized envelope preserves live source and reports a save failure.
-Larger inspected source, up to 2 MiB, uses verified files and a bounded reader.
+Larger inspected source, up to 2 MiB, uses a bounded snapshot reader; opening it
+does not create temporary files. Explicit exports retain verified file behavior.
+
+`runtime/script_sources` is the shared source/decompile service. Results carry
+instance identity/path, runtime epoch, method/origin, status, byte count, capture
+time, content hash, read-only state and diagnostics. Empty source is successful;
+unavailable objects, unsupported classes, missing/failed decompilers, expired or
+stale requests, invalid text and oversized source have distinct structured errors.
+Per-instance capability reads do not decompile. Only explicit requests spawn
+decompile workers (maximum four, 15-second waiter deadline), deduplicated by target,
+method and generation. Late, cancelled and old-runtime results are discarded.
+Completed snapshots retain at most eight items/8 MiB with a five-minute TTL; a
+visible source view pins its snapshot and hiding/destroying the view releases it.
+Host-readable and decompiled documents remain read-only across persistence and
+cannot run, accept proposals or become actions until extracted into a separate
+editable document. No inspected source is a live binding or automatic write-back.
+
+Shared UTF-8 utilities use one-based byte offsets, exclusive range ends and code
+point status columns, not UTF-16 or grapheme-cluster columns. Search and slicing
+preserve code-point boundaries. Case folding is ASCII; whole-word classification
+treats letters/digits/underscore and non-ASCII bytes as word constituents, without
+Unicode linguistic segmentation. Combining characters are not grapheme-aware. Shifted
+unchanged lines reuse syntax spans and measurements; multiline lexical state
+invalidates dependent lines. TextBox updates still receive the bounded full string.
+Drawing pools at most 160 rows, measures long lines in 2 KiB chunks and clips
+horizontal syntax windows. Search offers counts/current match, overlays, case and
+whole-word options, with a 10,000-match retention limit. Full-snapshot large-source
+search can find matches across 6,000-byte display pages.
+
+Storage exposes Saving, Saved, Retry required, Conflict and expired-source states.
+An owned partial write can be retried; external modifications are not overwritten.
+Typing publishes revision metadata without copying whole documents into events.
 
 Source history is distinct from native TextBox Undo and Game changes. Restore and
 proposal application guard source revisions. Actions retain immutable executable
@@ -678,10 +719,18 @@ before writing. Tags and hierarchy operations are outside initial Undo coverage.
 Edits report local observations, without a server replication guarantee.
 
 Explorer tracks up to 64 branches, searches cooperatively within 20,000 nodes and
-returns bounded snapshot cursors. UI rows are pooled. Selection is capped at 20
+returns bounded snapshot cursors. Child enumeration caps at 20,000 children per
+branch; UI pages cap at 4,000 rows, and reveal caps at 64 ancestor levels. Counts
+separate returned, omitted, filtered and unreadable results and mark unknown totals.
+At most eight search snapshots remain; cancelled queries cannot publish shared
+state. Runtime services own page merging and query IDs/generations. UI rows are
+pooled. Selection is capped at 20
 objects and field batches at 100 operations. Drafts survive live updates and view
 rebuilds. Create/duplicate/move/detach/delete use exact targets, expected parents and
-normalized selections. Source is a provenance-labelled snapshot, never a live
+normalized selections, with the Inspector's epoch, revision, IDs and primary target.
+Clicked, focused, primary and selected identities are distinct; selection also has
+an anchor and mode. Stale or ambiguous hierarchy actions fail before writing.
+Source is a provenance-labelled snapshot, never a live
 write-through editor. Nil roots, bookmarks and world picking are explicit. Metadata
 export is verified and bounded; no full-map or unverified saveinstance adapter exists.
 
@@ -692,39 +741,64 @@ opaque or cyclic/sparse graphs remain inspectable but cannot replay. `remote_cap
 Imports/schema/state reads install no hooks and send no traffic. Outgoing hooks use
 reusable neutral forwarding cells and owned detached routing probes; intercepted
 Invoke outcomes have separate unverified coverage. Incoming capture uses events
-only, never replaces function callbacks.
+only, never replaces function callbacks. `hooked_unknown` is the default outgoing
+attribution unless verified. Probes do not invoke the predecessor; host network
+behavior is not guaranteed. Stop reports whether an inert forwarding wrapper remains.
 
 Capture holds at most 1,000 records within 4 MiB, 128 pending outcomes, 2,048 incoming
 subscriptions, 10 pins within an additional 1 MiB, and 32 KiB per typed graph
 (16 KiB per string, 256 slots/table nodes, depth 12, 1,024 values). Summaries report
 omissions/eviction gaps; details/bytes paginate. View filters, admission filters and
 exact-target blocking rules are separate. Pause stops recording; Stop also disarms
-rules. Native Start offers continuous/timed capture; tool Start defaults to 30
-seconds unless persistence is explicit. Permission/group/session revocation removes
+rules. Native and tool Start default to 30 seconds; persistence is explicit. The UI
+requires a selected remote by default; all-game and subtree capture are explicit.
+One target resolver validates the displayed Explorer selection and its primary.
+Permission/group/session revocation removes
 agent-owned behavior. Capture survives navigation/minimize with a launcher indicator;
 unload/reset disarms it. Visible capture/property refresh is coalesced to 10 Hz.
 
 Replay prepares a five-minute immutable plan with target, packed arguments, source
 revision, rule revision and digest, then dispatches at most once. Generated bound
 source uses expiring runtime bindings; portable snippets resolve explicit paths and
-reject ambiguity. Opening/importing source never runs it. Explicit exports use
+reject ambiguity. Copy/export of portable scripts requires a current source-review
+digest. Incoming records expose diagnostics, caller inspection/source and metadata
+export; only outgoing records expose replay and editable replay arguments. Caller
+identity is captured in hooks, but resolution and source/decompile happen afterward.
+Source provenance and bounded name/path text matches accompany exported captures;
+these matches suggest call sites without proving them. Opening/importing source
+never runs it. Late Invoke completion recalculates both ring and pin byte budgets.
+Export freezes records and the maximum sequence before paging, so concurrent
+arrivals and completions cannot change the exported snapshot. Reconfiguration
+failure explicitly reports that the prior session stopped. Explicit exports use
 unique scoped destinations, verified parts and a completion manifest. Imported
 captures remain offline until explicit current-target rebinding. Tool summaries and
 structured data share a roughly 6,000-byte budget with retained detail pages for
 larger operation results.
 
-The Code workspace ships in version 1.7.0. Native input, touch/gamepad,
+The Code workspace was introduced in version 1.7.0; these local improvements do not
+change its release version. [NATIVE_CLIENT.md](docs/NATIVE_CLIENT.md) is the current
+native feature and limitation reference. Native input, touch/gamepad,
 executor forwarding/coexistence and performance need the client scenarios in
 `docs/CODE_WORKSPACE_TESTING.md`. Historical files in `archive/` are references only.
 
 ## 8. Build and verification
 
+For the native improvement plan, finish all edits first, then run
+`node tools/test_native.js`. It runs bundle/catalog generation, read-only freshness,
+native static checks, the main native suite, every focused native suite,
+performance contracts and the official Luau compiler, sequentially and fail-fast.
+After any fix, restart the entire sequence. Results and suite summaries are in
+`refer/native-verification/results.json`. See the native testing guide for setup
+and the final diff/scope/generated-output review. This is behavioral contract
+coverage and syntax validation, not strict Roblox type analysis or host validation.
+
 ```
-luajit tools/bundle.lua      # src/ -> dist/uai.lua, the single loadable file
-luajit test/check.lua        # lint, parse and link every module
+luajit tools/bundle.lua --native # src/ -> dist/uai.lua and module manifest
+luajit tools/bundle.lua --native --check # read-only deterministic freshness
+luajit test/check.lua --native # lint, parse and link native modules
 luajit test/code_workspace.lua # shared source/history/actions and UI fixtures
 luajit test/native_workspace.lua # identities, typed edits, capture/replay
-luajit test/run.lua          # load dist/uai.lua against the mock client, run scenarios
+luajit test/run.lua --native # load dist/uai.lua against the mock client, native scenarios
 luajit test/iy_control.lua   # IY selectors, native configuration and plugin contracts
 luajit test/tool_workflows.lua # batch tools, pagination, scopes, cancellation
 luajit test/attachments.lua    # exact saved inputs, compact payloads, upload recovery

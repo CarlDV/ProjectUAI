@@ -1,7 +1,7 @@
 -- The transcript.
 --
--- It is a pure function of the session's event log: `attach` subscribes to a
--- session, replays whatever it missed, and renders each new event as it arrives.
+-- Attach replays durable events and the current live preview, then subscribes to
+-- new events. Completed buffered replies render immediately, without simulated typing.
 -- That is what makes rebuilding on a layout-mode change safe -- switching a phone
 -- from portrait to landscape rebuilds the whole view and loses nothing.
 return function(env)
@@ -159,93 +159,48 @@ return function(env)
 			return view.working
 		end
 
-		-- Progressive reveal.
-		--
-		-- Adaptive pacing keeps replies fluid and alive: typing progresses smoothly
-		-- by word boundaries with an accent typing indicator.
-		local function stopReveal(complete)
-			if not view.reveal then return end
-			local reveal = view.reveal
-			view.reveal = nil
-			if reveal.stop then pcall(reveal.stop) end
-			if complete and reveal.handle and reveal.text then
-				pcall(function()
-					reveal.handle.finish(reveal.text)
-				end)
+		local function clearPreview()
+			local preview = view.preview; view.preview = nil
+			if not preview then return end
+			if preview.textHandle then preview.textHandle.root:Destroy() end
+			if preview.thoughtHandle then
+				preview.thoughtHandle.root:Destroy()
+				if preview.ownsRun then
+					local populated = false
+					for _, child in ipairs(preview.run.rows:GetChildren()) do if child:IsA("GuiObject") then populated = true; break end end
+					if not populated then preview.run.root:Destroy(); if view.run == preview.run then view.run = nil end end
+				end
 			end
 		end
 
-		local function revealAgent(text, animate)
-			local isHarness = (env.require("runtime/caps").executor or ""):find("OfflineHarness") ~= nil
-			-- Structured replies render once. Rebuilding a table or code viewport at
-			-- every reveal tick creates layout jumps and repeatedly resets its scroll.
-			local structured = false
-			for _, block in ipairs(env.require("ui/markdown").blocks(text)) do
-				if block.kind == "table" or block.kind == "code" then structured = true; break end
+		local function showPreview(event)
+			if not event.streamId then return end
+			if view.preview and view.preview.id ~= event.streamId then clearPreview() end
+			if not view.preview then view.preview = { id = event.streamId } end
+			local preview = view.preview
+			view.model = event.model or view.model
+			local suffix = event.limited and "\n\n[Live preview limited; the full reply will appear when complete.]" or ""
+			if util.trim(event.reasoning or "") ~= "" then
+				if not preview.thoughtHandle then
+					preview.ownsRun = view.run == nil; preview.run = openRun()
+					preview.thoughtHandle = message.reasoning(preview.run.rows, "", preview.run.slot())
+				end
+				preview.thoughtHandle.setText(event.reasoning .. suffix)
 			end
-			if not animate or responsive.reduceMotion or isHarness or structured then
-				stopReveal(false)
-				local handle = message.agent(scroll.instance, text, nextOrder(), view.model, props)
-				view.agentHandle = handle
-				follow()
-				return handle
+			if util.trim(event.text or "") ~= "" then
+				if not preview.textHandle then
+					closeRun()
+					preview.textHandle = message.agent(scroll.instance, "", nextOrder(), view.model, props)
+				end
+				preview.textHandle.setModel(view.model)
+				preview.textHandle.stream(event.text .. suffix)
 			end
-
-			stopReveal(true)
-			local handle = message.agent(scroll.instance, "", nextOrder(), view.model, props)
-			view.agentHandle = handle
-
-			local len = #text
-			local targetDuration = util.clamp(0.4 + (len / 1200) * 0.7, 0.45, 1.25)
-			local tickInterval = 0.03
-			local totalTicks = math.max(12, math.floor(targetDuration / tickInterval))
-			local charsPerTick = math.max(1, math.ceil(len / totalTicks))
-
-			local shown = 0
-			local reveal = {
-				handle = handle,
-				text = text,
-			}
-			view.reveal = reveal
-
-			reveal.stop = clock.interval(tickInterval, function()
-				shown = math.min(len, shown + charsPerTick)
-				if shown < len then
-					local nextSpace = text:find("%s", shown)
-					if nextSpace and nextSpace <= shown + 6 then
-						shown = nextSpace
-					end
-				end
-
-				if shown >= len then
-					stopReveal(false)
-					handle.finish(text)
-				else
-					-- Reveal only complete UTF-8 characters, including emoji and CJK text.
-					local boundary = shown
-					while boundary > 0 do
-						local byte = text:byte(boundary + 1)
-						if not byte or byte < 128 or byte >= 192 then break end
-						boundary = boundary - 1
-					end
-					handle.stream(text:sub(1, boundary))
-				end
-				follow()
-			end)
-
-			handle.root.InputBegan:Connect(function(input)
-				if input.UserInputType == Enum.UserInputType.MouseButton1
-					or input.UserInputType == Enum.UserInputType.Touch then
-					stopReveal(true)
-				end
-			end)
-
+			ensureWorking().set(util.trim(event.text or "") ~= "" and "Receiving reply" or "Receiving reasoning")
 			follow()
-			return handle
 		end
 
 		function view.empty()
-			stopReveal(false)
+			clearPreview()
 			if view.welcomeCard then
 				pcall(function() view.welcomeCard:Destroy() end)
 				view.welcomeCard = nil
@@ -299,7 +254,7 @@ return function(env)
 		-- the log carries more than a transcript should show.
 		function view.render(event)
 			if event.kind == "user" then
-				stopReveal(true)
+				clearPreview()
 				clearWorking()
 				closeRun()
 				if view.welcomeCard then
@@ -315,32 +270,42 @@ return function(env)
 					ensureWorking().set(event.text)
 					follow()
 				elseif event.text == "Ready" then
+					clearPreview()
 					clearWorking()
 				end
 			elseif event.kind == "request:start" then
+				clearPreview()
 				view.model = event.model or event.provider
-				-- The entire HTTP round trip sits between this and request:done with no
-				-- events in between, and it can run for the better part of a minute.
-				-- Without a row here that whole wait looks like nothing is happening,
-				-- which is the single largest gap in the turn.
-				ensureWorking().set("Contacting " .. tostring(event.provider))
+				-- Buffered HTTP provides no frames while the request is pending.
+				ensureWorking().set("Waiting for " .. tostring(event.provider))
 				follow()
+			elseif event.kind == "assistant:preview" then
+				showPreview(event)
+			elseif event.kind == "assistant:complete" then
+				clearPreview()
+			elseif event.kind == "request:done" and event.error then
+				clearPreview()
 			elseif event.kind == "assistant:reasoning" then
 				if util.trim(event.text or "") == "" then return end
-				local run = openRun()
-				if run.thought then run.thought.append(event.text)
-				else run.thought = message.reasoning(run.rows, event.text, run.slot()) end
+				local preview = view.preview
+				if preview and preview.id == event.streamId and preview.thoughtHandle then
+					preview.thoughtHandle.setText(event.text); preview.run.thought = preview.thoughtHandle; preview.thoughtHandle = nil
+				else
+					local run = openRun()
+					if run.thought then run.thought.append(event.text)
+					else run.thought = message.reasoning(run.rows, event.text, run.slot()) end
+				end
 				follow()
 			elseif event.kind == "assistant:text" then
 				local trimmed = util.trim(event.text or "")
 				if trimmed ~= "" and trimmed ~= "..." and trimmed ~= "…" then
-					stopReveal(true)
 					clearWorking()
 					closeRun()
-					-- The reveal is for a reply that is landing now. A message replayed out
-					-- of the log arrived long ago and goes up whole, or reopening a panel
-					-- would re-type the entire conversation.
-					revealAgent(event.text, view.replaying ~= true)
+					view.model = event.model or view.model
+					local preview = view.preview
+					if preview and preview.id == event.streamId and preview.textHandle then
+						preview.textHandle.finish(event.text, view.model); view.agentHandle = preview.textHandle; preview.textHandle = nil
+					else view.agentHandle = message.agent(scroll.instance, event.text, nextOrder(), view.model, props) end
 					follow()
 				end
 			elseif event.kind == "tool:call" then
@@ -445,7 +410,7 @@ return function(env)
 				message.notice(into, { tone = "info", text = text }, order)
 				follow()
 			elseif event.kind == "error" then
-				stopReveal(true)
+				clearPreview()
 				clearWorking()
 				closeRun()
 				message.notice(scroll.instance, {
@@ -454,7 +419,7 @@ return function(env)
 				}, nextOrder())
 				follow()
 			elseif event.kind == "abort" then
-				stopReveal(true)
+				clearPreview()
 				clearWorking()
 				closeRun()
 				message.notice(scroll.instance, { tone = "warn", text = "Stopped." }, nextOrder())
@@ -528,6 +493,8 @@ return function(env)
 			-- in flight, so only a settled one is swept.
 			if session.busy then
 				ensureWorking().set(session.status or "Working")
+				if session.liveRequest then view.render(session.liveRequest) end
+				if session.livePreview then view.render(session.livePreview) end
 			else
 				clearWorking()
 				closeRun()
@@ -552,7 +519,7 @@ return function(env)
 		end
 
 		function view.destroy()
-			stopReveal(false)
+			clearPreview()
 			pcall(function() latest.instance:Destroy() end)
 			if view.unsubscribe then view.unsubscribe() end
 			pcall(function() scroll.instance:Destroy() end)

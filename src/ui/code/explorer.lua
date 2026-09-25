@@ -6,6 +6,7 @@ return function(env)
 	local overlay = env.require("ui/overlay")
 	local explorer = env.require("runtime/explorer")
 	local refs = env.require("runtime/instance_refs")
+	local sources = env.require("runtime/script_sources")
 	local values = env.require("runtime/values")
 	local fields = env.require("runtime/instance_fields")
 	local edits = env.require("runtime/instance_edits")
@@ -25,6 +26,7 @@ return function(env)
 		local treeBar, detailBar = common.toolbar(treeHost), common.toolbar(detailHost)
 		local treeList, propertyList, refresh, layout, refreshProperties, observerOff, primary, menuButton
 		local detailSnapshot, selectedCopy, busy = nil, {}, false
+		local detailSelection, detailParents, sourceGeneration = nil, {}, 0
 		local searchGeneration, debounceGeneration = 0, 0
 		local dirtyBranches, selectingRow = {}, false
 		local search, changingSearch
@@ -36,7 +38,8 @@ return function(env)
 		end
 		local function clearSearch()
 			searchGeneration, debounceGeneration = searchGeneration + 1, debounceGeneration + 1
-			view.query, view.class, view.tag, view.searchRoot, busy = nil, nil, nil, nil, false
+			if view.query then explorer.cancelQuery(view.query.queryId) end
+			view.query, view.class, view.tag, view.searchRoot, view.error, busy = nil, nil, nil, nil, nil, false
 			setSearchText("")
 		end
 		local function held(name)
@@ -44,12 +47,13 @@ return function(env)
 			return ok and down
 		end
 		local status = P.text(treeHost, { text = "", color = theme.color.textSecondary, role = "caption", truncate = true })
-		local function page(key, more)
+		local function page(key, more, focusId)
 			local old = view.pages[key]
-			local result, why = explorer.children((key ~= "nil" and key ~= "bookmarks") and key or nil, more and old and old.nextCursor or nil, 50, (key == "nil" or key == "bookmarks") and key or nil)
-			if not result then status.Text = tostring(why); return end
-			if more and old then for _, item in ipairs(result.items) do old.items[#old.items + 1] = item end; old.nextCursor = result.nextCursor
-			else view.pages[key] = result end
+			local result, why = explorer.children((key ~= "nil" and key ~= "bookmarks") and key or nil, more and old and old.nextCursor or nil, 50, (key == "nil" or key == "bookmarks") and key or nil, focusId)
+			if not result then view.error = tostring(why); status.Text = view.error; return end
+			local merged, mergeWhy = explorer.mergePage(more and old or nil, result, 4000)
+			if not merged then view.error = mergeWhy; return end
+			view.pages[key], view.error = merged, nil
 			view.pages[key].at = clock.ms()
 			local count = util.count(view.pages)
 			if count > 64 then
@@ -59,15 +63,19 @@ return function(env)
 			end
 			return view.pages[key]
 		end
-		local function chooseSource(id)
-			common.work(function() return env.require("tools/source_documents").open({ instanceId = id, focus = true }, { aborted = function() return not handle.alive end }) end, function() if handle.alive then navigate("Editor") end end)
+		local function chooseSource(id, decompile, refreshSource)
+			sourceGeneration = sourceGeneration + 1; local generation = sourceGeneration
+			common.work(function() return env.require("tools/source_documents").open({ instanceId = id, focus = true, decompile = decompile, refresh = refreshSource },
+				{ requestOwner = handle, runtimeEpoch = refs.epoch, aborted = function() return not handle.alive or not handle.visible or generation ~= sourceGeneration end }) end,
+				function() if handle.alive and generation == sourceGeneration then navigate("Editor") end end)
 		end
 		local function reveal(key)
 			local object = refs.resolve(key); if not object then return end
 			local chain, current = {}, object.Parent
 			while current and #chain < 64 do chain[#chain + 1] = refs.id(current); current = current.Parent end
+			if current then view.error = "Reveal path exceeds the 64-level limit"; status.Text = view.error; return end
 			clearSearch(); view.root = chain[#chain] or "nil"
-			for i = #chain, 1, -1 do explorer.expanded[chain[i]] = true; page(chain[i]) end
+			for i = #chain, 1, -1 do explorer.expanded[chain[i]] = true; page(chain[i], false, chain[i - 1] or key) end
 			if #chain == 0 then page("nil") end
 		end
 		local function pick()
@@ -76,15 +84,15 @@ return function(env)
 				reveal(key); view.detail = true; refresh(); refreshProperties(); layout(); treeList.focusKey(key)
 			end))
 		end
-		local function selectedInfo()
-			local ids, parents = util.copy(explorer.selectedIds), {}
-			for _, id in ipairs(ids) do local object = refs.resolve(id); if not object then return nil, "A selected object expired" end; parents[id] = values.node(object.Parent) end
-			return ids, parents
+		local function selectedInfo(snapshot, parents)
+			local valid, why = explorer.validateSelection(snapshot)
+			if not valid then return nil, why end
+			return util.copy(snapshot.selectedIds), util.copy(parents)
 		end
-		local function performHierarchy(action)
-			local ids, parents = selectedInfo(); if not common.message(ids, parents) or #ids == 0 then return end
+		local function performHierarchy(action, snapshot, observedParents)
+			local ids, parents = selectedInfo(snapshot, observedParents); if not common.message(ids, parents) or #ids == 0 then return end
 			local function apply(args)
-				args.expectedParents = parents
+				args.expectedParents, args.selection = parents, snapshot
 				local result = edits.hierarchyMany(action, ids, args)
 				common.message(result); view.pages = {}; page(view.root); refresh(); refreshProperties(); return result.ok, result.text
 			end
@@ -111,18 +119,29 @@ return function(env)
 				return true
 			end, { key = "explorer-new-" .. kind })
 		end
-		local function actionsMenu(button)
-			local id = explorer.primaryId; local object = id and refs.resolve(id)
+		local function actionsMenu(button, clickedId)
+			local actionSelection, actionParents = detailSelection or explorer.state(), util.copy(detailParents)
+			local id = clickedId or actionSelection.primaryId; local object = id and refs.resolve(id)
 			local options = {
 				{ label = view.selectMode and "Finish multiple selection" or "Select multiple objects", value = "multi" },
 				{ label = "Game roots", value = "game" }, { label = "Session bookmarks", value = "bookmarks" }, { label = "Nil / unparented objects", value = "nil" },
 				{ label = "Search options…", value = "search" }, { label = "World picker…", value = "pick" },
 			}
 			if object then
-				for _, pair in ipairs({ { "Copy object reference", "reference" }, { "Copy diagnostic path", "path" }, { "Parent / breadcrumb", "parent" }, { "Bookmark object", "bookmark" }, { "Remove bookmark", "unbookmark" }, { "Rename", "rename" }, { "Move…", "reparent" }, { "Detach…", "detach" }, { "Create child…", "create" }, { "Duplicate", "duplicate" }, { "Delete…", "delete" }, { "Add attribute…", "attribute" }, { "Add tag…", "tag" }, { "Open script source", "source" }, { "View in Remotes", "remotes" }, { "Export metadata…", "export" }, { "Ask AI about selection", "ask" } }) do options[#options + 1] = { label = pair[1], value = pair[2] } end
+				for _, pair in ipairs({ { "Copy object reference", "reference" }, { "Copy diagnostic path", "path" }, { "Parent / breadcrumb", "parent" }, { "Bookmark object", "bookmark" }, { "Remove bookmark", "unbookmark" }, { "Rename", "rename" }, { "Move…", "reparent" }, { "Detach…", "detach" }, { "Create child…", "create" }, { "Duplicate", "duplicate" }, { "Delete…", "delete" }, { "Add attribute…", "attribute" }, { "Add tag…", "tag" }, { "Export metadata…", "export" }, { "Ask AI about selection", "ask" } }) do options[#options + 1] = { label = pair[1], value = pair[2] } end
+			end
+			if object then
+				local capability = sources.capabilities(id)
+				if capability.supported then
+					options[#options + 1] = { label = "Open source · " .. capability.status, value = "source" }
+					options[#options + 1] = { label = "Refresh source snapshot", value = "refreshSource" }
+					if capability.decompile then options[#options + 1] = { label = "Decompile script", value = "decompile" } end
+				end
+				if object:IsA("RemoteEvent") or object:IsA("RemoteFunction") or object.ClassName == "UnreliableRemoteEvent" then options[#options + 1] = { label = "View in Remotes", value = "remotes" } end
+				options[#options + 1] = { label = "Reveal path", value = "revealPath" }
 			end
 			common.menu(button or menuButton, "Explorer actions", options, function(action)
-				if action == "multi" then view.selectMode = not view.selectMode; refresh()
+				if action == "multi" then explorer.setSelectionMode(explorer.selectionMode == "multiple" and "replace" or "multiple"); view.selectMode = explorer.selectionMode == "multiple"; refresh()
 				elseif action == "game" or action == "bookmarks" or action == "nil" then view.root = action == "game" and refs.id(game) or action; clearSearch(); page(view.root); view.detail = false; refresh(); layout()
 				elseif action == "search" then forms.form("Search objects", { { key = "name", label = "Name", default = store.workspace.explorerQuery }, { key = "class", label = "Class (optional)", default = view.class }, { key = "tag", label = "Tag (optional)", default = view.tag }, { key = "scope", label = "Scope", type = "choice", choices = { "Current root", "Selected subtree", "Game" } }, { key = "pattern", label = "Use Lua pattern", type = "boolean", default = view.pattern } }, function(data)
 					view.class, view.tag, view.pattern = data.class, data.tag, data.pattern; view.searchRoot = data.scope == "Selected subtree" and id or data.scope == "Game" and refs.id(game) or view.root
@@ -133,7 +152,8 @@ return function(env)
 				elseif action == "path" then common.copy(refs.describe(object).displayPath)
 				elseif action == "bookmark" or action == "unbookmark" then common.message(explorer.bookmark(id, action == "unbookmark"))
 				elseif action == "parent" then if object.Parent then view.root = refs.id(object.Parent); clearSearch(); view.detail = false; page(view.root); refresh(); layout() end
-				elseif action == "source" then chooseSource(id)
+				elseif action == "source" or action == "decompile" or action == "refreshSource" then chooseSource(id, action == "decompile", action == "refreshSource")
+				elseif action == "revealPath" then reveal(id); refresh(); treeList.focusKey(id)
 				elseif action == "remotes" then if object:IsA("RemoteEvent") or object:IsA("RemoteFunction") or object.ClassName == "UnreliableRemoteEvent" then
 					local capture = env.require("runtime/remote_capture"); capture.select(nil)
 					capture.view.remoteId, capture.view.record, capture.view.argumentDraft, capture.view.detail = id, nil, nil, true
@@ -144,13 +164,13 @@ return function(env)
 				elseif action == "rename" then
 					local expected = values.node(object.Name)
 					forms.form("Rename object", { { key = "name", label = "Name", default = object.Name, required = true } }, function(data) local result = edits.apply({ { instanceId = id, kind = "property", key = "Name", expected = expected, value = values.node(data.name) } }); return result.ok, result.text end, { key = "rename:" .. id })
-				elseif action == "create" then forms.form("Create child", { { key = "class", label = "Class", default = "Folder", required = true }, { key = "name", label = "Name", default = "New object", required = true } }, function(data) data.parentId = id; local result = edits.hierarchy("create", data); page(id); refresh(); return result.ok, result.text end, { key = "create:" .. id })
+				elseif action == "create" then forms.form("Create child", { { key = "class", label = "Class", default = "Folder", required = true }, { key = "name", label = "Name", default = "New object", required = true } }, function(data) data.parentId, data.selection = id, actionSelection; local result = edits.hierarchy("create", data); page(id); refresh(); return result.ok, result.text end, { key = "create:" .. id })
 				elseif action == "export" then
 					local ids = util.copy(explorer.selectedIds)
 					forms.form("Export selected metadata", { { key = "depth", label = "Descendant depth (0 for selected only)", type = "number", min = 0, max = 8, default = 0 }, { key = "destination", label = "File under workspace files (optional)" } }, function(data)
 						common.work(function() return env.require("runtime/native_exports").explorer(ids, { depth = data.depth, destination = data.destination ~= "" and data.destination or nil }) end, function(result) overlay.toast("Exported " .. result.path, "good") end); return true
 					end)
-				else performHierarchy(action) end
+				else performHierarchy(action, actionSelection, actionParents) end
 			end)
 		end
 		primary = treeBar.add("Game roots", function(button)
@@ -173,6 +193,7 @@ return function(env)
 		top = top + common.barHeight()
 		treeList = common.virtualList(treeHost, { name = "InstanceTree", dense = true, position = UDim2.fromOffset(0, top), size = UDim2.new(1, 0, 1, -top),
 			label = function(row) return row.label end,
+			onFocus = function(row) if row.instanceId then explorer.focus(row.instanceId) end end,
 			icon = function(row) return row.instanceId and row.className or nil end,
 			indent = function(row) return row.depth or 0 end,
 			chevron = function(row)
@@ -206,7 +227,7 @@ return function(env)
 					if not common.message(result, why) then return end
 					refresh(); refreshProperties()
 				end
-				actionsMenu(button or menuButton)
+				actionsMenu(button or menuButton, row.instanceId)
 			end,
 			onSelect = function(row, rowIndex, button)
 				if row.more then if view.query then handle.search(nil, true) else page(row.more, true); refresh() end; return end
@@ -215,17 +236,17 @@ return function(env)
 				local modifier = held("LeftControl") or held("RightControl") or held("LeftMeta") or held("RightMeta")
 				local range = held("LeftShift") or held("RightShift")
 				local mode, ids = "replace", { key }
-				if range and view.anchorId then
+				if range and explorer.anchorId then
 					local anchor
-					for i, item in ipairs(treeList.items) do if item.instanceId == view.anchorId then anchor = i; break end end
+					for i, item in ipairs(treeList.items) do if item.instanceId == explorer.anchorId then anchor = i; break end end
 					if anchor then
 						ids = {}; for i = math.min(anchor, rowIndex), math.max(anchor, rowIndex) do local id = treeList.items[i].instanceId; if id then ids[#ids + 1] = id end end
 						if modifier then mode = "add" end
 					end
 				elseif view.selectMode or modifier then mode = "add"; for _, id in ipairs(explorer.selectedIds) do if id == key then mode = "remove" end end end
-				selectingRow = true; local result, why = explorer.select(ids, mode, explorer.selectionRevision); selectingRow = false
+				selectingRow = true; local result, why = explorer.select(ids, mode, detailSelection or explorer.state(), { clickedId = key, focusId = key, primaryId = mode ~= "remove" and key or nil, range = range }); selectingRow = false
 				if not common.message(result, why) then return end
-				if not range then view.anchorId = key end
+				view.anchorId = explorer.anchorId
 				if not modifier and not range and not view.selectMode then
 					if row.hasChildren and not explorer.expanded[key] then explorer.expanded[key] = true; page(key)
 					elseif row.hasChildren == false then view.detail = true end
@@ -275,14 +296,21 @@ return function(env)
 		end })
 		refreshProperties = function()
 			if not handle.alive or not handle.visible or not propertyList then return end
-			selectedCopy = util.copy(explorer.selectedIds)
+			detailSelection = explorer.state()
+			selectedCopy, detailParents = util.copy(detailSelection.selectedIds), {}
+			for _, key in ipairs(selectedCopy) do
+				local selectedObject = refs.resolve(key)
+				if selectedObject then pcall(function() detailParents[key] = values.node(selectedObject.Parent) end) end
+			end
 			sectionButton.setText("Inspector" .. (#selectedCopy > 1 and (" · " .. #selectedCopy) or ""))
 			sectionTabs.set({ { id = "properties", label = "Properties" }, { id = "attributes", label = "Attributes" }, { id = "tags", label = "Tags" } }, view.section)
 			inspectButton.setEnabled(#selectedCopy > 0)
 			sourceButton.instance.Visible = false
 			if #selectedCopy == 0 then propertyList.set({}); identity.Text = "Select an object"; identityIcon.Visible = false; return end
 			local object = refs.resolve(explorer.primaryId); local info = object and refs.describe(object)
-			sourceButton.instance.Visible = object ~= nil and object:IsA("LuaSourceContainer")
+			local capability = object and sources.capabilities(explorer.primaryId)
+			sourceButton.instance.Visible = capability ~= nil and capability.supported
+			if capability and capability.supported then sourceButton.setText(capability.source and "Source" or capability.decompile and "Decompile" or "Unavailable"); sourceButton.setEnabled(capability.source or capability.decompile) end
 			identityIcon.Visible = info ~= nil
 			if info then instanceIcons.paint(identityIcon, info.className) end
 			identity.Text = info and (info.name .. " · " .. info.className .. "\n" .. util.ellipsis(info.displayPath, 180)) or "Selected object is no longer available"
@@ -302,38 +330,69 @@ return function(env)
 		end
 		refresh = function()
 			if not handle.alive or not handle.visible then return end
-			local rows, selected, seen = {}, {}, {}
+			local rows, selected, seen, rowLimit = {}, {}, {}, false
+			view.selectMode = explorer.selectionMode == "multiple"
 			for _, id in ipairs(explorer.selectedIds) do selected[id] = true end
 			local function append(items, depth)
 				for _, item in ipairs(items or {}) do
-					if #rows >= 4000 then return end
+					if #rows >= 3999 then rowLimit = "4,000-row display limit reached; narrow the search or choose a nearer root"; return end
+					if depth >= 64 then rowLimit = "64-level display limit reached; choose a nearer root"; return end
 					local row = util.copy(item); row.selected = selected[item.instanceId]; row.depth = math.min(depth, 12)
 					row.label = (view.query and item.className and item.className ~= "" and item.name ~= item.className) and (item.name .. "  ·  " .. item.className) or item.name
 					rows[#rows + 1] = row
 					if explorer.expanded[item.instanceId] and not seen[item.instanceId] then
 						seen[item.instanceId] = true; local branch = view.pages[item.instanceId] or page(item.instanceId)
-						if branch then append(branch.items, depth + 1); if branch.nextCursor then rows[#rows + 1] = { more = item.instanceId, label = "Load more children…", depth = math.min(depth + 1, 12) } end end
+						if branch then
+							append(branch.items, depth + 1)
+							if branch.nextCursor then
+								if #rows < 3999 then rows[#rows + 1] = { more = item.instanceId, label = "Load more children…", depth = math.min(depth + 1, 12) }
+								else rowLimit = "4,000-row display limit reached; narrow the search or choose a nearer root" end
+							end
+						end
 					end
 				end
 			end
 			local result = view.query or view.pages[view.root]
-			if result then append(result.items, 0); if result.nextCursor then rows[#rows + 1] = { more = view.root, label = "Load more…" } end end
+			if result then
+				append(result.items, 0)
+				if result.nextCursor then
+					if #rows < 3999 then rows[#rows + 1] = { more = view.root, label = "Load more…" }
+					else rowLimit = "4,000-row display limit reached; narrow the search or choose a nearer root" end
+				end
+			end
+			if result and result.uiTruncated then rowLimit = "4,000-row display limit reached; narrow the search or choose a nearer root" end
+			if rowLimit then rows[#rows + 1] = { label = rowLimit, limited = true } end
 			if #rows == 0 then rows[1] = { label = busy and "Searching…" or "No objects found" } end
 			status.Text = (busy and "Searching… · " or view.selectMode and "Select mode · " or "") .. #explorer.selectedIds .. " selected" .. (view.query and (" · " .. (result.scanned or 0) .. " scanned · " .. (result.reason or "complete")) or result and result.complete == false and " · Partial results" or "")
+			if view.error then status.Text = view.error .. " · Refresh to retry"
+			elseif view.query then
+				status.Text = status.Text .. " · " .. #(result.items or {}) .. "/" .. tostring(result.total or "?") .. (result.totalKnown and " returned" or "+ found (partial)") .. " · " .. (result.unreadable or 0) .. " unreadable"
+			elseif result then
+				status.Text = status.Text .. " · " .. #(result.items or {}) .. "/" .. result.total .. " children · " .. (result.filtered or 0) .. " filtered · " .. (result.unreadable or 0) .. " unreadable"
+				if (result.limited or 0) > 0 then status.Text = status.Text .. " · " .. result.limited .. " omitted (20,000-child limit)" end
+				if (result.omittedBefore or 0) > 0 then status.Text = status.Text .. " · " .. result.omittedBefore .. " earlier children omitted around the revealed object" end
+			end
+			if rowLimit then status.Text = status.Text .. " · " .. rowLimit end
+			local filters = {}
+			if view.class and view.class ~= "" then filters[#filters + 1] = "[class: " .. view.class .. "]" end
+			if view.tag and view.tag ~= "" then filters[#filters + 1] = "[tag: " .. view.tag .. "]" end
+			if view.query then filters[#filters + 1] = view.pattern and "[Lua pattern]" or "[Literal]" end
+			if #filters > 0 then status.Text = status.Text .. " " .. table.concat(filters, " ") end
 			primary.setText(view.query and "Search" or (view.root == "nil" and "Nil objects" or view.root == "bookmarks" and "Bookmarks" or "Game"))
 			treeList.set(rows, true)
 		end
 		function handle.search(text, more)
 			if more and busy then return end
 			searchGeneration = searchGeneration + 1; local generation = searchGeneration; busy = true
-			if not more then setSearchText(text or ""); store.preference("explorerQuery", text or ""); view.query = nil end
+			if not more then if view.query then explorer.cancelQuery(view.query.queryId) end; view.error = nil; setSearchText(text or ""); store.preference("explorerQuery", text or ""); view.query = nil end
 			if not more and util.trim(text or "") == "" and (not view.class or view.class == "") and (not view.tag or view.tag == "") then busy = false; page(view.root); refresh(); return end
-			local query = { name = text or store.workspace.explorerQuery, class = view.class, tag = view.tag ~= "" and view.tag or nil, pattern = view.pattern, rootId = view.searchRoot or ((view.root ~= "nil" and view.root ~= "bookmarks") and view.root or refs.id(game)), limit = 100, cursor = more and view.query and view.query.nextCursor or nil }
+			local query = { generation = generation, name = text or store.workspace.explorerQuery, class = view.class, tag = view.tag ~= "" and view.tag or nil, pattern = view.pattern, rootId = view.searchRoot or ((view.root ~= "nil" and view.root ~= "bookmarks") and view.root or refs.id(game)), limit = 100, cursor = more and view.query and view.query.nextCursor or nil }
 			clock.spawn(function()
 				local result, why = explorer.query(query, { aborted = function() return not handle.alive or not handle.visible or generation ~= searchGeneration end })
 				if not handle.alive or generation ~= searchGeneration then return end; busy = false
-				if not result then status.Text = tostring(why); return end
-				if more and view.query then for _, item in ipairs(result.items) do view.query.items[#view.query.items + 1] = item end; view.query.nextCursor = result.nextCursor else view.query = result end
+				if not result then view.error = tostring(why); refresh(); return end
+				local merged, mergeWhy = explorer.mergePage(more and view.query or nil, result, 4000)
+				view.query, view.error = merged, mergeWhy
 				refresh()
 			end)
 		end
@@ -365,24 +424,25 @@ return function(env)
 			if observerOff then observerOff(); observerOff = nil end
 			if handle.visible then observerOff = explorer.observe(explorer.selectedIds, function()
 				for _, id in ipairs(explorer.selectedIds) do local object = refs.resolve(id); if object and object.Parent then dirtyBranches[refs.id(object.Parent)] = true end end
-				queue()
+				explorer.reconcileSelection(); queue()
 			end) end
 		end
 		local off = explorer.changed:connect(function(event)
 			if event.kind == "selection" then
 				if not selectingRow and explorer.primaryId then reveal(explorer.primaryId); view.detail = true; refresh(); layout(); treeList.focusKey(explorer.primaryId) end
-				observe(); queue()
+				refreshProperties(); observe(); queue()
+			elseif event.kind == "selection_mode" then refresh()
 			elseif event.kind == "branch" then dirtyBranches[event.parentId] = true; queue() end
 		end)
 		root:GetPropertyChangedSignal("AbsoluteSize"):Connect(layout)
 		function handle.setVisible(visible)
 			if visible == handle.visible then return end
 			handle.visible = visible; treeList.visible, propertyList.visible = visible, visible; observe()
-			if visible then page(view.root); if explorer.primaryId then reveal(explorer.primaryId) end; queue(); refresh(); refreshProperties(); layout()
-			else searchGeneration = searchGeneration + 1; busy = false; env.require("ui/code/world_picker").stop() end
+			if visible then explorer.reconcileSelection(); page(view.root); if explorer.primaryId then reveal(explorer.primaryId) end; queue(); refresh(); refreshProperties(); layout()
+			else searchGeneration = searchGeneration + 1; sourceGeneration = sourceGeneration + 1; sources.cancel(handle); busy = false; env.require("ui/code/world_picker").stop() end
 			divider.root.Visible = visible and root.AbsoluteSize.X >= 620
 		end
-		function handle.destroy() handle.alive = false; view.y = treeList.root.CanvasPosition.Y; off(); if observerOff then observerOff() end; divider.destroy(); env.require("ui/code/world_picker").stop(); root:Destroy() end
+		function handle.destroy() handle.alive = false; sourceGeneration = sourceGeneration + 1; sources.cancel(handle); view.y = treeList.root.CanvasPosition.Y; off(); if observerOff then observerOff() end; divider.destroy(); env.require("ui/code/world_picker").stop(); root:Destroy() end
 		handle.list, handle.more, handle.refresh = treeList, actionsMenu, function() refresh(); refreshProperties() end
 		if explorer.primaryId then reveal(explorer.primaryId) end
 		if not view.pages[view.root] then page(view.root) end

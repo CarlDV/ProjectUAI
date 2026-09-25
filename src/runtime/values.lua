@@ -215,11 +215,20 @@ return function(env)
 		end)) .. '"'
 	end
 	function M.portable(graph, remoteId, method)
+		if method ~= "FireServer" and method ~= "InvokeServer" then return nil, "Only outgoing remote methods have portable scripts" end
 		local decoded, why = M.decode(graph); if not decoded then return nil, why end
 		local function path(key)
 			local instance, err = refs.resolve(key); if not instance then error(err, 0) end
 			local parts, node = {}, instance
-			while node and node ~= game do table.insert(parts, 1, M.quote(node.Name)); node = node.Parent end
+			while node and node ~= game do
+				if #parts >= 256 then error("Portable instance path exceeds 256 levels", 0) end
+				local parent = node.Parent
+				if parent then
+					local found = 0; for _, child in ipairs(parent:GetChildren()) do if child.Name == node.Name then found = found + 1 end end
+					if found ~= 1 then error("Ambiguous instance path; portable scripts require unique sibling names", 0) end
+				end
+				table.insert(parts, 1, M.quote(node.Name)); node = parent
+			end
 			if node ~= game then error("Detached Instances do not have a portable path", 0) end
 			return "exact({" .. table.concat(parts, ", ") .. "}, " .. M.quote(instance.ClassName) .. ")"
 		end

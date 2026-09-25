@@ -4,11 +4,12 @@ return function(env)
 	local caps = env.require("runtime/caps")
 	local util = env.require("runtime/util")
 	local M = {}
-	local lease
+	local lease, retained = nil, false
 	local function pack(...) return { n = select("#", ...), ... } end
 	function M.coverage()
 		return { namecall = util.copy(caps.remoteHooks.namecall), direct = util.copy(caps.remoteHooks.direct),
-			invokeOutcomes = util.copy(caps.remoteHooks.invokeOutcomes), incomingCallbacks = "unavailable" }
+			invokeOutcomes = util.copy(caps.remoteHooks.invokeOutcomes), incomingCallbacks = "unavailable",
+			wrapperStatus = lease and "active observation wrappers" or retained and "retained forwarding wrappers; observation and rules disabled" or "no wrappers installed by this runtime" }
 	end
 	function M.start(observer, rule, mode)
 		if lease then return nil, "Outgoing backend already has an owner" end
@@ -77,11 +78,13 @@ return function(env)
 				local ok, previous
 				if mode == "namecall" then ok, previous = pcall(caps.fn.hookmetamethod, game, "__namecall", closure)
 				else ok, previous = pcall(caps.fn.hookfunction, sample[method], closure) end
-				if not ok or type(previous) ~= "function" then return nil, "Hook installation failed: " .. tostring(previous) end
+				if not ok or type(previous) ~= "function" then return nil, "Hook installation failed; host error text was omitted" end
 				cell.previous = previous; broker.cells[key] = cell
+				retained = true
 				if original then broker.functions[original] = cell end
 			end
 			cell.observer, cell.rule = observer, rule
+			retained = true
 			cell.invokeVerified = caps.remoteHooks.invokeOutcomes.state == "verified"
 			local found = false; for _, existing in ipairs(acquired) do if existing == cell then found = true end end
 			if not found then acquired[#acquired + 1] = cell end
@@ -90,14 +93,14 @@ return function(env)
 		local ok, why = pcall(function()
 			if mode == "namecall" then
 				local cell, err = install("namecall"); if not cell then error(err, 0) end
-				-- Only an owned, detached fixture is used. It is intercepted before
-				-- the predecessor, so this probe sends no traffic to a game server.
+				-- Owned detached probes skip the predecessor when intercepted.
+				-- Routing and network behavior still depend on the host.
 				for _, class in ipairs({ "RemoteEvent", "UnreliableRemoteEvent", "RemoteFunction" }) do
 					local probe = Instance.new(class); cell.probe, cell.probeMethod = probe, class == "RemoteFunction" and "InvokeServer" or "FireServer"
-					local tested, errProbe = pcall(function() if class == "RemoteFunction" then probe:InvokeServer("uai-probe", nil, false, nil) else probe:FireServer("uai-probe", nil, false, nil) end end)
+					local tested = pcall(function() if class == "RemoteFunction" then probe:InvokeServer("uai-probe", nil, false, nil) else probe:FireServer("uai-probe", nil, false, nil) end end)
 					cell.probe = nil; probe:Destroy()
 					local result = cell.probeResult; cell.probeResult = nil
-					if not tested or not result or result.n ~= 4 or result[1] ~= "uai-probe" or result[3] ~= false then error("Namecall fixture failed for " .. class .. ": " .. tostring(errProbe), 0) end
+					if not tested or not result or result.n ~= 4 or result[1] ~= "uai-probe" or result[3] ~= false then error("Namecall fixture failed for " .. class, 0) end
 				end
 			else
 				for _, class in ipairs({ "RemoteEvent", "UnreliableRemoteEvent", "RemoteFunction" }) do

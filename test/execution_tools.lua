@@ -479,7 +479,7 @@ scenario("a crashed session cancels only its old turn and can be used again", fu
 	end
 	check("crashing turn was accepted", session.send("first", function(reply) callback = reply end))
 	h.sched.advance(0.1)
-	check("a crash releases the UI and completion callback", not session.busy and session.status == "Ready" and contains(callback, "cannot resume dead coroutine"))
+	check("a crash releases the UI and completion callback", not session.busy and session.status == "Ready" and contains(callback, "internal error"))
 	check("old tool workers are cancelled", oldContext.aborted())
 	check("another conversation is unaffected", not other.aborted())
 	local newContext

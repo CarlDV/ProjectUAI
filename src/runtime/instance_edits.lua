@@ -76,8 +76,22 @@ return function(env)
 	end
 	function M.hierarchy(action, args, ctx)
 		args = args or {}; local parent, target, why
+		if args.selection then
+			local valid, reason = env.require("runtime/explorer").validateSelection(args.selection); if not valid then return fail("stale_selection", reason) end
+			if action == "create" then
+				if args.parentId ~= args.selection.primaryId then return fail("stale_selection", "Create destination differs from the Inspector primary object") end
+			elseif #args.selection.selectedIds ~= 1 or args.instanceId ~= args.selection.primaryId then
+				return fail("stale_selection", "Use the exact Inspector selection for hierarchy actions")
+			end
+		end
 		if args.instanceId then target, why = refs.resolve(args.instanceId); if not target then return fail("stale_handle", why) end end
 		if args.parentId then parent, why = refs.resolve(args.parentId); if not parent then return fail("stale_handle", why) end end
+		if target == game then return fail("invalid_arguments", "The DataModel cannot be moved, cloned, or deleted") end
+		if target and args.expectedParent then
+			local valid, expected = values.decodeNode(args.expectedParent)
+			local readable, current = pcall(function() return target.Parent end)
+			if not valid or not readable or current ~= expected then return fail("conflict", "Parent changed; inspect the object again") end
+		end
 		if ctx and ctx.aborted and ctx.aborted() then return fail("aborted", "Operation stopped before any change") end
 		if action == "reparent" or action == "detach" then
 			if not target then return fail("invalid_arguments", "A target is required") end
@@ -119,9 +133,20 @@ return function(env)
 		return fail("invalid_arguments", "Unknown hierarchy operation")
 	end
 	function M.hierarchyMany(action, ids, args, ctx)
-		if type(ids) ~= "table" or #ids < 1 or #ids > 20 then return fail("invalid_arguments", "Choose 1–20 objects") end
+		if type(ids) ~= "table" or not util.isArray(ids) or #ids < 1 or #ids > 20 then return fail("invalid_arguments", "Choose 1–20 objects") end
+		args = args or {}
+		if args.selection then local valid, why = env.require("runtime/explorer").validateSelection(args.selection, ids); if not valid then return fail("stale_selection", why) end end
+		local seenIds = {}
+		for _, key in ipairs(ids) do if seenIds[key] then return fail("invalid_arguments", "Duplicate hierarchy targets are ambiguous") end; seenIds[key] = true end
 		local objects, normalized = {}, {}
 		for _, key in ipairs(ids) do local target, why = refs.resolve(key); if not target then return fail("stale_handle", why) end; objects[#objects + 1] = target end
+		if args.expectedParents then
+			for _, target in ipairs(objects) do
+				local valid, expected = values.decodeNode(args.expectedParents[refs.id(target)])
+				local readable, parent = pcall(function() return target.Parent end)
+				if not valid or not readable or parent ~= expected then return fail("conflict", "A selected parent changed; no hierarchy operations were applied") end
+			end
+		end
 		for _, target in ipairs(objects) do
 			local nested = false
 			if action == "delete" or action == "duplicate" then for _, other in ipairs(objects) do if other ~= target and target:IsDescendantOf(other) then nested = true end end end
@@ -141,6 +166,7 @@ return function(env)
 		local result = { ok = true, status = "completed", outcomes = {}, text = "Hierarchy operation completed; outside Undo coverage" }
 		for _, target in ipairs(normalized) do
 			local options = util.copy(args); options.instanceId = refs.id(target)
+			options.selection = nil
 			if options.expectedParents then options.expectedParent = options.expectedParents[options.instanceId] end
 			if action == "duplicate" and options.parentIds then
 				local valid, parent = values.decodeNode(options.parentIds[options.instanceId]); if not valid then return fail("stale_handle", "Duplicate destination expired") end
