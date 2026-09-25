@@ -8,7 +8,7 @@ function M.new(options)
 	local env = { services = h.services, hs = h.services.HttpService, plr = h.localPlayer,
 		uis = h.services.UserInputService, tween = h.services.TweenService, run = h.services.RunService,
 		guisvc = h.services.GuiService, players = h.services.Players,
-		info = { folder = "UAI", version = "1.7.0", name = "UAI", build = "workspace-fixture" }, context = {}, loadedModules = loaded }
+		info = { folder = "UAI", version = "1.8.0", name = "UAI", build = "workspace-fixture" }, context = {}, loadedModules = loaded }
 	function env.require(id)
 		if loaded[id] ~= nil then return loaded[id] end
 		assert(not loading[id], "circular module: " .. id); loading[id] = true

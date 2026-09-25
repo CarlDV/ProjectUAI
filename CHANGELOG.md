@@ -1,10 +1,40 @@
 # Changelog
 
-## Unreleased — native client improvements
+## 1.8.0 — September 25, 2026
+
+Chat stability, provider compatibility, and native client improvements.
 
 Available in game under **App menu → What's new**, also reachable from
 **About → What's new**. Reload the updated native bundle to see the bundled notes.
 
+- Correct provider URLs for loopback/LAN hosts, IPv6, custom prefixes and query
+  strings. Scope discovered model lists and learned request repairs to their
+  connection; preserve manual models after discovery/auth failures.
+- Default vLLM to optional auth, add llama.cpp/SGLang presets, avoid unsupported
+  Ollama tool defaults, preserve object-shaped tool arguments and recognize small
+  local context/output limits. Honor bearer auth for Messages gateways.
+- Apply local identity/auth defaults when choosing a preset inside Add Provider.
+  Connection edits discard fetched model choices and cancel obsolete discovery
+  without losing manual ids. Switching presets clears the previous gateway URL.
+- Preserve full paths and identity/auth headers in gateway sockets, accept split
+  and combined SSE events, clean up late connections, and allow HTTP fallback only
+  before dispatch. Document the custom gateway contract and remove obsolete
+  transport-ceiling claims. See [provider compatibility](docs/PROVIDER_COMPATIBILITY.md)
+  and [the investigation log](CHANGES-2026-09-25-provider-compatibility.md).
+- Preserve dialogue during long tool/subagent runs with independent history
+  budgets. Keep call/result pairs and worker summaries together, save the same
+  retained history, disclose history limits, and recover surviving dialogue from
+  older context-only or activity-only saves.
+- Draw the window directly on every device and maximize it without rebuilding
+  the interface. Preserve reading position across refreshes and layout changes.
+- Replay long conversations in bounded slices while queuing incoming events;
+  cancel stale replay on switch, clear and destruction. Release expired GUI rows,
+  nested code rows, timers and replay buffers as history rolls over.
+- Add **Message options → Refresh conversation** for recovery during live work.
+  Fall back to readable source when Markdown rendering fails, preserve original
+  worker timings/counts, and search retained dialogue after model compaction.
+- Track this work and its validation in
+  [CHANGES-2026-09-25-chat-stability.md](CHANGES-2026-09-25-chat-stability.md).
 - Include these changes in the in-game notes and restore the unread marker when
   notes change within the same client version.
 - Remove the 8,192-token executor reply ceiling from both provider adapters,
@@ -40,7 +70,8 @@ Available in game under **App menu → What's new**, also reachable from
   unlimited workers from inheriting the disabled finite queue budget.
 - Add a fail-fast native verification command, performance contracts, actual Luau
   syntax compilation, deterministic module manifests and generated-output checks.
-  Current features/limits: [native contract](docs/NATIVE_CLIENT.md). No version bump.
+  Current features/limits: [native contract](docs/NATIVE_CLIENT.md). The bundle,
+  generated site and in-game notes identify this release as **1.8.0**.
 
 ## Workspace organization — September 24, 2026
 

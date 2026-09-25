@@ -13,6 +13,7 @@ return function(env)
 	local log = env.require("runtime/log")
 	local signal = env.require("runtime/signal")
 	local context = env.require("agent/context")
+	local transcript = env.require("agent/transcript")
 	local hooks = env.require("agent/hooks")
 	local permissions = env.require("agent/permissions")
 	local state = env.require("agent/state")
@@ -22,37 +23,6 @@ return function(env)
 	local THREAD_LIMIT = 64
 	local running, alive = 0, true
 
-	-- Which events are the transcript, as opposed to the running commentary around one.
-	--
-	-- Only these are written to disk. The rest are either meaningless after the fact -- a
-	-- status line, a request that has already finished, a progress tick, a token count --
-	-- or not serialisable at all: a `permission:ask` payload carries the closure that
-	-- answers it, and encoding that would fail the whole write.
-	local DURABLE = {
-		["user"] = true,
-		["turn:start"] = true,
-		["turn:end"] = true,
-		["assistant:text"] = true,
-		["assistant:reasoning"] = true,
-		["tool:call"] = true,
-		["tool:result"] = true,
-		["tool:error"] = true,
-		["subagent:start"] = true,
-		["subagent:text"] = true,
-		["subagent:tool"] = true,
-		["subagent:tool:done"] = true,
-		["subagent:done"] = true,
-		["request:retry"] = true,
-		["provider:switch"] = true,
-		["compact"] = true,
-		["error"] = true,
-		["abort"] = true,
-	}
-
-	local TRANSCRIPT_LIMIT = 400
-	local FIELD_CAP = 24000
-	local TRANSCRIPT_BYTES = 1048576
-
 	-- How long a pasted message may be before it stops being a message. A long script
 	-- pasted into the composer is reference material, not a request: sent whole it
 	-- drowns the turn, and the model's only use for it is file_read anyway. Over this
@@ -60,45 +30,6 @@ return function(env)
 	-- words plus "the code is in this file" -- which is the same information for a
 	-- fraction of the context.
 	local PASTE_CAP = attachments.INLINE_LIMIT
-
-	local function transcriptOf(session)
-		local durable = {}
-		for _, event in ipairs(session.log) do
-			if DURABLE[tostring(event.kind)] then durable[#durable + 1] = event end
-		end
-		-- Newest first while the budget is spent, then reversed: what a reader wants back
-		-- from a long conversation is the end of it.
-		local newest = {}
-		local budget = TRANSCRIPT_BYTES
-		for index = #durable, math.max(#durable - TRANSCRIPT_LIMIT + 1, 1), -1 do
-			local event = durable[index]
-			local copy, cost = {}, 0
-			for key, value in pairs(event) do
-				local kind = type(value)
-				if kind == "string" then
-					if #value > FIELD_CAP then
-						copy[key] = (util.truncate(value, FIELD_CAP,
-							"the rest was not kept in the stored transcript"))
-					else
-						copy[key] = value
-					end
-					cost = cost + #copy[key] + #tostring(key)
-				elseif kind == "number" or kind == "boolean" then
-					copy[key] = value
-					cost = cost + 12
-				end
-				-- Anything else -- a table, a function, an instance -- is dropped. No
-				-- durable event needs one to render, and one stray field would take the
-				-- whole file's write with it.
-			end
-			if #newest > 0 and cost > budget then break end
-			budget = budget - cost
-			newest[#newest + 1] = copy
-		end
-		local out = {}
-		for index = #newest, 1, -1 do out[#out + 1] = newest[index] end
-		return out
-	end
 
 	local M = {
 		threads = {},
@@ -164,20 +95,8 @@ return function(env)
 			todos = {},
 		}
 
-		-- Retain transcript events; transient progress must not evict conversation.
-		function session.appendLog(payload)
-			if not DURABLE[tostring(payload.kind)] then return end
-			local copy, cost = {}, 64
-			for key, value in pairs(payload) do
-				if type(value) == "string" then copy[key] = util.truncate(value, FIELD_CAP); cost = cost + #copy[key] + #tostring(key)
-				elseif type(value) == "number" or type(value) == "boolean" then copy[key] = value; cost = cost + 16 end
-			end
-			copy.retainedBytes = cost
-			session.log[#session.log + 1], session.logBytes = copy, session.logBytes + cost
-			while #session.log > TRANSCRIPT_LIMIT or session.logBytes > TRANSCRIPT_BYTES do
-				local old = table.remove(session.log, 1); session.logBytes = math.max(0, session.logBytes - (old.retainedBytes or 64))
-			end
-		end
+		session.transcript = transcript.new(session)
+		session.appendLog = session.transcript.append
 		function session.emit(kind, payload)
 			if session.removed or not alive then return end
 			payload = util.copy(payload or {})
@@ -192,7 +111,8 @@ return function(env)
 				session.liveRequest, session.livePreview = nil, nil
 			end
 			if not session.headless then
-				session.appendLog(payload)
+				local retained = session.appendLog(payload)
+				payload.transcriptId = retained and retained.transcriptId or nil
 			end
 			hooks.run("onEvent", { session = session, event = payload })
 			session.events:fire(payload)
@@ -367,7 +287,8 @@ return function(env)
 			local subagents = env.loadedModules and env.loadedModules["agent/subagent"]
 			if subagents then subagents.stopAll(session) end
 			session.ctx.clear()
-			session.log, session.logBytes = {}, 0
+			session.transcript.reset()
+			session.viewState = nil
 			session.turns = 0
 			session.toolEpoch = {}
 			session.abortFlag = false
@@ -522,6 +443,19 @@ return function(env)
 				where = "title"
 			end
 			if not where then
+				for _, event in ipairs(session.log) do
+					if event.kind == "user" or event.kind == "assistant:text" then
+						local body = tostring(event.text or "")
+						local at = body:lower():find(needle, 1, true)
+						if at then
+							where = event.kind == "user" and "message" or "reply"
+							snippet = util.ellipsis(body:sub(math.max(at - 40, 1)), 120)
+							break
+						end
+					end
+				end
+			end
+			if not where then
 				for _, message in ipairs(session.ctx.messages or {}) do
 					local body = tostring(message.content or "")
 					local at = body:lower():find(needle, 1, true)
@@ -595,7 +529,8 @@ return function(env)
 			createdAt = session.createdAt,
 			turns = session.turns, opencodeSession = session.opencodeSession,
 			context = session.ctx.serialise(),
-			transcript = transcriptOf(session),
+			transcript = session.transcript.snapshot(),
+			transcriptState = session.transcript.metadata(),
 		})
 	end
 
@@ -609,7 +544,7 @@ return function(env)
 		local function readThread(entry)
 			if entry.isDir or not entry.name:match("%.json$") then return nil end
 			local raw = fsx.read(entry.path)
-			local data = raw and #raw <= 4 * 1024 * 1024 and util.decode(raw)
+			local data = raw and #raw <= 12 * 1024 * 1024 and util.decode(raw)
 			if type(data) ~= "table" or type(data.id) ~= "string" or #data.id > 120
 				or not data.id:match("^[%w_-]+$") or entry.name ~= data.id .. ".json" then return nil end
 			return data
@@ -643,14 +578,7 @@ return function(env)
 				session.updatedAt = timestamp(data.updatedAt)
 				session.turns = math.floor(timestamp(data.turns)); session.opencodeSession = data.opencodeSession
 				session.ctx.restore(data.context)
-				-- Older files may have context without a stored transcript.
-				if type(data.transcript) == "table" then
-					for _, event in ipairs(data.transcript) do
-						if type(event) == "table" and event.kind then
-							session.appendLog(event)
-						end
-					end
-				end
+				session.transcript.restore(data.transcript, session.ctx, data.transcriptState)
 				M.threads[session.id] = session
 				restored = restored + 1
 			end
@@ -664,7 +592,8 @@ return function(env)
 		return restored
 	end
 
-	M.limits = { threads = THREAD_LIMIT, workers = 8, events = TRANSCRIPT_LIMIT, transcriptBytes = TRANSCRIPT_BYTES }
+	M.limits = { threads = THREAD_LIMIT, workers = 8, events = transcript.limits.events,
+		transcriptBytes = transcript.limits.bytes, transcriptBudgets = transcript.limits.budgets }
 	env.require("runtime/dispose").add(function()
 		alive = false
 		for _, item in pairs(M.threads) do item.abort(); item.events:clear() end

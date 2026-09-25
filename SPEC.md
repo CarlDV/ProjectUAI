@@ -70,7 +70,10 @@ it; `ui/*` must not require `agent/*` except through `agent/session`.
   used: the whole SSE body arrives at once and `net/sse` replays it into deltas,
   which is what makes reasoning text and index-keyed `tool_calls` fragments
   usable. `net/ws` upgrades to real token streaming when the executor exposes
-  `WebSocket.connect` and the gateway speaks it.
+  `WebSocket.connect`, `websocket.connect` or `syn.websocket.connect` and a
+  configured gateway implements UAI's envelope protocol. A normal local server
+  or OpenAI Responses/Realtime socket does not implement that protocol. See
+  [the provider and WebSocket contract](docs/PROVIDER_COMPATIBILITY.md).
 * Retries: 408/409/429/5xx and transport errors, exponential backoff with
   jitter, `Retry-After` honoured, capped attempts, then the next provider in the
   fallback chain.
@@ -78,21 +81,29 @@ it; `ui/*` must not require `agent/*` except through `agent/session`.
   errors are terminal. A long unanswered transport failure cannot trigger a
   smaller-request retry, key/provider fallback or a second dispatch after a socket
   send with an unknown outcome. Explicit API refusals can still teach a reply
-  ceiling in `record.maxTokensCap = { model, tokens }`; a timeout teaches no cap.
+  ceiling in `record.maxTokensCap = { model, tokens, scope }`; a timeout teaches no cap.
+  Learned output caps and request repairs are scoped to endpoint, protocol and
+  model. Older saved lessons adopt the current scope on first use.
   Both provider adapters protect retry callbacks and enforce these terminal states.
 * Both adapters parse context-length refusals separately from output-token limits.
-  A named window of at least 8000 tokens is saved under the lowercased model id in
+  A named window of at least 512 tokens is saved under the lowercased model id in
   `agent.forceContext`, only lowering an existing value. Like `record.maxTokensCap`,
   the learned value persists; the context map is also included in configuration
   export. The loop compacts against the refusing model and retries it once before
   continuing the fallback chain. Cancellation and a history with nothing to fold
   do not trigger repeated requests.
-* Buffered HTTP applies `agent.executorReplyCeiling` (default 8192). Only an actual
-  configured WebSocket path or enabled web relay bypasses this default clamp;
-  socket capability alone and ordinary SSE do not. A failed socket's HTTP fallback
-  is clamped. The Anthropic adapter currently uses HTTP or the web relay, so an
-  unused `wsUrl` does not exempt it. Explicit request token values and token fields
-  in provider/request body overrides bypass the default clamp.
+* Buffered HTTP and socket fallback use the configured output budget and model
+  limits; the old `agent.executorReplyCeiling` setting is ignored. Native transports
+  bound a request to at most 300 seconds and 8 MiB; individual executors and servers
+  may stop sooner. A socket uses the effective `stream` body value and the full
+  provider path/query. Connect/setup failures before `Send` may fall back to HTTP;
+  failures after entering `Send` remain terminal. The Messages adapter uses HTTP
+  or the web relay and does not use `wsUrl`.
+* Base URLs preserve explicit schemes, path prefixes and query strings. Bare local,
+  LAN and private addresses default to HTTP; public hosts default to HTTPS. Local
+  reachability is checked by URL, including custom records. Model-list caches are
+  scoped to connection/auth settings, keep drafts separate and reject stale results
+  and HTTP error documents; manual model ids remain available.
 * Secrets are redacted in the request log; only the last four characters of a
   key are displayed in diagnostic views, and the Providers panel never renders the
   key itself. Full configuration export is an explicit private transfer: it includes
@@ -476,18 +487,31 @@ delegated child is lifted only when that has been asked for in those words. What
 still bounds a child either way: the repeat breaker, each tool's own timeout, the
 provider retry cap, the depth and concurrency ceilings, and Stop.
 
-Each session mirrors the stream into a bounded `session.log` (400 events), and the
-transcript is a pure function of that log — `view.attach` replays it, which is what
-makes a rebuild on a mode or token change lossless. A subset of the kinds is also
-written to `sessions/<id>.json` and replayed on restore: `user`, `assistant:text`,
-`assistant:reasoning`, `tool:call`, `tool:result`, `tool:error`, the five
-`subagent:*` kinds, `request:retry`, `provider:switch`, `compact`, `error`, `abort`.
-The rest are deliberately excluded, and for two different reasons: `status`,
-`request:*`, `tool:progress`, `usage` and `turn:*` are meaningless once the turn
-they describe is over, and `permission:ask` carries the closure that answers it, so
-encoding it would fail the whole write. A call whose result is not in the restored
-log stops spinning and says the result was not kept, rather than inventing an
-outcome or spinning forever.
+`agent/transcript` owns each session's bounded, chronological `session.log`.
+Dialogue/notices have 512 events within 1 MiB; subagent start/report records have
+128 events within 256 KiB; detailed activity has 256 events within 256 KiB.
+Activity cannot spend the dialogue budget. Calls/results and dispatch start/report
+records are evicted as groups, preferring completed work; removing a dispatch
+also removes its dependent activity. Limits still apply to hosts that never finish
+their calls. Fields are bounded, UTF-8-safe primitives; callbacks and result graphs
+are excluded. Pending progress is coalesced separately and released on completion.
+
+Persistence writes the same snapshot plus versioned omission/recovery metadata;
+it does not apply a second FIFO that discards the protected dialogue. Legacy files
+recover missing prose still present in saved model context, preserving repeated
+prompts and avoiding duplicated overlap. Text already lost from both stores cannot
+be reconstructed. Modern intentional retention limits are not undone by recovery.
+
+The transcript subscribes before taking its replay snapshot and renders at most
+12 events or approximately 6 ms per scheduled slice. Durable events arriving during
+replay queue in order; current preview/progress is reconciled afterward. Generations
+cancel work on switch, clear and destruction. Completed replay buffers and expired
+GUI rows are released; retained nested agents survive removal of a dispatch row.
+History notices disclose retention/recovery. Reading position and follow preference
+are session-local, with a measured message anchor when available. **Refresh
+conversation** redraws the view without changing the session or composer draft.
+Calls without a saved outcome stop spinning on idle restore and state that no result
+was kept. Conversation search includes retained dialogue after model compaction.
 
 ## 6a. What is counted, and where
 
@@ -564,32 +588,22 @@ inside it. A transparent full-size button dropped in beside a row's contents doe
 not layer over them -- a `UIListLayout` gives it a slot of its own and pushes them
 past the row's edge, where they are still drawn because nothing clips them.
 
-The window root is a `CanvasGroup`, which brings one rule with it: **it is never drawn
-at anything other than 1:1.** The group renders every child into an offscreen texture
-and then draws that texture, so any scale or fractional offset resamples it and the
-whole interface -- every glyph in it -- goes soft at once, with nothing on screen to
-explain why. Two consequences, both asserted in `test/run.lua`:
-
-* No `UIScale` on the group. The 0.98-to-1 entrance blurred the window for the length
-  of the animation and left it blurry permanently if the tween was interrupted by a
-  hide, a rebuild or a second open. `GroupTransparency` is the entrance instead, which
-  is the one thing a CanvasGroup composites for free.
-* A centred dimension keeps the space around it even. With a 0.5 anchor, an odd
-  difference between the viewport and the window puts the left edge on a half pixel, so
-  `handle.centred` nudges the size by one pixel -- in the layout and in the resize grip.
-  Nobody can see the pixel; everybody can see the blur.
+The window root is a plain `Frame` on every device. Large transcripts do not depend
+on a CanvasGroup's offscreen texture allocation, resolution or fade state. The
+shell has no entrance `UIScale`; hide/show is synchronous. Centered dimensions
+retain whole-pixel parity through `handle.centred`. Maximize changes geometry and
+its icon in place, keeping the transcript, live preview, focus and drafts mounted.
 
 Entrance scales on plain frames (the modal card, the settings dialog, quick chat) are
 allowed -- a `UIScale` there re-lays-out rather than resampling -- but each one snaps to
 exactly 1 on `Completed`, because an interrupted tween otherwise leaves the surface
 laid out at 98% of its own metrics for as long as it is open.
 
-The window shell itself is a `CanvasGroup` only on pointer layouts. On touch devices the
-engine caps CanvasGroup texture resolution, and a window covering most of a phone screen
-is over the cap -- the texture is drawn resampled and every glyph goes soft, while the
-small Frame-based modals beside it stay sharp. On `touch`, `sheet` and `panel` the shell
-is a plain `Frame` with no group fade; it loses a tenth of a second of fade and stays
-legible.
+The transcript canvas uses `UIListLayout.AbsoluteContentSize` plus vertical padding.
+Transient zero measurements during hidden/resizing states do not erase a populated
+canvas. Geometry changes preserve follow intent and restore a measured reading
+anchor instead of forcing the reader to the newest row. Markdown replacements are
+built before old content is released; a failed block falls back to readable text.
 
 Breakpoints: `xs < 520`, `sm < 900`, `md < 1280`, `lg < 1700`, `xl`. Layout modes:
 `sheet` (xs), `panel` (sm, touch-only input, and any portrait orientation), `window` (md+), plus `tv`
@@ -775,8 +789,8 @@ captures remain offline until explicit current-target rebinding. Tool summaries 
 structured data share a roughly 6,000-byte budget with retained detail pages for
 larger operation results.
 
-The Code workspace was introduced in version 1.7.0; these local improvements do not
-change its release version. [NATIVE_CLIENT.md](docs/NATIVE_CLIENT.md) is the current
+The Code workspace was introduced in version 1.7.0; the native reliability, chat
+and provider improvements ship in 1.8.0. [NATIVE_CLIENT.md](docs/NATIVE_CLIENT.md) is the current
 native feature and limitation reference. Native input, touch/gamepad,
 executor forwarding/coexistence and performance need the client scenarios in
 `docs/CODE_WORKSPACE_TESTING.md`. Historical files in `archive/` are references only.

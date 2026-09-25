@@ -361,16 +361,17 @@ return function(env)
 					-- this event is the only record that the call ever happened. At 160
 					-- characters, whitespace-collapsed, the Luau a subagent executed was
 					-- unrecoverable -- and a subagent is exactly where the long-running code
-					-- in this client gets run. The parent's log is bounded at 400 events,
-					-- which is what caps the cost of keeping it.
+					-- in this client gets run. Detailed activity has its own bounded
+					-- transcript budget and cannot evict dialogue or dispatch summaries.
 					arguments = tostring(event.arguments or ""),
-					index = record.calls,
+					index = record.calls - (record.runCallBase or 0),
 				})
 			elseif event.kind == "tool:result" or event.kind == "tool:error" then
 				record.finishedCalls = (record.finishedCalls or 0) + 1
 				announceChange()
 				announce("subagent:tool:done", {
 					callId = event.id,
+					finishedCalls = record.finishedCalls - (record.runFinishedBase or 0),
 					name = event.name,
 					ok = event.kind == "tool:result",
 					ms = event.ms,
@@ -448,9 +449,11 @@ return function(env)
 		record.unlimited = unlimited
 		record.turns = child.maxTurns
 		record.runs = (record.runs or 0) + 1
+		record.runCallBase, record.runFinishedBase = record.calls or 0, record.finishedCalls or 0
 		announceChange()
 
 		announce("subagent:start", {
+			startedAt = record.startedAt,
 			task = util.ellipsis(text, 400),
 			preset = record.preset,
 			turns = unlimited and 0 or child.maxTurns,
@@ -478,7 +481,9 @@ return function(env)
 			record.report = note
 			record.currentTool = nil
 			announceChange()
-			announce("subagent:done", { ms = elapsed, ok = false, text = note })
+			announce("subagent:done", { ms = elapsed, ok = false, text = note,
+				calls = (record.calls or 0) - record.runCallBase,
+				finishedCalls = (record.finishedCalls or 0) - record.runFinishedBase })
 			return nil, note
 		end
 
@@ -501,6 +506,8 @@ return function(env)
 
 		announce("subagent:done", {
 			ms = elapsed,
+			calls = (record.calls or 0) - record.runCallBase,
+			finishedCalls = (record.finishedCalls or 0) - record.runFinishedBase,
 			ok = not aborted,
 			aborted = aborted,
 			messages = stats.messages,

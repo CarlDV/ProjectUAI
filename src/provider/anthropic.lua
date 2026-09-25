@@ -22,14 +22,12 @@ return function(env)
 	local registry = env.require("provider/registry")
 	local openai = env.require("provider/openai")
 	local traits = env.require("provider/traits")
+	local headerMap = env.require("net/headers")
 
 	local M = {}
 
-	-- Same wall as the chat adapter, for the same reason: the default is a day, the
-	-- highest of any clock here, because a request that times out is a turn spent for
-	-- nothing and nothing else can rescue it. The unlimited switch means the same day
-	-- rather than a true infinity -- a request nobody collects is indistinguishable
-	-- from a hung client.
+	-- Requested budget; native HTTP caps its wait at 300 seconds and the executor
+	-- or provider may impose a shorter deadline.
 	local function requestTimeout(request)
 		if request.timeout then return request.timeout end
 		if config.get("agent.requestUnlimited", false) then return 86400 end
@@ -82,31 +80,15 @@ return function(env)
 	}
 
 	function M.endpoint(record)
-		local base = util.trim(record.baseUrl or "")
-		-- A base pasted as the full messages URL must not gain a second /messages,
-		-- and one pasted as an OpenAI endpoint is still usable as a host.
-		base = base:gsub("/messages$", ""):gsub("/chat/completions$", "")
-		return registry.endpoint({ baseUrl = base, query = record.query }, "/messages")
+		return registry.endpoint(record, "/messages")
 	end
 
 	function M.headers(record, explicitKey)
-		local style = record.authStyle or "bearer"
-		local key = util.trim(explicitKey or record.apiKey or "")
-		local headers = {}
-		if key ~= "" and style ~= "none" then
-			if style == "bearer" then
-				-- The Messages API authenticates with x-api-key. `bearer` is this
-				-- client's default for every other provider, so a record carrying it
-				-- means "the usual way" rather than a deliberate choice -- honouring it
-				-- literally here would just produce a 401 nobody could explain.
-				headers["x-api-key"] = key
-			else
-				headers = registry.authHeaders(record, explicitKey)
-			end
-		end
-		headers["anthropic-version"] = VERSION
-		for name, value in pairs(record.headers or {}) do headers[name] = value end
-		return headers
+		-- Native Anthropic presets select x-api-key. Explicit bearer auth is useful
+		-- for compatible Messages gateways and must remain a real choice.
+		local authRecord = record
+		if record.authStyle == nil then authRecord = util.copy(record); authRecord.authStyle = "x-api-key" end
+		return headerMap.merge(registry.authHeaders(authRecord, explicitKey), { ["anthropic-version"] = VERSION }, record.headers)
 	end
 
 	-- Internal messages are OpenAI-shaped. Anthropic wants the system prompt lifted
@@ -365,6 +347,10 @@ return function(env)
 						if block.type == "tool_use" then
 							local slot = slotFor(event.index)
 							slot.id, slot.name = block.id, block.name
+							if type(block.input) == "table" and next(block.input) ~= nil then
+								slot.input = util.encode(block.input)
+								if #slot.input > sse.limits.arguments then error("tool argument limit", 0) end
+							end
 						elseif block.type == "text" and type(block.text) == "string" and block.text ~= "" then
 							content[#content + 1] = block.text
 						elseif block.type == "thinking" then
@@ -392,6 +378,7 @@ return function(env)
 							slot.signature = (slot.signature or "") .. delta.signature
 						elseif delta.type == "input_json_delta" and type(delta.partial_json) == "string" then
 							local slot = slotFor(event.index)
+							if slot.input and delta.partial_json ~= "" then error("mixed object and fragmented tool input", 0) end
 							slot.bytes = slot.bytes + #delta.partial_json
 							if slot.bytes > sse.limits.arguments then error("tool argument limit", 0) end
 							slot.json[#slot.json + 1] = delta.partial_json
@@ -435,7 +422,7 @@ return function(env)
 		for _, key in ipairs(order) do
 			local slot = slots[key]
 			if slot.name then
-				local arguments = table.concat(slot.json)
+				local arguments = slot.input or table.concat(slot.json)
 				if util.trim(arguments) == "" then arguments = "{}" end
 				calls[#calls + 1] = {
 					id = slot.id or ("toolu_" .. tostring(slot.index)),
@@ -491,6 +478,8 @@ return function(env)
 	end
 
 	function M.complete(record, request)
+		local problem = registry.protocolProblem(record)
+		if problem then return nil, problem end
 		request = util.copy(request or {})
 		if request.onRetry then
 			local callback = request.onRetry
@@ -503,15 +492,15 @@ return function(env)
 		if config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web" then wantStream = true end
 
 		local body = M.buildBody(record, util.merge(request, { stream = wantStream }))
+		local requestScope = registry.compatibilityKey(record)
+		local url = M.endpoint(record)
 		local pool = registry.keysOf(record)
 		local currentKey = nil
 
 		local function rebuildHeaders()
 			if #pool > 1 then currentKey = registry.nextKey(record) end
-			local headers = M.headers(record, currentKey)
-			for key, value in pairs(registry.opencodeHeaders(record, request)) do headers[key] = value end
-			headers["Accept"] = wantStream and "text/event-stream" or "application/json"
-			return headers
+			return headerMap.merge(M.headers(record, currentKey), registry.opencodeHeaders(record, request),
+				{ Accept = body.stream and "text/event-stream" or "application/json" })
 		end
 
 		local headers = rebuildHeaders()
@@ -524,11 +513,12 @@ return function(env)
 		local skip429 = (#pool > 1) and { [429] = true } or nil
 
 		local function fire(payload)
+			if registry.compatibilityKey(record) ~= requestScope then return nil, "aborted" end
 			local requestStarted = clock.ms()
 			local res, err = http.send({
 				relay = config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web",
 				sessionId = request.sessionId,
-				url = M.endpoint(record),
+				url = url,
 				method = "POST",
 				headers = headers,
 				body = util.encode(payload),
@@ -578,13 +568,13 @@ return function(env)
 		-- a second refusal is a different problem and belongs in the transcript.
 		if res and res.status == 400 and tonumber(body.max_tokens) then
 			local message = M.errorText(res, nil)
-			if not openai.contextWindowFromMessage(message) and tostring(message):lower():find("max_tokens", 1, true) then
+			if not openai.isContextError(message) and tostring(message):lower():find("max_tokens", 1, true) then
 				local allowed = openai.ceilingFromMessage(message, body.max_tokens)
 				if allowed and allowed < body.max_tokens then
 					local note = string.format("lowered max_tokens from %d to %d", body.max_tokens, allowed)
 					log.info("provider", record.label .. ": " .. note .. ", retrying")
 					body.max_tokens = allowed
-					openai.rememberMaxTokens(record, allowed)
+					if registry.compatibilityKey(record) == requestScope then openai.rememberMaxTokens(record, allowed) end
 					if request.onRetry then
 						request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = 400 })
 					end
@@ -611,7 +601,7 @@ return function(env)
 		end
 
 		if not res or not res.ok then
-			openai.learnContextWindow(record, res)
+			if registry.compatibilityKey(record) == requestScope then openai.learnContextWindow(record, res) end
 			local message = M.errorText(res, err)
 			registry.markFail(record, message)
 			return nil, message, res
@@ -656,7 +646,7 @@ return function(env)
 			return nil, message, res
 		end
 
-		if recoveredTokens then
+		if recoveredTokens and registry.compatibilityKey(record) == requestScope then
 			openai.rememberMaxTokens(record, recoveredTokens)
 			log.info("provider", record.label .. ": smaller request succeeded; remembered max_tokens " .. tostring(recoveredTokens))
 		end

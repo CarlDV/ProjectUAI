@@ -1,8 +1,13 @@
 # Project UAI
 
 A universal AI agent that runs inside a Roblox client. It works in any game,
-against any OpenAI-compatible inference endpoint, and it identifies itself on the
-wire as the Claude Code CLI.
+with Chat Completions and Anthropic Messages endpoints, including compatible
+local servers and relays.
+
+**Version 1.8.0 — September 25, 2026.** Busy chats retain dialogue through resizing
+and live worker activity. Provider setup, local-server compatibility and gateway
+streaming are more reliable. See the [release notes](CHANGELOG.md) and
+[provider and WebSocket guide](docs/PROVIDER_COMPATIBILITY.md).
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/CarlDV/ProjectUAI/main/dist/uai.lua"))()
@@ -400,6 +405,13 @@ months of daily activity as a grid. Every figure on it is counted from what this
 client observed and kept -- there is no sample data anywhere in the interface, and
 a number with nothing behind it is rendered as a zero and says why.
 
+Long conversations keep dialogue separate from tool activity, so a busy group of
+workers cannot push out your questions and replies. History limits are shown when
+older detail is removed. Resizing and maximizing preserve the live view; layout
+rebuilds remember where you were reading. **Message options → Refresh conversation**
+redraws messages and current activity without restarting the script or losing the
+draft. Older saves recover missing text when it still exists in saved model context.
+
 **Providers are a list and a detail pane**, not a card grid and a modal form. The
 detail names the endpoint a request will actually go to, the model-list route, the
 wire protocol, whether a socket is configured (and therefore whether a long reply can
@@ -656,8 +668,22 @@ No Roblox HTTP API can read a response body incrementally, so `stream: true` doe
 not deliver tokens as they arrive -- the whole SSE body lands at once and is
 replayed through the parser. It is still requested, because the streamed shape is
 where providers put reasoning text and per-request usage. `net/ws.lua` does real
-token streaming for a gateway that speaks a small WebSocket envelope, when the
-executor exposes `WebSocket.connect`.
+token streaming for a gateway that implements UAI's `{path, headers, body}`
+envelope, when the executor exposes `WebSocket.connect`, `websocket.connect` or
+`syn.websocket.connect`. It opens one socket per completion. This is a custom
+gateway contract, distinct from OpenAI Responses/Realtime and ordinary local
+HTTP servers; replacing `http://` with `ws://` does not enable it. Leave the socket
+URL empty for normal provider connections. The gateway receives the provider's
+authentication headers. Connect/setup failures before sending can fall back to
+HTTP; once sending begins, an uncertain outcome cannot trigger a second request.
+
+See [Provider compatibility and WebSockets](docs/PROVIDER_COMPATIBILITY.md) for
+the protocol contract, local-server setup, provider matrix and offline coverage.
+Ollama, LM Studio, vLLM, llama.cpp and SGLang presets use their Chat Completions
+APIs. Authentication defaults to none for these local servers; select Bearer when
+server authentication is enabled. Tools require a capable model and server
+template/parser. Compatibility fixtures require no models, keys or paid inference.
+
 Actual socket frames update the transcript immediately, with coalesced live
 previews and one final message. Buffered replies render in full when received;
 there is no simulated typing delay. The assistant is instructed to give brief

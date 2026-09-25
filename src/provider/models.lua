@@ -16,23 +16,43 @@ return function(env)
 	local http = env.require("net/http")
 	local registry = env.require("provider/registry")
 	local signal = env.require("runtime/signal")
+	local urls = env.require("net/url")
 
 	local CACHE_MS = 10 * 60 * 1000
 
 	local M = {
-		cache = {},
+		cache = setmetatable({}, { __mode = "k" }),
 		changed = signal.new("models"),
 	}
 
-	function M.cached(providerId)
-		local entry = M.cache[providerId]
+	local pending = setmetatable({}, { __mode = "k" })
+	local function keyFor(record)
+		return util.trim(record.id) ~= "" and record.id or record
+	end
+	local function scopeFor(record)
+		return util.deepCopy({ baseUrl = registry.normaliseBaseUrl(record.baseUrl), api = record.api or "openai",
+			apiKey = record.apiKey, authStyle = record.authStyle, headers = record.headers or {}, query = record.query or {},
+			claudeUa = record.claudeUa })
+	end
+	local function same(a, b)
+		if type(a) ~= type(b) then return false end
+		if type(a) ~= "table" then return a == b end
+		for key, value in pairs(a) do if not same(value, b[key]) then return false end end
+		for key in pairs(b) do if a[key] == nil then return false end end
+		return true
+	end
+
+	function M.cached(recordOrId)
+		local record = type(recordOrId) == "table" and recordOrId or registry.get(recordOrId)
+		local entry = M.cache[record and keyFor(record) or recordOrId]
 		if not entry then return nil end
 		if clock.since(entry.at) > CACHE_MS then return nil end
+		if record and not same(entry.scope, scopeFor(record)) then return nil end
 		return entry.models
 	end
 
 	function M.discovered(record)
-		return M.cached(record.id) or {}
+		return M.cached(record) or {}
 	end
 
 	-- A catalog label is not permission to use the model. Zen documents Big
@@ -94,7 +114,7 @@ return function(env)
 				out[#out + 1] = id
 			end
 		end
-		for _, id in ipairs(M.cached(record.id) or {}) do
+		for _, id in ipairs(M.cached(record) or {}) do
 			if not seen[id] then
 				seen[id] = true
 				out[#out + 1] = id
@@ -108,30 +128,45 @@ return function(env)
 	-- a normal outcome, not an error: the user types the id instead.
 	function M.discover(record, opts)
 		opts = opts or {}
+		local problem = registry.protocolProblem(record)
+		if problem then return {}, problem end
 		if not opts.force then
-			local hit = M.cached(record.id)
+			local hit = M.cached(record)
 			if hit then return hit, "cached" end
 		end
 
-		local url = registry.endpoint(record, "/models")
-		local headers = env.require("provider/chat").headers(record)
+		local key, token, scope = keyFor(record), {}, scopeFor(record)
+		pending[key] = token
+		local snapshot = util.deepCopy(record)
+		local url = registry.endpoint(snapshot, "/models")
+		local headers = env.require("provider/chat").headers(snapshot)
 
 		local decoded, err, res = http.json({
 			url = url,
 			method = "GET",
 			headers = headers,
-			identity = registry.identityFor(record),
-			identityRequired = registry.requiresClaude(record),
+			identity = registry.identityFor(snapshot),
+			identityRequired = registry.requiresClaude(snapshot),
 			attempts = 2,
-			tag = "models:" .. record.id,
+			timeout = opts.timeout,
+			aborted = opts.aborted,
+			tag = "models:" .. tostring(record.id or "draft"),
 		})
 
-		if not decoded then
-			local note = "could not read " .. url
+		if pending[key] ~= token or not same(scope, scopeFor(record)) then
+			if pending[key] == token then pending[key] = nil end
+			return {}, "model discovery was superseded or the connection changed -- fetch again"
+		end
+		pending[key] = nil
+		if not res or not res.ok or type(decoded) ~= "table" or decoded.error ~= nil then
+			local note = "could not read the model list"
 			if res and res.status == 404 then note = "this endpoint has no /models route -- add a model by hand" end
 			if res and res.status == 401 then note = "the API key was rejected" end
 			if res and res.status == 403 then note = "the key is not allowed to list models" end
-			log.info("models", record.label .. ": " .. note, err)
+			if res and res.status ~= 401 and res.status ~= 403 and res.status ~= 404 then
+				note = note .. ": " .. env.require("provider/chat").errorText(snapshot, res, err)
+			end
+			log.info("models", tostring(record.label) .. ": " .. note, err)
 			return {}, note
 		end
 
@@ -147,28 +182,31 @@ return function(env)
 				elseif type(row) == "table" then
 					id = row.id or row.name or row.model
 				end
-				if type(id) == "string" and util.trim(id) ~= "" and not seen[id] then
+				id = type(id) == "string" and util.trim(id) or ""
+				if id ~= "" and not seen[id] then
 					seen[id] = true
-					found[#found + 1] = util.trim(id)
+					found[#found + 1] = id
 				end
 			end
 		end
 
 		table.sort(found)
-		M.cache[record.id] = { at = clock.ms(), models = found }
+		M.cache[key] = { at = clock.ms(), models = found, scope = scope }
 		M.changed:fire(record.id, found)
 
 		if #found == 0 then
 			return {}, "the endpoint returned an empty list -- add a model by hand"
 		end
-		return found, string.format("%d model%s from %s", #found, #found == 1 and "" or "s", url)
+		return found, string.format("%d model%s from %s", #found, #found == 1 and "" or "s", urls.display(url))
 	end
 
 	function M.invalidate(providerId)
 		if providerId then
-			M.cache[providerId] = nil
+			local key = type(providerId) == "table" and keyFor(providerId) or providerId
+			M.cache[key], pending[key] = nil, nil
 		else
-			M.cache = {}
+			M.cache = setmetatable({}, { __mode = "k" })
+			pending = setmetatable({}, { __mode = "k" })
 		end
 	end
 

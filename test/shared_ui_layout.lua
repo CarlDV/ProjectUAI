@@ -298,7 +298,7 @@ local windowModule = env.require("ui/window")
 viewport(1000, 700)
 local window = windowModule.new(root)
 window.show(); window.hide(); window.show(); h.settle(1)
-check("rapid hide-show keeps the window opaque and visible", window.root.Visible and window.root.GroupTransparency == 0)
+check("rapid hide-show keeps the window opaque and visible", window.root.Visible and window.root.ClassName == "Frame" and window.root.BackgroundTransparency == 0)
 local inputSignal = require("instance").newSignal
 local finger = { UserInputType = E.UserInputType.Touch, Position = h.dt.Vector3.new(100, 100, 0), Changed = inputSignal("finger") }
 window.header.InputBegan:Fire(finger)

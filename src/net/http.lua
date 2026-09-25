@@ -11,6 +11,8 @@ return function(env)
 	local log = env.require("runtime/log")
 	local ua = env.require("net/ua")
 	local signal = env.require("runtime/signal")
+	local urls = env.require("net/url")
+	local headerMap = env.require("net/headers")
 
 	local HISTORY_LIMIT = 60
 	local MAX_BODY, MAX_WORKERS = 8 * 1024 * 1024, 8
@@ -152,13 +154,10 @@ return function(env)
 	-- deliberately override one value without losing the rest of the set.
 	local function buildHeaders(spec, attempt)
 		local url = tostring(spec.url or "")
-		local isOpenRouter = url:find("openrouter.ai", 1, true) ~= nil
+		local isOpenRouter = urls.host(url) == "openrouter.ai"
 		local identity = isOpenRouter and "openrouter" or (spec.identity or "claude")
 
-		local headers = identityHeaders(identity, attempt, spec.timeout)
-		for key, value in pairs(spec.headers or {}) do
-			if value ~= nil then headers[key] = tostring(value) end
-		end
+		local headers = headerMap.merge(identityHeaders(identity, attempt, spec.timeout), spec.headers)
 		-- A gateway requiring this identity must retain it even when the global
 		-- preference is off or a saved custom header would otherwise replace it.
 		if spec.identityRequired and identity == "claude" then
@@ -173,34 +172,29 @@ return function(env)
 
 		if isOpenRouter then
 			-- Ensure OpenRouter attribution headers are always present for rankings and app stats
-			if not headers["HTTP-Referer"] and not headers["http-referer"] then
+			if not headerMap.get(headers, "HTTP-Referer") then
 				headers["HTTP-Referer"] = "https://carldv.github.io/ProjectUAI/"
 			end
-			if not headers["X-Title"] and not headers["x-title"] then
+			if not headerMap.get(headers, "X-Title") then
 				headers["X-Title"] = "Project UAI"
 			end
-			if not headers["X-OpenRouter-Title"] and not headers["x-openrouter-title"] then
+			if not headerMap.get(headers, "X-OpenRouter-Title") then
 				headers["X-OpenRouter-Title"] = "Project UAI"
 			end
-			if not headers["X-OpenRouter-Categories"] and not headers["x-openrouter-categories"] then
+			if not headerMap.get(headers, "X-OpenRouter-Categories") then
 				headers["X-OpenRouter-Categories"] = "game,cli-agent"
 			end
-			if not headers["User-Agent"] and not headers["user-agent"] then
+			if not headerMap.get(headers, "User-Agent") then
 				headers["User-Agent"] = "ProjectUAI/1.0.0"
 			end
 			-- Suppress Claude Code / Stainless headers for OpenRouter
-			headers["x-app"] = nil
-			headers["X-Stainless-Lang"] = nil
-			headers["X-Stainless-Package-Version"] = nil
-			headers["X-Stainless-OS"] = nil
-			headers["X-Stainless-Arch"] = nil
-			headers["X-Stainless-Runtime"] = nil
-			headers["X-Stainless-Runtime-Version"] = nil
-			headers["X-Stainless-Retry-Count"] = nil
-			headers["X-Stainless-Timeout"] = nil
+			for key in pairs(headers) do
+				local name = key:lower()
+				if name == "x-app" or name:match("^x%-stainless%-") then headers[key] = nil end
+			end
 		end
 
-		if spec.body and not headers["Content-Type"] and not headers["content-type"] then
+		if spec.body and not headerMap.get(headers, "Content-Type") then
 			headers["Content-Type"] = "application/json"
 		end
 		return headers
@@ -306,8 +300,8 @@ return function(env)
 			status = res and res.status or 0,
 			bytes = res and #tostring(res.body or "") or 0,
 			via = res and res.via or (caps.fn.request and "executor" or "roblox"),
-			identity = (url:find("openrouter.ai", 1, true) and "openrouter") or spec.identity or "claude",
-			uaSent = ((spec.identity ~= "none") or url:find("openrouter.ai", 1, true)) and caps.uaSupported or false,
+			identity = (urls.host(url) == "openrouter.ai" and "openrouter") or spec.identity or "claude",
+			uaSent = ((spec.identity ~= "none") or urls.host(url) == "openrouter.ai") and caps.uaSupported or false,
 			error = err,
 			attempt = attempt,
 			-- A refusal with an empty body cannot be diagnosed from a status code

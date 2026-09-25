@@ -19,12 +19,27 @@ return function(env)
 	local CATEGORY_ORDER = { "added", "improved", "fixed" }
 	local ENTRIES = {
 		{
-			version = "1.7.0",
-			revision = "2026-09-25-native",
-			date = "Updated September 25, 2026",
-			title = "Code workspace and native client improvements",
-			highlights = "Larger replies, immediate messages, clearer context totals, a centered Add Provider button, and fixes across Code, Explorer, Remotes and subagents.",
+			version = "1.8.0",
+			revision = "2026-09-25",
+			date = "September 25, 2026",
+			title = "Chat stability, provider compatibility and native improvements",
+			highlights = "Chat history survives busy workers and resizing. Local-server connections, model discovery and gateway streaming are more reliable, with clearer protocol and authentication settings.",
 			sections = {
+				{ category = "improved", label = "Providers and gateway streaming", items = {
+					"Local URLs use HTTP by default and keep their path prefixes and query parameters. Model discovery reports auth failures and cannot reuse another connection's stale model list.",
+					"vLLM no longer requires a key by default. Added llama.cpp and SGLang presets, corrected Ollama tool options, preserved object-shaped tool arguments and recognized small local context windows.",
+					"Explicit auth choices work for compatible Messages gateways. Learned request repairs and output limits follow the endpoint and model that produced them.",
+					"Connection edits discard stale model lists and cancel old fetches while preserving manual model ids. Switching presets applies their identity defaults and clears the previous gateway URL.",
+					"Gateway sockets preserve provider paths and headers, accept split or combined SSE events and clean up late connections. HTTP fallback is allowed only before sending, so an uncertain socket outcome cannot duplicate the request.",
+					"Socket settings explain UAI's custom gateway protocol. Normal local servers use HTTP; the socket does not implement OpenAI Responses or Realtime and does not remove transport limits.",
+				} },
+				{ category = "fixed", label = "Chat history and resizing", items = {
+					"User messages and assistant replies have their own history budget. Tool activity cannot push them out; worker summaries and call/result pairs remain together.",
+					"Maximize keeps the live interface in place. The window draws directly on every device, and refresh/layout changes preserve the reading position.",
+					"Long conversations restore in short batches while new events keep arriving. Switching, clearing or closing a view cancels its unfinished replay and releases old rows and timers.",
+					"Message options > Refresh conversation redraws messages and live activity without restarting the script. A Markdown failure falls back to readable text.",
+					"Older saves recover conversation text still present in saved context. History limits are shown, worker timings and totals survive replay, and search finds dialogue after context compaction.",
+				} },
 				{ category = "improved", label = "Replies and progress", items = {
 					"Removed the 8,192-token executor reply ceiling, including HTTP fallback. Your configured output budget and the model's own limits still apply.",
 					"Buffered replies appear immediately instead of using simulated typing. Compatible streams show received text and reasoning as they arrive; buffered HTTP cannot show tokens before the response arrives.",
@@ -54,6 +69,14 @@ return function(env)
 					"Stopped subagents can resume. Queued follow-ups remain cancellable, duplicate dispatch is rejected, configured concurrency is honored, and finished workers clear their Stopping label.",
 					"Unlimited subagents no longer inherit a disabled execution budget while waiting. Timed-out requests and remote replays are not automatically sent again when their outcome is unknown.",
 				} },
+			},
+		},
+		{
+			version = "1.7.0",
+			date = "September 24, 2026",
+			title = "Code workspace",
+			highlights = "Shared Luau documents, a native editor, workspace files, Explorer, Remotes, and recorded changes with guarded review and Undo.",
+			sections = {
 				{ category = "added", label = "Workspace", items = {
 					"Shared Luau documents, native multiline input, syntax colors, line numbers, Find, Go to line, indentation, and Run/Stop with retained output.",
 					"Script/action library, typed action inputs, source versions, source Undo/Redo, guarded proposals, and wide or compact source comparisons.",

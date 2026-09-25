@@ -1,7 +1,7 @@
 # Native client features and limits
 
-Current source of truth for the local native improvements to 1.7.0, September 25,
-2026. These changes are local and unreleased. Internal APIs are described in
+Current source of truth for native release **1.8.0**, September 25, 2026.
+Internal APIs are described in
 [SPEC.md](../SPEC.md); verification and native-device scenarios are in
 [CODE_WORKSPACE_TESTING.md](CODE_WORKSPACE_TESTING.md).
 
@@ -81,6 +81,15 @@ invalidate it. A retained run snapshot can dispatch only once, and read-only
 protection is rechecked at dispatch.
 
 ## Conversation context
+
+Provider connections implement Chat Completions and Anthropic Messages. The
+[provider contract](PROVIDER_COMPATIBILITY.md) documents endpoint/auth handling,
+the local-server matrix and offline protocol fixtures. Ordinary local servers use
+HTTP. Native WebSockets require a separate gateway implementing UAI's envelope,
+receive the same auth/identity headers as HTTP, and open once per completion.
+Their full provider path/query is preserved; only failures before `Send` can fall
+back to HTTP. Messages does not use this socket protocol. Socket and HTTP limits
+remain in effect regardless of the output-token setting.
 
 Requests use the configured output budget and provider/model limits. The old
 8,192-token executor ceiling is removed from both adapters and native HTTP
@@ -173,7 +182,8 @@ and fresh replay review.
 | Stream frame / chunks / tool calls / arguments | 1 MiB / 10,000 / 64 / 256,000 bytes per call |
 | Restored conversations / idle persisted retention target / running workers | 64 / 64 / 8 |
 | Subagent running workers / queue ceiling | Configurable 1–12 / 45 seconds |
-| Durable transcript / text field | 400 events within 1 MiB / 24,000 bytes |
+| Transcript dialogue / worker summaries / detailed activity | 512 within 1 MiB / 128 within 256 KiB / 256 within 256 KiB |
+| Transcript field target / replay slice | 24,000 bytes / 12 events or approximately 6 ms |
 | Live text/reasoning preview / refresh | 64 KiB each / 100 ms, first chunk immediate |
 
 These bound application work and retention, not engine allocations. GetChildren,
@@ -193,7 +203,19 @@ It does not expose an archive browser for those older files.
 Disposal continues after individual errors, disconnects listeners and invalidates
 late callbacks. Signals bound recursive dispatch and release cleared callbacks.
 Sessions bound durable logs and resident workers. Turn boundaries are retained;
-progress/status events cannot evict conversation content. Old/removed-session tool callbacks cannot
+progress/status and detailed tool events cannot spend the dialogue budget. Saved
+transcripts use the same retention policy; call/result pairs and worker summaries
+stay together. Limits/recovery are disclosed. Legacy files can recover dialogue
+still in saved context, but cannot recover text absent from both stores.
+
+Live transcript rows and nested code rows are released with expired activity.
+Replay subscribes before rendering, queues new events, and cancels on switch,
+clear and destruction. Maximize keeps the existing view mounted; all devices use a
+plain window Frame. **Message options → Refresh conversation** redraws a busy chat
+without changing its work or draft. Reading position and follow preference survive
+refresh and layout rebuilds. Native texture/layout behavior still needs client testing.
+
+Old/removed-session tool callbacks cannot
 publish. Idle Stop invalidates old contexts while allowing fresh manual work;
 clearing/removing a conversation cancels only its own child agents and clearing
 starts a fresh context. Subagent follow-ups clear old stop state, register as queued

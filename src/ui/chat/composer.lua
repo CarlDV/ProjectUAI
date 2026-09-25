@@ -666,6 +666,9 @@ return function(env)
 					options[#options + 1] = { label = "Usage and status", detail = statusLabel.Text, value = "status" }
 				end
 				local convo = sessions.current()
+				if props.onRefresh then
+					options[#options + 1] = { label = "Refresh conversation", detail = "Redraw messages and live activity", value = "refresh", icon = "document" }
+				end
 				if convo and #(convo.ctx.messages or {}) > 0 then
 					local rec = providers.active()
 					local win = math.max(convo.ctx.limitFor(rec and rec.model), 1)
@@ -707,6 +710,7 @@ return function(env)
 					elseif value == "context_inspect" then env.require("ui/chat/context").open(sessions.current())
 					elseif value == "expand" then composer.setExpanded(not composer.expanded)
 					elseif value == "status" then overlay.toast(statusLabel.Text, "info", 5)
+					elseif value == "refresh" and props.onRefresh then props.onRefresh()
 					elseif value == "compact" then
 						local convo = sessions.current()
 						local ok, err = convo.compact(function(done)

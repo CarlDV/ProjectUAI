@@ -104,6 +104,7 @@ local providers = { changed = signal.new("providers"),
 	count = function() return #records end, cooling = function() return false end,
 	keysOf = function() return {} end,
 	requiresClaude = function() return false end,
+	needsExecutor = function() return false end,
 	endpoint = function(record, suffix) return record.baseUrl .. suffix end,
 	normaliseBaseUrl = function(url) return url end,
 	validate = function() return true, {} end }

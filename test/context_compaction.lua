@@ -143,7 +143,7 @@ scenario("context refusals name the window rather than the requested tokens", fu
 		{ "Maximum context window is 1,048,576 tokens", 1048576 },
 		{ "Too many tokens: at most 32000 tokens are allowed", 32000 },
 		{ "max_tokens is too large: 200000" },
-		{ "This model's maximum context length is 4000 tokens" },
+		{ "This model's maximum context length is 4000 tokens", 4000 },
 		{ "context_length_exceeded: requested 130000 tokens with max_tokens 16000" },
 		{ "context_length_exceeded: max_tokens 16000 is the maximum output budget" },
 	}
@@ -156,7 +156,7 @@ scenario("context refusals name the window rather than the requested tokens", fu
 	check("learning lowers a manual claim using the lowercase id", config.get("agent.forceContext").relayed == 128000)
 	openai.rememberContextWindow({ model = "Relayed" }, 200000)
 	check("a refusal cannot raise a known limit", config.get("agent.forceContext").relayed == 128000)
-	for _, invalid in ipairs({ -1, 0, 7999, math.huge, 0 / 0, "not a window" }) do
+	for _, invalid in ipairs({ -1, 0, 511, math.huge, 0 / 0, "not a window" }) do
 		openai.rememberContextWindow({ model = "Relayed" }, invalid)
 	end
 	check("invalid windows are ignored", config.get("agent.forceContext").relayed == 128000)

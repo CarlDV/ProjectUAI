@@ -75,18 +75,22 @@ return function(env)
 	local function factsFor(record)
 		local health = record.health or {}
 		local key, keyTone = maskedKey(record)
+		local streaming = record.stream ~= false and config.get("agent.stream", true)
+		if record.params and record.params.stream ~= nil then streaming = record.params.stream == true end
+		local transport = streaming and "Buffered SSE over HTTP" or "JSON over HTTP"
+		if chat.styleOf(record) == "anthropic" and util.trim(record.wsUrl) ~= "" then
+			transport = transport .. " (socket unused for Messages)"
+		elseif streaming and util.trim(record.wsUrl) ~= "" then
+			transport = caps.ws and "UAI gateway socket, with HTTP fallback before send" or "Buffered SSE over HTTP (socket unavailable)"
+		end
+		if config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web" then transport = "Web relay" end
 		local out = {
 			{ key = "Endpoint", value = chat.endpointOf(record) },
 			{ key = "Model list", value = registry.endpoint(record, "/models") },
 			{ key = "Protocol", value = labelOf(chat.STYLES, chat.styleOf(record)) },
 			{ key = "Auth", value = labelOf(AUTH_OPTIONS, record.authStyle or "bearer")
 				.. "  \194\183  " .. key, tone = keyTone },
-			-- The one fact that decides whether a long reply can arrive at all. No Roblox
-			-- HTTP transport reads a body incrementally and the host abandons a request
-			-- after about a minute, so without a socket a large completion cannot land.
-			{ key = "Streaming", value = util.trim(record.wsUrl or "") ~= ""
-				and "socket, no length ceiling"
-				or "HTTP only, replies capped near a minute" },
+			{ key = "Streaming", value = transport },
 		}
 		if (health.ok or 0) + (health.fail or 0) > 0 then
 			out[#out + 1] = {
@@ -109,7 +113,7 @@ return function(env)
 				tone = "bad",
 			}
 		end
-		if record.requires == "executor" then
+		if registry.needsExecutor(record) then
 			local have = caps.http == "executor"
 			out[#out + 1] = {
 				key = "Requires",
@@ -159,10 +163,10 @@ return function(env)
 		-- live. Declared here because refreshDocs -- which writes into it -- is
 		-- defined before the rows are built but only called once they have been.
 		local rowAfterKey = 0
-		-- Assigned with the model row below, called from applyPreset above it: a preset
-		-- change moves the endpoint, so anything a previous fetch turned up belongs to a
-		-- different server and must not still be on offer.
+		-- Any connection edit invalidates fetched choices and in-flight discovery,
+		-- including changing away and back before the old response arrives.
 		local forgetFetchedModels
+		local modelRevision = 0
 
 		local function showProblems()
 			local ok, problems = registry.validate(editing)
@@ -253,7 +257,9 @@ return function(env)
 					})
 				end
 				docsNoteRow = R.paragraph(form,
-					"Keys for this provider are issued at the address above.",
+					presetRecord.authStyle == "none"
+						and "Server setup and API documentation are at the address above."
+						or "Keys for this provider are issued at the address above.",
 					{ layoutOrder = rowAfterKey + 3 })
 			end
 			if presetRecord.note then
@@ -269,10 +275,14 @@ return function(env)
 				editing.label = preset.label
 			end
 			if util.trim(editing.label) == "" then editing.label = preset.label end
+			-- A gateway routes to its own upstream. Do not retain another preset's
+			-- gateway when changing servers, but preserve it when reselecting this one.
+			if editing.preset ~= preset.id then editing.wsUrl = "" end
 			editing.preset = preset.id
 			editing.baseUrl = preset.baseUrl or ""
 			editing.authStyle = preset.authStyle or "bearer"
 			editing.api = preset.api or "openai"
+			editing.claudeUa = preset.claudeUa ~= false
 			editing.headers = util.deepCopy(preset.headers or {})
 			editing.params = util.deepCopy(preset.params or {})
 			editing.query = util.deepCopy(preset.query or {})
@@ -345,7 +355,9 @@ return function(env)
 				text = editing.baseUrl,
 				placeholder = "https://api.example.com/v1",
 				onChange = function(text)
+					local changed = editing.baseUrl ~= text
 					editing.baseUrl = text
+					if changed and forgetFetchedModels then forgetFetchedModels() end
 					-- What will actually be stored, before it is stored.
 					--
 					-- registry.save normalises the URL *and then* validates, so a rejected
@@ -371,14 +383,19 @@ return function(env)
 			return urlField
 		end)
 
-		row("Protocol", "Chat completions is the universal one. Anthropic's own Messages API keeps "
-			.. "reasoning and tool calls in their real shape instead of translating them twice.",
+		row("Protocol", "Choose the API exposed by the server. Most local servers offer Chat completions; "
+			.. "Anthropic and compatible gateways may offer Messages. Other native APIs need an adapter.",
 			function(column)
 				protocolControl = C.segmented(column, {
 					name = "Protocol",
 					options = chat.STYLES,
 					value = chat.styleOf(editing),
-					onChange = function(value) editing.api = value end,
+					onChange = function(value)
+						if editing.api == value then return end
+						editing.api = value
+						if forgetFetchedModels then forgetFetchedModels() end
+						showProblems()
+					end,
 				})
 				return protocolControl
 			end)
@@ -389,7 +406,9 @@ return function(env)
 				options = AUTH_OPTIONS,
 				value = editing.authStyle,
 				onChange = function(value)
+					local changed = editing.authStyle ~= value
 					editing.authStyle = value
+					if changed and forgetFetchedModels then forgetFetchedModels() end
 					showProblems()
 				end,
 			})
@@ -401,8 +420,8 @@ return function(env)
 		-- A masked field would need a new primitive; a prompt needs none, and it has the
 		-- better property that the secret is on screen only while it is being typed.
 		local keyLabel
-		row("API key", "Kept on this device, sent only to the endpoint above, and redacted in "
-			.. "the request log.", function(column)
+		row("API key", "Saved on this device. Sent to this provider and any configured gateway or relay; "
+			.. "key values are masked in the request log.", function(column)
 			local line = P.row(column, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.sm })
 			local shown, tone = maskedKey(editing)
 			keyLabel = P.text(line, {
@@ -434,7 +453,10 @@ return function(env)
 							-- Kept verbatim: the pool parser splits on newlines and
 							-- commas, so what was pasted is what is stored, and a
 							-- single key with a stray trailing newline is still one.
-							editing.apiKey = tostring(text or "")
+							local key = tostring(text or "")
+							local changed = editing.apiKey ~= key
+							editing.apiKey = key
+							if changed and forgetFetchedModels then forgetFetchedModels() end
 							local value, warn = maskedKey(editing)
 							keyLabel.Text = value
 							keyLabel.TextColor3 = warn and theme.color.warn or theme.color.textSecondary
@@ -480,9 +502,8 @@ return function(env)
 		local fetched = {}
 
 		-- What the picker offers: the ids already on the record, plus whatever this
-		-- editor's own fetch turned up. The session-wide discovery cache is deliberately
-		-- not read here -- it is keyed by provider id and a record being added has none,
-		-- so a second "Add a provider" would be offered the last endpoint's models.
+		-- editor's own fetch turned up. Discovery has a connection-scoped cache, but
+		-- choices here belong to this editor and expire as its connection is edited.
 		local function knownModels()
 			local out, seen = {}, {}
 			for _, id in ipairs(editing.models or {}) do
@@ -528,17 +549,15 @@ return function(env)
 				setModelNote("Add the base URL first -- there is nothing to ask.", true)
 				return
 			end
+			modelRevision = modelRevision + 1
+			local revision = modelRevision
 			handle.setEnabled(false)
 			setModelNote("Asking " .. registry.endpoint(target, "/models") .. "...", false)
 			task.spawn(function()
-				local found, note = models.discover(target, { force = true })
-				if modal.closed or not handle.instance.Parent then return end
+				local found, note = models.discover(target, { force = true,
+					aborted = function() return modal.closed or revision ~= modelRevision end })
+				if modal.closed or not handle.instance.Parent or revision ~= modelRevision then return end
 				handle.setEnabled(true)
-				if target.baseUrl ~= registry.normaliseBaseUrl(editing.baseUrl)
-					or target.preset ~= editing.preset or target.apiKey ~= editing.apiKey then
-					setModelNote(DEFAULT_MODEL_NOTE, false)
-					return
-				end
 				fetched = found
 				setModelNote(note, #found == 0)
 				-- Straight back into the list. Picking one is the reason to fetch, and a
@@ -566,6 +585,7 @@ return function(env)
 		end
 
 		openModelMenu = function(handle)
+			local revision = modelRevision
 			local options = {}
 			local own = {}
 			for _, id in ipairs(editing.models or {}) do own[id] = true end
@@ -594,6 +614,7 @@ return function(env)
 				width = theme.size.menuWide,
 				options = options,
 				onSelect = function(value)
+					if revision ~= modelRevision then return end
 					if value == "fetch" then
 						fetchModels(handle)
 					elseif value == "add" then
@@ -633,7 +654,9 @@ return function(env)
 		end)
 
 		forgetFetchedModels = function()
+			modelRevision = modelRevision + 1
 			fetched = {}
+			if modelButton then modelButton.setEnabled(true) end
 			setModelNote(DEFAULT_MODEL_NOTE, false)
 		end
 
@@ -1423,19 +1446,17 @@ return function(env)
 			local advanced = R.section(detail.instance, {
 				name = "Advanced",
 				title = "Transport",
-				description = "The socket URL, and the extra headers, body fields and query "
-					.. "parameters this record sends. All three were stored and none were shown, "
-					.. "which is why Azure's api-version and OpenRouter's attribution headers "
-					.. "could not be inspected or corrected from here.",
+				description = "Optional gateway streaming and extra headers, body fields and query parameters. "
+					.. "HTTP works without a socket; the provider and host still set request limits.",
 				layoutOrder = order(),
 			})
 			R.field(advanced, {
 				name = "SocketUrl",
-				label = "Socket URL",
-				hint = "Optional. A wss:// endpoint for streamed completions, which is what lifts "
-					.. "the one-minute ceiling on a long reply.",
+				label = "Gateway socket URL",
+				hint = "Optional, for Chat completions only. Requires a gateway implementing UAI's envelope protocol. "
+					.. "Ordinary local servers and OpenAI Responses/Realtime sockets use different protocols. The gateway receives your provider headers.",
 				value = record.wsUrl or "",
-				placeholder = "wss://api.example.com/v1",
+				placeholder = "wss://your-uai-gateway.example/stream",
 				layoutOrder = 1,
 				onChange = function(text)
 					record.wsUrl = util.trim(text)

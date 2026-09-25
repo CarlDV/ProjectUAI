@@ -767,7 +767,7 @@ return function(env)
 			maximise.instance.LayoutOrder = 2
 			maximise.instance.Activated:Connect(function()
 				M.window.toggleMaximised()
-				M.rebuild("maximise")
+				maximise.setIcon(M.window.maximised and "minus" or "windowMaximize")
 			end)
 		end
 
@@ -872,6 +872,7 @@ return function(env)
 		if env.onMountPhase then env.onMountPhase("building the composer") end
 		panel.composer = env.require("ui/chat/composer").new(column, {
 			layoutOrder = 3,
+			onRefresh = function() panel.view.refresh() end,
 			onSend = function(text, files)
 				local session = sessions.current()
 				local ok, reason = session.send(text, nil, files)

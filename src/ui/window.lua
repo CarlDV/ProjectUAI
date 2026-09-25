@@ -34,24 +34,10 @@ return function(env)
 			return "ui.window"
 		end
 
-		-- The shell is a CanvasGroup only where that is safe.
-		--
-		-- A CanvasGroup rasterizes its children into one offscreen texture and composites
-		-- that texture. On touch devices the engine caps the resolution of that texture,
-		-- and a window that covers most of the screen is over the cap -- so the texture
-		-- is drawn resampled and every glyph in the interface goes soft. The modals are
-		-- Frames and sit well under the cap, which is exactly why they stay sharp while
-		-- the window around them blurs. On a phone or a tablet the shell is therefore a
-		-- plain Frame: it loses the group fade, and gains being legible.
-		local fades = not (responsive.touch
-			or responsive.mode == "sheet" or responsive.mode == "panel")
-
-		local root
-		if fades then
-			root = Instance.new("CanvasGroup", parent)
-		else
-			root = Instance.new("Frame", parent)
-		end
+		-- Draw the transcript directly on every device. A large CanvasGroup must
+		-- reallocate an offscreen texture during resize; its failure/quality limits
+		-- should never decide whether a long conversation remains readable.
+		local root = Instance.new("Frame", parent)
 		root.Name = props.name or "Window"
 		root.BackgroundColor3 = theme.color.canvas
 		root.BorderSizePixel = 0
@@ -59,22 +45,11 @@ return function(env)
 		root.Active = true
 		root.ZIndex = theme.z.raised
 		root.ClipsDescendants = true
-		if fades then root.GroupTransparency = 1 end
 		P.corner(root, mobile and theme.radius.lg or theme.radius.xl)
 		local outline = P.stroke(root, theme.color.border)
 
-		-- No UIScale on this, deliberately.
-		--
-		-- A CanvasGroup renders every child into one offscreen texture and then draws
-		-- that texture. Drawing it at anything other than 1:1 resamples it -- so a
-		-- UIScale of 0.98 on the way in did not make the window 2% smaller, it made
-		-- every glyph in the entire interface soft for the length of the animation. And
-		-- the scale only returned to 1 when the tween finished: interrupt it by hiding,
-		-- rebuilding for a theme change, or opening twice inside a quarter of a second,
-		-- and the window stayed at 0.98 for the rest of the session, blurry, with
-		-- nothing on screen to explain why. A 2% zoom nobody can see is not worth that;
-		-- the fade below is what a CanvasGroup is actually good at, because it
-		-- composites the whole group at one alpha for free.
+		-- No entrance scale or delayed group fade: rapid hide/show is synchronous,
+		-- and native text, selection and input geometry stay at their actual size.
 
 		local handle = {
 			root = root,
@@ -370,7 +345,7 @@ return function(env)
 			if topGap < SNAP_MARGIN then y = y - topGap end
 			if bottomGap < SNAP_MARGIN then y = y + bottomGap end
 
-			-- Position tweens resample a CanvasGroup between integer endpoints.
+			-- Keep the snapped position on whole pixels throughout the move.
 			root.Position = UDim2.new(0.5, math.floor(x), 0.5, math.floor(y))
 		end
 
@@ -489,14 +464,6 @@ return function(env)
 			handle.visible = true
 			handle.layout("show")
 			root.Visible = true
-			if fades then
-				-- Snapped to the goal on completion. An interrupted fade on a CanvasGroup
-				-- leaves the whole window part-transparent, and the group is the only thing
-				-- between the interface and the game behind it.
-				P.animate(root, "enter", { GroupTransparency = 0 }, function()
-					if handle.visible then root.GroupTransparency = 0 end
-				end)
-			end
 			if handle.onShow then pcall(handle.onShow) end
 		end
 
@@ -504,13 +471,7 @@ return function(env)
 			if not handle.visible then return end
 			handle.visible = false
 			stopGestures()
-			if fades then
-				P.animate(root, "exit", { GroupTransparency = 1 }, function()
-					if not handle.visible then root.Visible = false end
-				end)
-			else
-				root.Visible = false
-			end
+			root.Visible = false
 			if handle.onHide then pcall(handle.onHide) end
 		end
 

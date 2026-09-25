@@ -11,6 +11,7 @@ return function(env)
 	local log = env.require("runtime/log")
 	local signal = env.require("runtime/signal")
 	local catalog = env.require("provider/catalog")
+	local urls = env.require("net/url")
 
 	local COOLDOWN_AFTER = 3
 	local COOLDOWN_SECONDS = 45
@@ -123,44 +124,19 @@ return function(env)
 	--   https://x.dev/openai/v1   -> unchanged (it already names a path)
 	--   https://x.dev/v1/chat/completions -> unchanged, used verbatim
 	function M.normaliseBaseUrl(raw)
-		local text = util.trim(raw)
-		if text == "" then return "" end
-		if not text:find("^https?://") then text = "https://" .. text end
-		text = text:gsub("/+$", "")
-		local scheme, rest = text:match("^(https?://)(.*)$")
-		if not scheme then return text end
-		local hostAndPath = rest
-		local path = hostAndPath:match("^[^/]+(/.*)$")
-		if not path or path == "" then
-			return text .. "/v1"
-		end
-		return text
+		return urls.normaliseBase(raw)
 	end
 
 	function M.isFullEndpoint(url)
-		return tostring(url):find("/chat/completions$") ~= nil
+		return urls.isFullEndpoint(url)
 	end
 
 	function M.endpoint(record, suffix)
-		local base = record.baseUrl or ""
-		local url
-		if M.isFullEndpoint(base) then
-			url = (suffix == "/chat/completions") and base or (base:gsub("/chat/completions$", "") .. suffix)
-		else
-			url = base .. suffix
-		end
-		local query = {}
-		for key, value in pairs(record.query or {}) do
-			query[#query + 1] = util.urlEncode(key) .. "=" .. util.urlEncode(value)
-		end
-		if #query > 0 then
-			url = url .. (url:find("%?") and "&" or "?") .. table.concat(query, "&")
-		end
-		return url
+		return urls.endpoint(record.baseUrl or "", suffix, record.query)
 	end
 
 	function M.authHeaders(record, explicitKey)
-		local key = util.trim(explicitKey or record.apiKey)
+		local key = util.trim(explicitKey or M.nextKey(record))
 		local style = record.authStyle or "bearer"
 		if key == "" or style == "none" then return {} end
 		if style == "x-api-key" then return { ["x-api-key"] = key } end
@@ -169,6 +145,29 @@ return function(env)
 			return { ["Authorization"] = "Bearer " .. key, ["x-api-key"] = key }
 		end
 		return { ["Authorization"] = "Bearer " .. key }
+	end
+
+	function M.needsExecutor(record)
+		return urls.isLocalHost(urls.host(M.normaliseBaseUrl(record.baseUrl)))
+	end
+
+	function M.protocolProblem(record)
+		if record.api ~= nil and record.api ~= "openai" and record.api ~= "anthropic" then
+			return "choose Chat completions or Anthropic messages; this API protocol is not implemented"
+		end
+		local parsed = urls.parse(M.normaliseBaseUrl(record.baseUrl))
+		local path = parsed and parsed.path:gsub("/+$", "") or ""
+		if path:match("/api/chat$") or path:match("/api/generate$") then
+			return "Ollama's native /api routes use a different protocol; use its OpenAI-compatible base URL, usually http://127.0.0.1:11434/v1"
+		end
+		if path:match("/responses$") or path:match(":generateContent$") or path:match("/generateContent$") then
+			return "this route uses a different API; use the provider's Chat Completions or Anthropic Messages endpoint"
+		end
+	end
+
+	-- Limits and learned request repairs belong to one endpoint, protocol and model.
+	function M.compatibilityKey(record)
+		return table.concat({ record.api or "openai", M.endpoint(record, "/models"), record.model or "" }, "\n")
 	end
 
 	-- OpenCode compatibility metadata belongs only to the official host.
@@ -369,11 +368,19 @@ return function(env)
 	function M.validate(record)
 		local problems = {}
 		if util.trim(record.label) == "" then problems[#problems + 1] = "give the provider a name" end
-		local base = M.normaliseBaseUrl(record.baseUrl)
+		local base, urlError = M.normaliseBaseUrl(record.baseUrl)
 		if base == "" then
 			problems[#problems + 1] = "base URL is required"
-		elseif not base:find("^https?://[^/]+") then
-			problems[#problems + 1] = "base URL does not look like a URL"
+		elseif urlError then
+			problems[#problems + 1] = urlError
+		end
+		local protocolProblem = M.protocolProblem(record)
+		if protocolProblem then problems[#problems + 1] = protocolProblem end
+		if util.trim(record.wsUrl) ~= "" then
+			local socketUrl = urls.parse(record.wsUrl)
+			if not socketUrl or (socketUrl.scheme ~= "ws" and socketUrl.scheme ~= "wss") then
+				problems[#problems + 1] = "socket URL must be a ws:// or wss:// gateway that implements UAI's envelope protocol"
+			end
 		end
 		if (record.authStyle or "bearer") ~= "none" and util.trim(record.apiKey) == "" then
 			problems[#problems + 1] = "an API key is required for this auth style"
@@ -383,8 +390,8 @@ return function(env)
 		if record.preset ~= "azure" and util.trim(record.model) == "" then
 			problems[#problems + 1] = "fetch the model list or add a model id"
 		end
-		if record.requires == "executor" and caps.http ~= "executor" then
-			problems[#problems + 1] = "this endpoint needs an executor HTTP function; this host has none"
+		if M.needsExecutor(record) and caps.http ~= "executor" then
+			problems[#problems + 1] = "local/private endpoints need an executor HTTP function on the machine that can reach the server; this host has none"
 		end
 		return #problems == 0, problems
 	end

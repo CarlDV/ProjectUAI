@@ -54,7 +54,9 @@ return function(env)
 		gethui = callable(gethui),
 		clipboard = findClipboard(),
 		identify = callable(identifyexecutor) or callable(getexecutorname),
-		websocket = (type(WebSocket) == "table" and callable(WebSocket.connect)) or nil,
+		websocket = (type(WebSocket) == "table" and callable(WebSocket.connect))
+			or (type(websocket) == "table" and callable(websocket.connect))
+			or (type(syn) == "table" and type(syn.websocket) == "table" and callable(syn.websocket.connect)) or nil,
 		getconnections = callable(getconnections),
 		hookmetamethod = callable(hookmetamethod),
 		getnamecallmethod = callable(getnamecallmethod),

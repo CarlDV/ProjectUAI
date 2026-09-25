@@ -14,6 +14,8 @@ return function(env)
 	local sse = env.require("net/sse")
 	local registry = env.require("provider/registry")
 	local traits = env.require("provider/traits")
+	local urls = env.require("net/url")
+	local headerMap = env.require("net/headers")
 
 	local M = {}
 
@@ -52,13 +54,8 @@ return function(env)
 		return lowered, table.concat(changes, ", ")
 	end
 
-	-- The wall the transport waits against. The default is a day and it is the
-	-- highest of any clock here on purpose: this is the one deadline nothing else can
-	-- rescue, because a tool or a subagent that runs out of time still gets its result
-	-- collected, while a request that times out is a turn spent for nothing. The
-	-- unlimited switch means the same day rather than a true infinity -- a request
-	-- nobody collects is indistinguishable from a hung client. Shared by both fire
-	-- paths in this adapter.
+	-- Requested wait budget, shared by HTTP and gateway sockets. Native transports
+	-- enforce their own 300-second bound; executor/provider limits may be shorter.
 	local function requestTimeout(request)
 		if request.timeout then return request.timeout end
 		if config.get("agent.requestUnlimited", false) then return 86400 end
@@ -215,8 +212,12 @@ return function(env)
 
 		if request.tools and #request.tools > 0 then
 			body.tools = request.tools
-			body.tool_choice = request.toolChoice or "auto"
-			if request.parallelToolCalls ~= false then
+			-- Ollama accepts tools but does not implement tool_choice. Keep automatic
+			-- selection implicit; an explicit override remains the user's choice.
+			if record.preset ~= "ollama" or request.toolChoice then body.tool_choice = request.toolChoice or "auto" end
+			if request.parallelToolCalls ~= nil then
+				body.parallel_tool_calls = request.parallelToolCalls == true
+			elseif record.preset ~= "ollama" then
 				body.parallel_tool_calls = true
 			end
 		end
@@ -272,6 +273,7 @@ return function(env)
 
 		for key, value in pairs(record.params or {}) do body[key] = value end
 		for key, value in pairs(request.extra or {}) do body[key] = value end
+		if not body.stream then body.stream_options = nil end
 		return body
 	end
 
@@ -351,6 +353,21 @@ return function(env)
 				message = decoded.message
 			elseif type(decoded.detail) == "string" then
 				message = decoded.detail
+			elseif type(decoded.detail) == "table" then
+				-- FastAPI/Pydantic servers report an array of {loc,msg,type}. Never
+				-- echo their `input` field, which may contain the entire prompt.
+				local parts = {}
+				for index, detail in ipairs(decoded.detail) do
+					if index > 8 then break end
+					if type(detail) == "table" then
+						local location = {}
+						for _, part in ipairs(type(detail.loc) == "table" and detail.loc or {}) do
+							if type(part) == "string" or type(part) == "number" then location[#location + 1] = tostring(part) end
+						end
+						parts[#parts + 1] = table.concat(location, ".") .. ": " .. tostring(detail.msg or detail.type or "invalid field")
+					end
+				end
+				message = table.concat(parts, "; ")
 			end
 		end
 		if not message or message == "" then
@@ -392,6 +409,14 @@ return function(env)
 	function M.ceilingFromMessage(message, current)
 		current = tonumber(current) or 0
 		if current <= 0 then return nil end
+		-- Explicit bounds are safe even for very small local models; a status code
+		-- cannot match this wording. Keep the conservative floor for the heuristic.
+		local text = tostring(message or ""):lower():gsub("(%d),(%d%d%d)", "%1%2")
+		for _, pattern in ipairs({ "less than or equal to%s*(%d+)", "must be%s*<=%s*(%d+)",
+			"at most%s*(%d+)%s*completion tokens", "at most%s*(%d+)%s*output tokens" }) do
+			local limit = tonumber(text:match(pattern))
+			if limit and limit >= 1 and limit < current then return limit end
+		end
 		local best
 		for digits in tostring(message or ""):gmatch("%d+") do
 			local number = tonumber(digits)
@@ -423,6 +448,9 @@ return function(env)
 		if documented and wanted > documented then wanted = documented end
 		local cap = record.maxTokensCap
 		if type(cap) ~= "table" or cap.model ~= record.model then return wanted end
+		local scope = registry.compatibilityKey(record)
+		if cap.scope == nil then cap.scope = scope end -- adopt older saved caps once
+		if cap.scope ~= scope then return wanted end
 		local limit = tonumber(cap.tokens) or 0
 		if limit > 0 and wanted > limit then return limit end
 		return wanted
@@ -452,25 +480,33 @@ return function(env)
 		if not tokens or tokens ~= tokens or tokens <= 0 or tokens == math.huge then return end
 		local previous = record.maxTokensCap
 		local previousTokens = type(previous) == "table" and tonumber(previous.tokens)
-		if previousTokens and previous.model == record.model and previousTokens > 0 then
+		local scope = registry.compatibilityKey(record)
+		if previousTokens and previous.model == record.model and (previous.scope == nil or previous.scope == scope) and previousTokens > 0 then
 			tokens = math.min(tokens, previousTokens)
 		end
-		record.maxTokensCap = { model = record.model, tokens = tokens }
+		record.maxTokensCap = { model = record.model, tokens = tokens, scope = scope }
 		registry.save(record, { force = true })
 	end
 
 	-- Read the window named by a context refusal, never the request size or the
 	-- output budget beside it. A max_tokens refusal alone cannot teach a window.
-	function M.contextWindowFromMessage(message)
+	function M.isContextError(message)
 		local text = tostring(message or ""):lower()
 		local isContext = text:find("context length", 1, true)
 			or text:find("context window", 1, true)
 			or text:find("context_length_exceeded", 1, true)
 			or text:find("prompt is too long", 1, true)
 			or text:find("maximum context", 1, true)
+			or text:find("context size", 1, true)
+			or text:find("n_ctx", 1, true)
 			or text:find("too many tokens", 1, true)
 			or text:find("reduce the length of the messages", 1, true)
-		if not isContext then return nil end
+		return isContext ~= nil and isContext ~= false
+	end
+
+	function M.contextWindowFromMessage(message)
+		if not M.isContextError(message) then return nil end
+		local text = tostring(message or ""):lower()
 		-- Some gateways format limits as 128,000 or 1,048,576.
 		text = text:gsub("(%d),(%d%d%d)", "%1%2"):gsub("(%d),(%d%d%d)", "%1%2")
 		local patterns = {
@@ -481,13 +517,15 @@ return function(env)
 			"context window of%s*(%d+)",
 			"context length%s*[:=]%s*(%d+)",
 			"context window%s*[:=]%s*(%d+)",
+			"context size%s*[:=]?%s*(%d+)",
+			"n_ctx%s*[:=]%s*(%d+)",
 			">%s*(%d+)%s*maximum",
 			"maximum of%s*(%d+)%s*tokens",
 			"at most%s*(%d+)%s*tokens",
 		}
 		for _, pattern in ipairs(patterns) do
 			local window = tonumber(text:match(pattern))
-			if window and window >= 8000 and window < math.huge then return window end
+			if window and window >= 512 and window < math.huge then return window end
 		end
 		return nil
 	end
@@ -496,7 +534,7 @@ return function(env)
 	-- compaction, badges and configuration export, and persists across executions.
 	function M.rememberContextWindow(record, window)
 		window = tonumber(window)
-		if not window or window ~= window or window < 8000 or window == math.huge then return end
+		if not window or window ~= window or window < 512 or window == math.huge then return end
 		local id = util.trim(tostring(record and record.model or "")):lower()
 		if id == "" then return end
 		window = math.floor(window)
@@ -766,8 +804,12 @@ return function(env)
 	local function repair(body, message)
 		-- A context error often mentions max_tokens too. It needs shorter history,
 		-- not output-ceiling repairs that would learn the wrong limit.
-		if M.contextWindowFromMessage(message) then return nil end
+		if M.isContextError(message) then return nil end
 		local lowered = tostring(message or ""):lower()
+		if body.max_completion_tokens and not body.max_tokens and lowered:find("max_completion_tokens", 1, true) then
+			local note = REPAIRS[2].apply(body, message)
+			if note then return note, "max_tokens" end
+		end
 		for _, entry in ipairs(REPAIRS) do
 			if lowered:find(entry.match:lower(), 1, true) then
 				local note, keyOverride = entry.apply(body, message)
@@ -782,6 +824,9 @@ return function(env)
 	M.repairForTest = repair
 
 	local function applyRemembered(record, body)
+		local scope = registry.compatibilityKey(record)
+		if record.repairScope ~= nil and record.repairScope ~= scope then record.repairs = {} end
+		record.repairScope = scope
 		for _, key in ipairs(record.repairs or {}) do
 			for _, entry in ipairs(REPAIRS) do
 				if entry.match == key then entry.apply(body) end
@@ -790,6 +835,9 @@ return function(env)
 	end
 
 	local function remember(record, key)
+		local scope = registry.compatibilityKey(record)
+		if record.repairScope ~= nil and record.repairScope ~= scope then record.repairs = {} end
+		record.repairScope = scope
 		record.repairs = record.repairs or {}
 		for _, existing in ipairs(record.repairs) do
 			if existing == key then return end
@@ -824,6 +872,8 @@ return function(env)
 	end
 
 	function M.complete(record, request)
+		local problem = registry.protocolProblem(record)
+		if problem then return nil, problem end
 		request = util.copy(request or {})
 		if request.onRetry then
 			local callback = request.onRetry
@@ -835,6 +885,7 @@ return function(env)
 
 		local body = M.buildBody(record, util.merge(request, { stream = wantStream }))
 		applyRemembered(record, body)
+		local requestScope = registry.compatibilityKey(record)
 
 		local url = registry.endpoint(record, "/chat/completions")
 		local pool = registry.keysOf(record)
@@ -850,11 +901,8 @@ return function(env)
 					if key == currentKey then currentKeyIndex = index end
 				end
 			end
-			local headers = registry.authHeaders(record, currentKey)
-			for key, value in pairs(registry.opencodeHeaders(record, request)) do headers[key] = value end
-			for key, value in pairs(record.headers or {}) do headers[key] = value end
-			headers["Accept"] = (wantStream or registry.isOpencode(record)) and "text/event-stream" or "application/json"
-			return headers
+			return headerMap.merge(registry.authHeaders(record, currentKey), registry.opencodeHeaders(record, request),
+				record.headers, { Accept = body.stream and "text/event-stream" or "application/json" })
 		end
 
 		local headers = rebuildHeaders()
@@ -870,25 +918,22 @@ return function(env)
 		local skip429 = (#pool > 1) and { [429] = true } or nil
 
 		local function fire(payload)
+			if registry.compatibilityKey(record) ~= requestScope then return nil, "aborted" end
 			-- A socket is only used when the record names one and the host has
 			-- WebSocket support; otherwise the SSE body arrives whole over HTTP.
 			local web = config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web"
-			if not web and wantStream and util.trim(record.wsUrl) ~= "" and caps.ws then
+			if not web and payload.stream and util.trim(record.wsUrl) ~= "" and caps.ws then
 				local ws = env.require("net/ws")
-				local socketHeaders = headers
-				if registry.requiresClaude(record) then
-					socketHeaders = http.headersFor({ url = url, headers = headers, body = payload,
-						identity = "claude", identityRequired = true, timeout = requestTimeout(request) })
-				end
+				local socketHeaders = http.headersFor({ url = url, headers = headers, body = payload,
+					identity = registry.identityFor(record), identityRequired = registry.requiresClaude(record), timeout = requestTimeout(request) })
 				local streamBody, wsErr = ws.stream({
 					url = record.wsUrl,
-					path = "/chat/completions",
+					path = urls.requestTarget(url),
 					headers = socketHeaders,
 					body = payload,
 					aborted = request.aborted,
 					onFrame = request.onFrame,
-					-- Same deadline as the HTTP path: a long think is not a failure, and the
-					-- socket only ends the exchange when this runs out.
+					-- The transport bounds this setting to 1..300 seconds.
 					timeout = requestTimeout(request),
 				})
 				if streamBody then
@@ -957,12 +1002,14 @@ return function(env)
 			local note, key = repair(body, message)
 			if not note then break end
 			log.info("provider", record.label .. ": " .. note .. ", retrying")
-			if key == "max_tokens" then
-				-- A value, not a switch, so it cannot ride in record.repairs -- that
-				-- list replays a key with no error text to read a number out of.
-				M.rememberMaxTokens(record, body.max_tokens or body.max_completion_tokens)
-			elseif not EPHEMERAL_REPAIRS[key] then
-				remember(record, key)
+			-- Do not teach a model/endpoint selected while this request was in flight.
+			if registry.compatibilityKey(record) == requestScope then
+				if key == "max_tokens" then
+					-- A value, not a switch: replaying a halving repair would lower it on every turn.
+					M.rememberMaxTokens(record, body.max_tokens or body.max_completion_tokens)
+				elseif not EPHEMERAL_REPAIRS[key] then
+					remember(record, key)
+				end
 			end
 			if request.onRetry then
 				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = note, status = res.status })
@@ -992,7 +1039,7 @@ return function(env)
 		end
 
 		if not res or not res.ok then
-			M.learnContextWindow(record, res)
+			if registry.compatibilityKey(record) == requestScope then M.learnContextWindow(record, res) end
 			local message = M.errorText(res, err)
 			registry.markFail(record, message)
 			return nil, message, res
@@ -1032,7 +1079,7 @@ return function(env)
 		end
 
 		-- A 200 with an error, malformed JSON or an empty completion did not recover.
-		if recoveredTokens then
+		if recoveredTokens and registry.compatibilityKey(record) == requestScope then
 			M.rememberMaxTokens(record, recoveredTokens)
 			log.info("provider", record.label .. ": smaller request succeeded; remembered max_tokens " .. tostring(recoveredTokens))
 		end

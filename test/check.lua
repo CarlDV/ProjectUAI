@@ -63,7 +63,7 @@ CatalogSearchParams PathWaypoint TextChatMessage Content SharedTable os
 delay spawn wait warn settings stats version elapsedTime printidentity require
 getgenv getrenv getfenv setfenv gethui identifyexecutor getexecutorname
 readfile writefile appendfile isfile isfolder makefolder listfiles delfile delfolder
-setclipboard toclipboard request http_request syn fluxus http WebSocket
+setclipboard toclipboard request http_request syn fluxus http WebSocket websocket
 getconnections firesignal fireclickdetector firetouchinterest fireproximityprompt
 hookfunction hookmetamethod getrawmetatable setreadonly isreadonly cloneref clonefunction
 getnamecallmethod newcclosure

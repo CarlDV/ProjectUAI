@@ -3055,7 +3055,8 @@ scenario("transport deadlines never retry or learn a ceiling for either provider
 			end
 			handle.providers.setModel(record.id, "harness-model-wide")
 			providerCall(harness, adapter, handle.providers.active())
-			check(label .. " changing model retains its configured ceiling", sent[3] and sent[3][tokenField], 128000)
+			check(label .. " changing model retains its configured ceiling", sent[3] and sent[3].max_tokens, 128000)
+			falsy(label .. " changing model discards the old token-field repair", sent[3] and sent[3].max_completion_tokens)
 			check(label .. " no thread errors", #harness.errors(), 0)
 		end
 	end
@@ -4419,6 +4420,8 @@ scenario("the providers panel shows the record without showing the key", functio
 	local record = handle.providers.active()
 	record.apiKey = "sk-secret-tail-9999"
 	record.wsUrl = ""
+	-- Streaming on so the transport line is the buffered-SSE case named below.
+	record.stream = true
 	handle.providers.save(record, { force = true })
 	handle.app.show("providers")
 	harness.settle(2)
@@ -4429,8 +4432,8 @@ scenario("the providers panel shows the record without showing the key", functio
 	contains("the completions endpoint is named", text, "/chat/completions")
 	contains("so is the model list route", text, "/models")
 	contains("and the wire protocol", text, "Chat completions")
-	-- The single fact that decides whether a long reply can arrive, never stated before.
-	contains("and whether replies can stream", text, "HTTP only")
+	-- Buffered HTTP receives SSE only after the complete response has arrived.
+	contains("and how streamed replies arrive", text, "Buffered SSE over HTTP")
 	contains("with the fallback rule as configured", text, "active provider first")
 
 	truthy("the provider is listed in the rail",
@@ -4828,16 +4831,9 @@ scenario("the mascot is alive and answers reduced motion", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
--- 45. The window is a CanvasGroup, and that has rules ----------------------
+-- 45. The window draws directly at whole-pixel coordinates -----------------
 
--- Why this exists: the window is a CanvasGroup, which renders every child into one
--- offscreen texture and then draws that texture. Draw it at anything other than 1:1 and
--- the texture is resampled -- so the whole interface, every glyph in it, goes soft at
--- once with nothing on screen to explain why. There were two ways in. A UIScale tweened
--- from 0.98 to 1 on the way in, which blurred the window for the length of the
--- animation and left it blurry for good if the tween was interrupted; and a 0.5 anchor
--- with an odd amount of space around it, which puts the group on a half pixel -- one
--- pixel of viewport or one drag of the resize grip was enough.
+-- Keep native text independent of offscreen texture limits and interrupted fades.
 scenario("the window never draws itself between pixels", function()
 	local harness, handle = bootWith({})
 	handle.app.show("chat")
@@ -4845,7 +4841,7 @@ scenario("the window never draws itself between pixels", function()
 
 	local window = harness.byName("UAI_Window")
 	truthy("the window is there", window ~= nil)
-	check("and it is a CanvasGroup", window.ClassName, "CanvasGroup")
+	check("and it draws directly as a Frame", window.ClassName, "Frame")
 	check("with nothing scaling it", window:FindFirstChildOfClass("UIScale"), nil)
 
 	-- An odd viewport is the case that used to soften it.

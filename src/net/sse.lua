@@ -12,31 +12,86 @@ return function(env)
 
 	local M = { limits = { body = 8 * 1024 * 1024, frame = 1024 * 1024, chunks = 10000, calls = 64, arguments = 256000 } }
 
-	-- Splits an SSE body into its data payloads. Frames are separated by a blank
-	-- line; a frame may carry several data: lines which concatenate. Comment lines
-	-- (starting ':') and unknown fields are ignored, as the spec requires.
+	-- Incremental SSE framing. A socket message may contain several events or a
+	-- fraction of one, including a CRLF split between messages. HTTP reuses it for
+	-- buffered bodies so the two transports accept exactly the same SSE syntax.
+	function M.decoder(onFrame)
+		local self = {}
+		local buffer, data, eventName = "", {}, nil
+		local bytes, blockBytes, chunks = 0, 0, 0
+		local skipLF, first, failure, prefix = false, true, nil, ""
+		local function fail(message)
+			failure = failure or ("malformed_stream: " .. message)
+			return false, failure
+		end
+		local function dispatch()
+			if #data > 0 then
+				chunks = chunks + 1
+				if chunks > M.limits.chunks then return fail("frame count exceeded") end
+				local ok, accepted, why = pcall(onFrame, { event = eventName, data = table.concat(data, "\n") })
+				if not ok or accepted == false then return fail(why or "frame callback failed") end
+			end
+			data, eventName, blockBytes = {}, nil, 0
+			return true
+		end
+		local function line(text)
+			if text == "" then return dispatch() end
+			blockBytes = blockBytes + #text + 1
+			if blockBytes > M.limits.frame then return fail("frame exceeds 1 MiB") end
+			local field, value = text:match("^([^:]+): ?(.*)$")
+			if not field then field, value = text, "" end
+			if field == "data" then data[#data + 1] = value
+			elseif field == "event" then eventName = value end
+			return true
+		end
+		function self.push(fragment)
+			if failure then return false, failure end
+			if type(fragment) ~= "string" then return fail("body is not text") end
+			bytes = bytes + #fragment
+			if bytes > M.limits.body then return fail("body exceeds 8 MiB") end
+			if first then
+				prefix = prefix .. fragment
+				if #prefix < 3 and ("\239\187\191"):sub(1, #prefix) == prefix then return true end
+				fragment = prefix:gsub("^\239\187\191", "")
+				prefix, first = "", false
+			end
+			if skipLF and fragment ~= "" then
+				if fragment:sub(1, 1) == "\n" then fragment = fragment:sub(2) end
+				skipLF = false
+			end
+			if fragment:sub(-1) == "\r" then skipLF = true end
+			buffer = buffer .. fragment:gsub("\r\n", "\n"):gsub("\r", "\n")
+			local from = 1
+			while true do
+				local at = buffer:find("\n", from, true)
+				if not at then break end
+				local ok, why = line(buffer:sub(from, at - 1))
+				if not ok then return false, why end
+				from = at + 1
+			end
+			buffer = buffer:sub(from)
+			if #buffer + blockBytes > M.limits.frame then return fail("frame exceeds 1 MiB") end
+			return true
+		end
+		function self.finish()
+			if failure then return false, failure end
+			if first and prefix ~= "" then return fail("incomplete UTF-8 BOM") end
+			if buffer ~= "" then
+				local ok, why = line(buffer); buffer = ""
+				if not ok then return false, why end
+			end
+			return dispatch()
+		end
+		function self.idle() return buffer == "" and #data == 0 and blockBytes == 0 end
+		return self
+	end
+
 	function M.frames(body)
 		local out = {}
-		if type(body) ~= "string" then return out, "malformed_stream: body is not text" end
-		if #body > M.limits.body then return out, "malformed_stream: body exceeds 8 MiB" end
-		local normalised = body:gsub("\r\n", "\n"):gsub("\r", "\n")
-		for block in (normalised .. "\n\n"):gmatch("(.-)\n\n") do
-			if #block > M.limits.frame then return {}, "malformed_stream: frame exceeds 1 MiB" end
-			local dataLines, eventName = {}, nil
-			for _, line in ipairs(util.lines(block)) do
-				local field, value = line:match("^([%w%-]+):%s?(.*)$")
-				if field == "data" then
-					dataLines[#dataLines + 1] = value
-				elseif field == "event" then
-					eventName = value
-				end
-			end
-			if #dataLines > 0 then
-				if #out >= M.limits.chunks then return {}, "malformed_stream: frame count exceeded" end
-				out[#out + 1] = { event = eventName, data = table.concat(dataLines, "\n") }
-			end
-		end
-		return out
+		local decoder = M.decoder(function(frame) out[#out + 1] = frame end)
+		local ok, err = decoder.push(body)
+		if ok then ok, err = decoder.finish() end
+		return ok and out or {}, err
 	end
 
 	-- Accumulates streamed chunks into one assistant message.
@@ -136,10 +191,23 @@ return function(env)
 					if type(fn) == "table" then
 						if fn.name and (type(fn.name) ~= "string" or #fn.name > 256) then error("tool name is invalid", 0) end
 						if fn.name and fn.name ~= "" then slot.name = fn.name end
-						if type(fn.arguments) == "string" and fn.arguments ~= "" then
-							slot.bytes = slot.bytes + #fn.arguments
+						local arguments = fn.arguments
+						if type(arguments) == "table" then
+							-- Some compatible servers send a whole argument object. It
+							-- is a single value, never a fragment to merge or ignore.
+							if slot.bytes > 0 then error("mixed object and fragmented tool arguments", 0) end
+							if next(arguments) ~= nil and util.isArray(arguments) then error("tool arguments must be an object, not an array", 0) end
+							arguments = next(arguments) == nil and "{}" or util.encode(arguments)
+							slot.objectArgs = true
+						elseif arguments ~= nil and type(arguments) ~= "string" then
+							error("tool arguments must be a string or object", 0)
+						elseif slot.objectArgs and arguments and arguments ~= "" then
+							error("mixed object and fragmented tool arguments", 0)
+						end
+						if type(arguments) == "string" and arguments ~= "" then
+							slot.bytes = slot.bytes + #arguments
 							if slot.bytes > M.limits.arguments then error("tool arguments exceed 256000 bytes", 0) end
-							slot.args[#slot.args + 1] = fn.arguments
+							slot.args[#slot.args + 1] = arguments
 						end
 					end
 				end
@@ -231,7 +299,8 @@ return function(env)
 	-- True when the body looks like an event stream rather than a JSON document.
 	function M.looksStreamed(body)
 		if type(body) ~= "string" then return false end
-		return body:find("^%s*data:") ~= nil or body:find("\ndata:") ~= nil
+		body = body:gsub("^\239\187\191", "")
+		return body:find("^%s*data:") ~= nil or body:find("[\r\n]data:") ~= nil
 	end
 
 	return M

@@ -29,6 +29,8 @@ return function(env)
 	end
 
 	function M.complete(record, request)
+		local problem = env.require("provider/registry").protocolProblem(record)
+		if problem then return nil, problem end
 		return M.adapterFor(record).complete(record, request)
 	end
 
@@ -43,9 +45,7 @@ return function(env)
 		local adapter = M.adapterFor(record)
 		local registry = env.require("provider/registry")
 		local headers = adapter.headers and adapter.headers(record) or registry.authHeaders(record)
-		for key, value in pairs(registry.opencodeHeaders(record, request)) do headers[key] = value end
-		for key, value in pairs(record.headers or {}) do headers[key] = value end
-		return headers
+		return env.require("net/headers").merge(headers, registry.opencodeHeaders(record, request), record.headers)
 	end
 
 	-- The path a record's completions go to, for the Providers panel to show.

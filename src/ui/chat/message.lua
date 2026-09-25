@@ -389,11 +389,7 @@ return function(env)
 
 	-- Renders markdown blocks into an existing column. Returned so a streaming or
 	-- edited message can clear and re-render.
-	function M.renderBlocks(column, text)
-		for _, child in ipairs(column:GetChildren()) do
-			if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then child:Destroy() end
-		end
-
+	local function renderBlocks(column, text)
 		local blocks = markdown.blocks(text)
 		if #blocks == 0 then
 			P.text(column, { text = "", role = "body", wrap = true, auto = "Y" })
@@ -552,6 +548,24 @@ return function(env)
 				label.Size = UDim2.new(1, 0, 0, 0)
 			end
 		end
+	end
+
+	-- Build a replacement before releasing the current reply/preview. An unusual
+	-- Markdown block must not leave a byline above an empty, permanently broken row.
+	function M.renderBlocks(column, text)
+		local staged = P.column(column, { name = "Blocks", size = UDim2.new(1, 0, 0, 0),
+			auto = "Y", gap = theme.space.md, visible = false })
+		local ok, err = pcall(renderBlocks, staged, tostring(text or ""))
+		if not ok then
+			staged:Destroy()
+			staged = P.text(column, { name = "PlainTextFallback", text = util.sanitise(tostring(text or "")),
+				role = "body", wrap = true, auto = "Y", visible = false })
+			env.require("runtime/log").warn("ui", "Markdown displayed as plain text", err)
+		end
+		for _, child in ipairs(column:GetChildren()) do
+			if child ~= staged and not child:IsA("UIListLayout") and not child:IsA("UIPadding") then child:Destroy() end
+		end
+		staged.Visible = true
 	end
 
 	-- Who said it, above what they said.
@@ -1016,7 +1030,7 @@ return function(env)
 		end
 	end
 
-	function M.toolRun(parent, order)
+	function M.toolRun(parent, order, startedAt)
 		local holder = wrapper(parent, { name = "ToolRun", layoutOrder = order })
 		local card = P.column(holder, {
 			name = "ActivitySurface",
@@ -1097,7 +1111,7 @@ return function(env)
 		})
 
 		local handle = { root = holder, rows = rows, calls = 0, settled = 0, names = {} }
-		local started = clock.ms()
+		local started = tonumber(startedAt) or clock.ms()
 		local open = true
 		local folded = false
 		local slot = 0
@@ -1126,10 +1140,10 @@ return function(env)
 			end
 			-- Three names and a count reads better than a row of eight that
 			-- truncates into nothing. The label is a summary, not a listing.
-			if #names > 3 then
+			if #names > 3 or handle.moreNames then
 				local rest = #names - 3
 				for index = #names, 4, -1 do names[index] = nil end
-				names[#names + 1] = "+" .. tostring(rest) .. " more"
+				names[#names + 1] = handle.moreNames and "more" or ("+" .. tostring(rest) .. " more")
 			end
 			summary.Text = string.format("%s%s%s",
 				util.pluralise(handle.calls, "tool"),
@@ -1173,13 +1187,17 @@ return function(env)
 			startClock()
 			handle.calls = handle.calls + 1
 			if handle.pendingName then
-				handle.names[#handle.names + 1] = handle.pendingName
+				local seen = false
+				for _, name in ipairs(handle.names) do if name == handle.pendingName then seen = true; break end end
+				if not seen then
+					if #handle.names < 16 then handle.names[#handle.names + 1] = handle.pendingName else handle.moreNames = true end
+				end
 				handle.pendingName = nil
 			end
 			paint()
 		end
 
-		function handle.closed(ok)
+		function handle.closed(ok, finishedAt)
 			if ok == false then
 				handle.failed = true
 				setOpen(true)
@@ -1187,7 +1205,7 @@ return function(env)
 			handle.settled = handle.settled + 1
 			paint()
 			if handle.settled < handle.calls then return end
-			handle.ms = clock.since(started)
+			handle.ms = math.max(0, (tonumber(finishedAt) or clock.ms()) - started)
 			pcall(stop)
 			stop = nil
 			paint()
@@ -1699,7 +1717,7 @@ return function(env)
 			return label
 		end
 
-		local started = clock.ms()
+		local started = tonumber(info.startedAt or info.at) or clock.ms()
 		local calls, finished, finalMs = 0, 0, nil
 
 		local function paintMeta()
@@ -1731,7 +1749,7 @@ return function(env)
 		function handle.say(event)
 			local text = util.trim(tostring(event.text or ""))
 			if text == "" then return end
-			line(text, theme.color.textSecondary, "small")
+			return { root = line(text, theme.color.textSecondary, "small") }
 		end
 
 		-- One line per tool the child calls, keyed by the child's own call id so the
@@ -1744,11 +1762,13 @@ return function(env)
 		-- look: a headless session keeps no log, so a subagent's work was the one thing in
 		-- this client that could not be read back.
 		function handle.tool(event)
-			calls = calls + 1
-			local toolRow = P.row(feed, {
+			calls = math.max(calls + 1, tonumber(event.index) or 0)
+			local entryRoot = P.column(feed, { name = "SubagentTool", size = UDim2.new(1, 0, 0, 0),
+				auto = "Y", gap = theme.space.xxs, layoutOrder = nextSlot() })
+			local toolRow = P.row(entryRoot, {
 				size = UDim2.new(1, 0, 0, theme.text.monoSmall.height),
 				gap = theme.space.xs,
-				layoutOrder = nextSlot(),
+				layoutOrder = 1,
 			})
 			P.statusDot(toolRow, {
 				color = theme.riskColor(event.risk),
@@ -1784,22 +1804,28 @@ return function(env)
 			timing.Size = UDim2.fromOffset(theme.size.metaColumn, theme.text.caption.height)
 			if config.get("ui.showToolCode", true) ~= false then
 				local codeParts = splitArguments(decoded)
-				for _, part in ipairs(codeParts) do
-					M.codeBlock(feed, {
+				for index, part in ipairs(codeParts) do
+					M.codeBlock(entryRoot, {
 						text = part.text,
 						lang = part.lang or part.key,
 						maxLines = TOOL_CODE_LINES,
-						layoutOrder = nextSlot(),
+						layoutOrder = index + 1,
 					})
 				end
 			end
-			rows[tostring(event.callId or calls)] = { args = args, timing = timing }
+			local id = tostring(event.callId or calls)
+			local entry = { args = args, timing = timing, root = entryRoot }
+			rows[id] = entry
+			entryRoot.Destroying:Connect(function() if rows[id] == entry then rows[id] = nil end end)
 			paintMeta()
+			return entry
 		end
 		function handle.toolDone(event)
-			finished = finished + 1
 			local entry = rows[tostring(event.callId or "")]
+			if entry and entry.finished then return end
+			finished = math.max(finished + 1, tonumber(event.finishedCalls) or 0)
 			if entry then
+				entry.finished = true
 				entry.timing.Text = event.ms and util.formatDuration(event.ms) or ""
 				local summary = util.trim(tostring(event.summary or ""))
 				if summary ~= "" then entry.args.Text = summary end
@@ -1809,6 +1835,8 @@ return function(env)
 		end
 
 		function handle.finish(event)
+			calls = math.max(calls, tonumber(event.calls) or 0)
+			finished = math.max(finished, tonumber(event.finishedCalls) or 0)
 			finalMs = event.ms or clock.since(started)
 			pcall(stop)
 			pcall(function() spinner:Destroy() end)
@@ -1904,7 +1932,7 @@ return function(env)
 	-- "thinking" from "hung" -- a label that moves and a clock that counts up --
 	-- because the HTTP call it covers can take a minute and says nothing while it
 	-- does.
-	function M.working(parent, order)
+	function M.working(parent, order, startedAt)
 		local holder = wrapper(parent, { name = "Working", layoutOrder = order })
 		local rowHeight = math.max(theme.size.row, theme.text.small.height + theme.space.md)
 		local row = P.row(holder, {
@@ -1935,7 +1963,7 @@ return function(env)
 		elapsed.Size = UDim2.fromOffset(theme.size.metaColumn, rowHeight)
 
 		local handle = { root = holder, label = label }
-		local started = clock.ms()
+		local started = tonumber(startedAt) or clock.ms()
 		-- Elapsed time remains readable even with reduced motion enabled.
 		local stop = clock.interval(1, function()
 			local waited = clock.since(started)

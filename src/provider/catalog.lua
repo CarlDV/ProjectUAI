@@ -11,8 +11,8 @@ return function(env)
 	-- authStyle: bearer | x-api-key | api-key | both | none
 	--   both sends Authorization and x-api-key together, which is what several
 	--   self-hosted relays expect and what the reference client did unconditionally.
-	-- requires: "executor" marks an endpoint a vanilla client cannot reach --
-	--   RequestAsync refuses loopback and private addresses.
+	-- Reachability is derived from the configured URL, including custom endpoints.
+	-- RequestAsync refuses loopback and private addresses.
 	M.presets = {
 		{
 			id = "hcnsec",
@@ -198,30 +198,52 @@ return function(env)
 			label = "Ollama (local)",
 			baseUrl = "http://127.0.0.1:11434/v1",
 			authStyle = "none",
-			requires = "executor",
-			note = "Loopback is unreachable from a vanilla client; this needs an executor HTTP function. Fetching models lists whatever you have pulled.",
+			claudeUa = false,
+			docs = "https://docs.ollama.com/api/openai-compatibility",
+			note = "Uses Ollama's OpenAI-compatible /v1 API, not its native /api/chat route. Local models need no key. Tools depend on the selected model; local access needs executor HTTP.",
 		},
 		{
 			id = "lmstudio",
 			label = "LM Studio (local)",
 			baseUrl = "http://127.0.0.1:1234/v1",
 			authStyle = "none",
-			requires = "executor",
-			note = "Start the LM Studio server first, then fetch models.",
+			claudeUa = false,
+			docs = "https://lmstudio.ai/docs/developer/openai-compat",
+			note = "Start the LM Studio server, then fetch models. If server authentication is enabled, select Bearer and enter its token. Tools depend on the model and chat template.",
 		},
 		{
 			id = "vllm",
 			label = "vLLM / self-hosted",
 			baseUrl = "http://127.0.0.1:8000/v1",
-			authStyle = "bearer",
-			requires = "executor",
+			authStyle = "none",
+			claudeUa = false,
+			docs = "https://docs.vllm.ai/en/latest/serving/online_serving/",
+			note = "No key by default; select Bearer if the server uses --api-key. Automatic tools need the server's tool-call parser, chat template and enable-auto-tool-choice settings.",
+		},
+		{
+			id = "llamacpp",
+			label = "llama.cpp (local)",
+			baseUrl = "http://127.0.0.1:8080/v1",
+			authStyle = "none",
+			claudeUa = false,
+			docs = "https://github.com/ggml-org/llama.cpp/tree/master/tools/server",
+			note = "Use llama-server's /v1 API. Select Bearer if --api-key is set. Tool calling needs a compatible model and chat template, often with --jinja.",
+		},
+		{
+			id = "sglang",
+			label = "SGLang / self-hosted",
+			baseUrl = "http://127.0.0.1:30000/v1",
+			authStyle = "none",
+			claudeUa = false,
+			docs = "https://docs.sglang.io/docs/basic_usage/openai_api_completions.md",
+			note = "Use the server's OpenAI-compatible API. Select Bearer when authentication is configured. Tool support depends on the model, template and server tool-call parser.",
 		},
 		{
 			id = "custom",
 			label = "Custom endpoint",
 			baseUrl = "",
 			authStyle = "bearer",
-			note = "Any OpenAI-compatible /v1/chat/completions endpoint.",
+			note = "An endpoint implementing Chat Completions or Anthropic Messages. Choose its protocol and auth style; enter a model id if discovery is unavailable.",
 		},
 	}
 
