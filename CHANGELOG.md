@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.0.0 — September 26, 2026
+
+Project UAI UI LIB and shared script interface guidance.
+
+- Introduce the standalone [UI library](docs/UI_LIBRARY.md), loaded from this
+  repository through `loadstring`. Project UAI is now 2.0.0; the new library's
+  independently versioned API starts at 1.0.0.
+- Provide buttons, toggles, checkboxes, sliders, text and numeric inputs,
+  searchable single/multi-select dropdowns, segmented controls, keybinds, color
+  pickers, labels, paragraphs, dividers, badges, and progress indicators.
+- Include responsive tabs and sections, search, dark/light themes, text scaling,
+  dialogs, notifications, minimize/restore, and desktop resizing. Compact layouts
+  account for safe areas and keyboard obstruction.
+- Guide main agents and subagents to declare controls and write application logic.
+  The bundled `ui_library_docs` reference supplies the exact API offline; starter
+  and showcase scripts demonstrate it without custom GUI construction.
+- Own control state, validated configuration import/export, optional profiles,
+  callback tasks, input listeners, and script cleanup in the library. Reusing a
+  window Id releases its previous window and registered resources.
+- Keep the fixed `Project UAI | UI LIB.` footer without a leading separator and
+  use text-only headers without a logo. The existing agent client UI is preserved.
+- Publish both bundles and manifests with the 2.0.0 release. The
+  [manual audit and validation record](docs/UI_LIBRARY_AUDIT.md) documents library
+  coverage and the remaining native Roblox rendering/input checks.
+
 ## 1.9.0 — September 26, 2026
 
 Cowork browser workspace, executor installation, and UI reliability.

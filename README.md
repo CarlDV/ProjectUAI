@@ -4,13 +4,14 @@ A universal AI agent that runs inside a Roblox client. It works in any game,
 with Chat Completions and Anthropic Messages endpoints, including compatible
 local servers and relays.
 
-**Version 1.9.0 — September 26, 2026.** Cowork brings a refreshed browser workspace,
-verified executor downloads, live responses, picture previews, and persistent
-drafts. Narrow layouts, keyboard navigation, and live UI updates are more reliable.
-See the [release notes](CHANGELOG.md) and [bridge guide](bridge/README.md).
+**Version 2.0.0 — September 26, 2026.** Project UAI UI LIB gives script tools a
+shared, responsive interface. Agents declare controls and write application logic;
+the library handles layout, input, configuration, and cleanup. The existing
+client interface is preserved.
+See the [release notes](CHANGELOG.md) and [UI library guide](docs/UI_LIBRARY.md).
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/CarlDV/ProjectUAI/main/dist/uai.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai.lua"))()
 ```
 
 Nothing about a specific game, gateway or host script is assumed. Under an

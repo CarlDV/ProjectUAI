@@ -1,6 +1,6 @@
 # Native client features and limits
 
-Current native feature contract for **1.9.0**, September 26, 2026.
+Current native feature contract for **2.0.0**, September 26, 2026.
 Internal APIs are described in
 [SPEC.md](../SPEC.md); verification and native-device scenarios are in
 [CODE_WORKSPACE_TESTING.md](CODE_WORKSPACE_TESTING.md).
@@ -8,6 +8,15 @@ Internal APIs are described in
 In-game release notes are under **App menu → What's new**, also available from
 **About → What's new**. Reload the updated native bundle to see the latest notes.
 Revised notes restore the unread marker even when the client version stays the same.
+
+## Script UI library
+
+Project UAI 2.0.0 introduces the independent [UI LIB 1.0.0](UI_LIBRARY.md).
+Agents use its bundled reference to declare script controls and application
+callbacks. The library owns responsive layout, input, configuration, and resource
+cleanup, with the fixed `Project UAI | UI LIB.` footer and no built-in logo.
+The established agent client interface is preserved. See the
+[library audit](UI_LIBRARY_AUDIT.md) for behavioral coverage and native-device limits.
 
 ## Explorer
 

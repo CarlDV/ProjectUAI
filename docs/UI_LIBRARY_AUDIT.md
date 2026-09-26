@@ -30,19 +30,24 @@ These changes and their regression cases were manually reviewed before reruns.
 The final branding uses `Project UAI | UI LIB.` without a leading separator.
 The header logo and its layout logic were removed; titles use the available space.
 
-The main client bundle changes only its agent prompt, GUI tool module, and the
-new embedded guide, plus generated build metadata. Existing `src/ui` application
-code is unchanged. The website changes are the generated tool entry and counts.
+The main client bundle adds agent prompt guidance, the GUI reference tool, and the
+new embedded guide. Release packaging updates the bootstrap version, in-game notes,
+and generated build metadata. Existing `src/ui` application code is unchanged.
+The website changes are the generated tool entry, counts and version, plus the
+release announcement and link. The 2.0.0 release metadata and generated outputs
+were manually reviewed before rerunning the complete verification sequence.
 
 Verification completed on 2026-09-26 after the final footer and logo corrections:
 
 - `node tools/test_native.js` passed all 49 stages, including 35 focused suites.
-  The main suite passed 129 scenarios and 1,877 checks. The UI library passed
+  The main suite passed 129 scenarios and 1,886 checks. The UI library passed
   104 checks, and its agent integration passed 18 checks.
 - The native static checker parsed 175 files and 174 modules with zero failures
   or warnings. The official Luau compiler accepted the client, standalone library,
   library sources, and examples. Build freshness, catalog freshness, mock harness,
   performance contracts, and build-script syntax checks passed.
+- `python test/site_static.py` passed 5,994 structural checks for the website,
+  including its generated root/docs copies and 2.0.0 release version.
 - Generated 39 approximate Chromium previews at 1280x800, 390x844, 844x390,
   and 320x568. Manual visual inspection covered representative controls,
   dropdowns, color pickers, dialogs, notifications, minimized windows, light
