@@ -55,6 +55,23 @@ end
 Cycles are a load error, not a hang. `runtime/*` must not require anything above
 it; `ui/*` must not require `agent/*` except through `agent/session`.
 
+### Standalone script UI library
+
+`ui-lib/src` contains independent factory modules for Project UAI UI LIB, shipped
+as `dist/uai-ui.lua`. It shares the application's visual language without changing
+the existing `src/ui` application. Script authors declare tabs/sections/controls and
+logic; the library owns layout, input, state, lifetime, and the fixed bottom
+`Project UAI | UI LIB.` attribution. The library has no built-in logo.
+See `docs/UI_LIBRARY.md` for the public API.
+
+`node tools/build_ui_lib.js` deterministically generates the library, SHA-256
+manifest, and `runtime/ui_library_docs` from that guide. The read-only
+`ui_library_docs` tool supplies bounded UTF-8 pages, and main/subagent prompts
+require this library for new script UIs. No UI is mounted by reading the guide.
+Imports validate known fields before applying and are silent by default.
+Cleanup must release global input listeners, gestures, key holds, owned tasks,
+overlays and script resources, including replacement by the same window Id.
+
 ## 3. Transport and identity
 
 `net/http` is the only module that performs a request.

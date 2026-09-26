@@ -32,6 +32,20 @@ workspace files, and skill files are separate from configuration.
 
 ## What it is
 
+**Our own script UI library.** [Project UAI UI LIB](docs/UI_LIBRARY.md) provides
+standalone, responsive windows and a complete set of script controls using UAI's
+visual language. Agents read its bundled `ui_library_docs` reference and write
+declarative controls plus application logic. The library handles layout, input,
+configuration, cleanup, and the fixed `Project UAI | UI LIB.` footer.
+The existing agent client interface is unchanged.
+
+```lua
+local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua"))()
+```
+
+See the [starter](ui-lib/examples/starter.lua), [component showcase](ui-lib/examples/showcase.lua),
+and [full API guide](docs/UI_LIBRARY.md).
+
 **A real agent loop.** Streaming, parallel tool calls, retry with backoff that
 honours `Retry-After`, provider fallback, automatic context compaction with a
 summary, permission gating, hooks, a task list, persistent memory, subagents that

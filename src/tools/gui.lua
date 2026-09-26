@@ -17,6 +17,36 @@ return function(env)
 
 	return {
 		{
+			name = "ui_library_docs",
+			risk = "read",
+			description = "Read the bundled Project UAI UI LIB reference before creating a script UI. This is our GitHub-loadable library for responsive windows, controls, dialogs, configuration and cleanup. Start with quickstart, controls and lifecycle; follow continuation offsets. No network or execution required.",
+			parameters = {
+				type = "object",
+				properties = {
+					section = { type = "string", enum = { "index", "quickstart", "controls", "layout", "lifecycle", "configuration", "recipes", "development" }, description = "Reference section; index lists the sections and release URL." },
+					offset = { type = "integer", minimum = 1, description = "Continuation byte offset from the previous result." },
+					limit = { type = "integer", minimum = 256, maximum = 16000, description = "Bytes to read; also bounded by the conversation's result budget." },
+				},
+				required = {},
+			},
+			run = function(args)
+				local docs = env.require("runtime/ui_library_docs")
+				local section = args.section or "index"
+				if section == "index" then
+					local names = {}
+					for name in pairs(docs.sections) do names[#names + 1] = name end
+					table.sort(names)
+					return "Project UAI UI LIB v" .. docs.version .. "\nLoader: " .. docs.url
+						.. "\nGuide: " .. docs.repository .. "/blob/main/docs/UI_LIBRARY.md"
+						.. "\nSections: " .. table.concat(names, ", ")
+						.. "\nRead quickstart, controls and lifecycle before authoring. Continue every paginated section to its end."
+				end
+				local body = docs.sections[section]
+				if not body then return H.fail("unknown UI library section; request index") end
+				return H.readSlice("Project UAI UI LIB / " .. section, body, args, 6000)
+			end,
+		},
+		{
 			name = "gui_tree",
 			risk = "read",
 			description = "List the on-screen interfaces: every ScreenGui in PlayerGui and CoreGui, with whether it is enabled.",

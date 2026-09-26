@@ -20,6 +20,24 @@ Native Code workspace:
 - Report actual incoming/outgoing and Invoke-result coverage, incomplete values and dropped records. A timed-out InvokeServer may still be outstanding; never automatically retry it.
 - Continue in successive batches of normally 1–4 independent tool calls; inspect results before dependent work.]]
 
+	local SCRIPT_UI = [[
+Script interfaces:
+- For a new script-owned UI, use Project UAI UI LIB from
+  https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua
+  with loadstring(game:HttpGet(url))(). This is independent of the agent client's UI.
+- Before authoring, read ui_library_docs sections quickstart, controls, and lifecycle;
+  follow continuation offsets. Read configuration/recipes when needed. If that tool
+  is unavailable, read docs/UI_LIBRARY.md from the same GitHub repository.
+- Scripts declare tabs, sections, control values and application callbacks only.
+  The library owns GUI instances, styles, responsive layout, input, notifications,
+  configuration and the fixed bottom attribution "Project UAI | UI LIB.".
+  Library windows use text titles without a logo.
+  Do not hand-build GUI controls or substitute an unrelated third-party UI library.
+- Use stable window/control Ids and window:Give/window:OnDestroy for logic cleanup.
+  Construction is callback-free; config import is silent unless explicitly requested.
+  Extend the shared library for missing reusable controls instead of copying UI code
+  into each script. Honor an explicit request to modify an existing custom interface.]]
+
 	local IDENTITY = [[
 You are UAI, an agent embedded in a running Roblox client. You act through tools,
 not advice: when a request can be carried out with the tools you have, carry it
@@ -314,7 +332,7 @@ Background chat:
 	-- conversation and hardest to lose to attention decay.
 	function M.build(opts)
 		opts = opts or {}
-		local parts = { IDENTITY, "", SKILLS_FIRST, "", NATIVE_WORKSPACE, "" }
+		local parts = { IDENTITY, "", SKILLS_FIRST, "", NATIVE_WORKSPACE, "", SCRIPT_UI, "" }
 
 		parts[#parts + 1] = "Environment:"
 		parts[#parts + 1] = environmentBlock()
@@ -417,6 +435,7 @@ Background chat:
 			"",
 			SKILLS_FIRST,
 			NATIVE_WORKSPACE,
+			SCRIPT_UI,
 			"",
 			"Environment:",
 			environmentBlock(),

@@ -43,6 +43,8 @@ function run(label, command, args) {
 }
 
 report(false);
+run('Standalone UI library build and agent reference', process.execPath, ['tools/build_ui_lib.js']);
+run('Standalone UI library freshness', process.execPath, ['tools/build_ui_lib.js', '--check']);
 run('Native bundle build', luajit, ['tools/bundle.lua', '--native']);
 run('Generated native tool catalog', process.execPath, ['tools/build_site.js']);
 run('Bundle freshness and deterministic manifest', process.execPath, ['tools/build_site.js', '--bundle-only', '--check']);
@@ -68,9 +70,11 @@ function collect(directory) {
     else if (file.endsWith('.lua') && !exclusions.has(file.slice(4, -4))) nativeSources.push(file);
   }
 }
-collect('src'); nativeSources.sort(); nativeSources.push('init.lua', 'dist/uai.lua');
+collect('src'); collect('ui-lib/src'); collect('ui-lib/examples');
+nativeSources.sort(); nativeSources.push('init.lua', 'dist/uai.lua', 'dist/uai-ui.lua');
 run('Official Luau compiler', compiler, ['--null', ...nativeSources]);
 run('Native verification script syntax', process.execPath, ['--check', 'tools/test_native.js']);
 run('Native build script syntax', process.execPath, ['--check', 'tools/build_site.js']);
+run('UI library build script syntax', process.execPath, ['--check', 'tools/build_ui_lib.js']);
 report(true);
 process.stdout.write('Native verification passed: ' + results.length + ' stages, ' + focused.length + ' focused suites. Evidence: refer/native-verification/results.json\n');

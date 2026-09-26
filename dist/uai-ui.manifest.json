@@ -1,0 +1,59 @@
+{
+  "format": "project-uai-ui",
+  "version": "1.0.0",
+  "sha256": "aa864c03fc78e305b4ab72fef9f0ce14b565dadf5ec1e2231c778c5663f7b1cf",
+  "bytes": 115316,
+  "loaderSha256": "d91ea7117adc520e2d8bafb1a613688bd0b35879578044dfa8696e2645bdc903",
+  "modules": [
+    {
+      "id": "choice",
+      "bytes": 15527,
+      "sha256": "0f89a6b61105306cd6245846be0813e47eb0053a7714185022fcf193f379fcb3"
+    },
+    {
+      "id": "color",
+      "bytes": 14446,
+      "sha256": "7daae636a213e42fc5c3bbba91b123cd4851d30c9c3f4fd4ca3c11971d6e4d24"
+    },
+    {
+      "id": "config",
+      "bytes": 4601,
+      "sha256": "9676c18c68a03d4573c3fdde219ba7ea8b3c651a65149add42fe8e877904f629"
+    },
+    {
+      "id": "containers",
+      "bytes": 6820,
+      "sha256": "b82b184f0e29e3c70722421257e16981c0691acfa7917354fa4610399d2e88cb"
+    },
+    {
+      "id": "controls",
+      "bytes": 23023,
+      "sha256": "481a2660594477dee57c9442a37b356ee0b21cf4bec4ef79c62d7e739a9decbd"
+    },
+    {
+      "id": "core",
+      "bytes": 12313,
+      "sha256": "777085b68b9a54bca2ad35f984913fde3b1bc21a7b89a9adb99414c2d1d50be6"
+    },
+    {
+      "id": "library",
+      "bytes": 568,
+      "sha256": "92e407d28205bf29246f837e77617c52c3f1fb202d2cf24b73811a27a0a576e9"
+    },
+    {
+      "id": "overlays",
+      "bytes": 11387,
+      "sha256": "1828c75755ea9eaa0c12fa1c3d7df368f5f22cef851cead115f3dff46d1aef81"
+    },
+    {
+      "id": "theme",
+      "bytes": 2293,
+      "sha256": "ab2afc35c010d21ff7c86774d514090ca18bbd759ce22103efa8004953db6521"
+    },
+    {
+      "id": "window",
+      "bytes": 21817,
+      "sha256": "2818926c6df8612b2a0b969b0553f14f25893db87d59f058b7c9a6b13fcea382"
+    }
+  ]
+}

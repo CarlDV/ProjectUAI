@@ -1,4 +1,4 @@
-// Rasterize Lune-exported UI trees for offline visual review. Flex/text layout is
+// Rasterize exported UI trees for offline visual review. Flex/text layout is
 // approximated by Chromium; these images do not claim native Roblox rendering.
 // PLAYWRIGHT_MODULE may point to an external Playwright installation.
 // node test/render_mobile.js <snapshot directory> [baseline directory]
@@ -16,6 +16,14 @@ const color = (rgb = [1, 1, 1], transparency = 0) => `rgba(${rgb.map(v => Math.r
 const component = (node, kind) => (node.children || []).find(child => child.class === kind)?.props;
 const auto = (props, axis) => props.AutomaticSize === axis || props.AutomaticSize === 'XY';
 const alignment = name => ({ Left: 'flex-start', Right: 'flex-end', Top: 'flex-start', Bottom: 'flex-end', Center: 'center' })[name] || 'flex-start';
+const interpolate = (sequence, position, fallback) => {
+  const points = sequence?.keypoints;
+  if (!points?.length) return fallback;
+  let right = points.findIndex(point => point.time >= position);
+  if (right <= 0) return points[right === -1 ? points.length - 1 : 0].value;
+  const a = points[right - 1], b = points[right], weight = (position - a.time) / Math.max(1e-9, b.time - a.time);
+  return Array.isArray(a.value) ? a.value.map((value, index) => value + (b.value[index] - value) * weight) : a.value + (b.value - a.value) * weight;
+};
 
 function render(node, parentLayout = null, parentProps = {}) {
   const p = node.props, list = component(node, 'UIListLayout');
@@ -55,6 +63,18 @@ function render(node, parentLayout = null, parentProps = {}) {
   const corner = component(node, 'UICorner')?.CornerRadius;
   if (corner) style.borderRadius = corner[0] ? '50%' : `${corner[1]}px`;
   if ((p.BackgroundTransparency ?? 0) < 1 && !isRoot) style.background = color(p.BackgroundColor3, p.BackgroundTransparency || 0);
+  const gradient = component(node, 'UIGradient');
+  if (gradient && (gradient.Color?.keypoints || gradient.Transparency?.keypoints)) {
+    const positions = [...new Set([0, 1, ...(gradient.Color?.keypoints || []).map(point => point.time),
+      ...(gradient.Transparency?.keypoints || []).map(point => point.time)])].sort((a, b) => a - b);
+    const base = p.BackgroundColor3 || [1, 1, 1];
+    const stops = positions.map(position => {
+      const rgb = interpolate(gradient.Color, position, [1, 1, 1]).map((value, index) => value * base[index]);
+      const opacity = (1 - (p.BackgroundTransparency || 0)) * (1 - interpolate(gradient.Transparency, position, 0));
+      return color(rgb, 1 - opacity) + ' ' + position * 100 + '%';
+    });
+    style.background = 'linear-gradient(' + (90 + (gradient.Rotation || 0)) + 'deg,' + stops.join(',') + ')';
+  }
   const stroke = component(node, 'UIStroke');
   if (stroke && (stroke.Transparency ?? 0) < 1) style.boxShadow = `inset 0 0 0 ${stroke.Thickness || 1}px ${color(stroke.Color, stroke.Transparency || 0)}`;
   if (p.ClipsDescendants) style.overflow = 'hidden';
@@ -120,7 +140,7 @@ function render(node, parentLayout = null, parentProps = {}) {
       const html = `<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#182028}::-webkit-scrollbar{width:var(--scrollbar,3px);height:var(--scrollbar,3px)}::-webkit-scrollbar-thumb{background:#5b5652;border-radius:4px}</style>
         <main style="position:relative;width:${snapshot.width}px;height:${snapshot.height}px">${render(snapshot.root)}
         ${snapshot.keyboard ? `<div style="position:absolute;left:0;right:0;bottom:0;height:${snapshot.keyboard}px;background:#30343b;border-top:1px solid #68707a;color:#b3bac4;display:grid;place-items:center;font:14px Arial;z-index:100000">On-screen keyboard (${snapshot.keyboard}px)</div>` : ''}</main>
-        <footer style="height:26px;background:#0e141b;color:#aeb9c5;font:12px/26px Arial;padding-left:12px">Lune layout preview · approximate text rendering · ${snapshot.name}</footer>`;
+        <footer style="height:26px;background:#0e141b;color:#aeb9c5;font:12px/26px Arial;padding-left:12px">${escape(snapshot.engine || 'Lune')} layout preview · approximate text rendering · ${escape(snapshot.name)}</footer>`;
       const output = path.join(directory, file.replace(/\.json$/, '.html'));
       fs.writeFileSync(output, html);
       const page = await browser.newPage({ viewport: { width: snapshot.width, height: snapshot.height + 26 }, deviceScaleFactor: 1 });
@@ -134,6 +154,6 @@ function render(node, parentLayout = null, parentProps = {}) {
       await page.close();
     }
   } finally { await browser.close(); }
-  console.log(`Rendered ${files.length} Lune layout images.`);
+  console.log(`Rendered ${files.length} approximate UI layout images.`);
   if (baseline) console.log(`${compared} desktop trees match the release exactly.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
