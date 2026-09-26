@@ -76,15 +76,19 @@
       <div id="connectionBanner" class="connection-banner" hidden><span id="connectionMessage"></span><button id="connectionAction">Open setup guide <span aria-hidden="true">→</span></button></div>
       <section id="chatPage" aria-label="Conversation">
         <div id="taskStrip" hidden></div><div id="loopStrip" hidden></div>
-        <main id="transcript" aria-label="Conversation messages"></main>
-        <button id="latest" class="latest" hidden>↓ Jump to latest</button>
+        <div class="transcript-wrap">
+          <main id="transcript" aria-label="Conversation messages" tabindex="-1"></main>
+          <button id="latest" class="latest" hidden>↓ Jump to latest</button>
+        </div>
         <div id="questions"></div>
         <div id="deliveryNotice" class="delivery-notice" hidden><span id="deliveryMessage" role="status"></span><button id="deliveryCheck">Check delivery</button><button id="deliveryReview" hidden>Review draft</button></div>
         <footer class="composer-wrap">
           <div class="composer" id="composer">
-            <div id="pictureTray" class="picture-tray" hidden></div>
-            <div id="attachments"></div>
-            <textarea id="input" rows="1" placeholder="What would you like to do in your game?" aria-label="Message" aria-describedby="composerHint"></textarea>
+            <div class="composer-content">
+              <div id="pictureTray" class="picture-tray" hidden></div>
+              <div id="attachments"></div>
+              <textarea id="input" rows="1" placeholder="What would you like to do in your game?" aria-label="Message" aria-describedby="composerHint"></textarea>
+            </div>
             <div class="composer-toolbar">
               <button id="attach" class="icon-button" aria-label="Attach text or code files" title="Attach text or code files"><svg class="icon" aria-hidden="true"><use href="icons.svg#attach"></use></svg></button>
               <input id="fileInput" type="file" accept="text/*,.lua,.luau,.json,.md,.js,.ts,.tsx,.jsx,.py,.csv,.yaml,.yml,.toml,.html,.css,.log" multiple hidden>
@@ -105,7 +109,7 @@
     </div>
   </div>
 
-  <dialog id="modal" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle"></h2><button id="modalClose" class="icon-button" aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="icons.svg#close"></use></svg></button></div><div id="modalBody"></div></dialog>
+  <dialog id="modal" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle"></h2><button id="modalClose" class="icon-button" aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="icons.svg#close"></use></svg></button></div><div id="modalBody"></div><div id="modalNotice" class="modal-notice" role="status" aria-live="polite" aria-atomic="true"></div></dialog>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <noscript><p class="noscript">Enable JavaScript to use the local bridge.</p></noscript>
   <script src="markdown.js"></script>

@@ -1,7 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id), md=UAIMarkdown.render;
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
-const button=(text,fn,cls)=>{const n=el('button',cls,text);n.type='button';n.onclick=fn;return n;};
+const button=(text,fn,cls,key)=>{const n=el('button',cls,text);n.type='button';n.onclick=fn;if(key)n.dataset.focusKey=key;return n;};
 function icon(name){const n=document.createElementNS('http://www.w3.org/2000/svg','svg'),use=document.createElementNS(n.namespaceURI,'use');n.classList.add('icon');n.setAttribute('aria-hidden','true');use.setAttribute('href','icons.svg#'+name);n.append(use);return n;}
 const uuid=()=>crypto.randomUUID();
 function stored(storage,key){try{return window[storage].getItem(key);}catch{return null;}}
@@ -11,7 +11,7 @@ if(fromHash)history.replaceState(null,'',location.pathname);
 let state={},page='chat',stream,busy=false,connected=false,sending=false,sessionId=null,events=[],uploads=[],instance=stored('sessionStorage','uai.instance');
 let drafts={};try{const value=JSON.parse(stored('sessionStorage','uai.drafts')||'{}');if(value&&typeof value==='object'&&!Array.isArray(value))drafts=value;}catch{}
 const tools=new Map(),dirtyDrafts=new Set();
-let toastTimer,draftTimer,storageWarning=false,renderingSnapshot=false,eventBytes=0,sendOperation=null,connectionRetry,readingFiles=0;
+let toastTimer,draftTimer,storageWarning=false,renderingSnapshot=false,eventBytes=0,sendOperation=null,connectionRetry,readingFiles=0,modalRefresh=null,panelRefreshPending=false,panelPointerActive=false,panelPointerTimer;
 const draftLoads=new Map();
 const MAX_DRAFT_BYTES=8*1024*1024,MAX_EVENTS_BYTES=8*1024*1024;
 // Explicit operation state machine (contract): the visible/label state is derived
@@ -25,7 +25,11 @@ let lastSend=null;                   // {text,files,pictureIds,sessionId} for re
 let browserId=stored('sessionStorage','uai.browserId')||uuid();try{sessionStorage.setItem('uai.browserId',browserId);}catch{}
 // Picture staging lives in pictures.js (UAI.pictures), instantiated once the DOM is ready.
 const OP_LABEL={reading:'Reading files…',uploading:'Uploading files…',submitting:'Sending…','awaiting-turn':'Waiting for the agent…',stopping:'Stopping…',uncertain:'Checking message delivery…'};
-function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4500);}
+function toast(text){
+  clearTimeout(toastTimer);
+  if($('modal').open){$('toast').hidden=true;$('modalNotice').textContent=text;$('modalNotice').scrollIntoView({block:'nearest'});return;}
+  $('toast').textContent=text;$('toast').hidden=false;toastTimer=setTimeout(()=>$('toast').hidden=true,4500);
+}
 function announce(text){if($('status').textContent!==text)$('status').textContent=text;}
 // Surface the bridge's real reason: 401/403/405 return plain-text bodies, so read
 // res.text() and only fall back to a generic message when there is nothing useful.
@@ -51,8 +55,15 @@ async function command(type,fields={}){
   const error=Error('This action is still pending. Check delivery before sending it again.');error.uncertain=true;throw error;
 }
 function action(type,fields){return command(type,fields).catch(err=>toast(err.message));}
-function modal(title,build){$('modalTitle').textContent=title;$('modalBody').replaceChildren();$('modalBody').className='';build($('modalBody'));if(!$('modal').open)$('modal').showModal();}
+function modal(title,build){
+  modalRefresh=null;$('modalTitle').textContent=title;$('modalNotice').textContent='';$('modalBody').replaceChildren();$('modalBody').className='';
+  build($('modalBody'));if(!$('modal').open)$('modal').showModal();$('modal').scrollTop=0;$('modal').scrollLeft=0;
+  const first=$('modalBody').querySelector('input:not([type="hidden"]):not(:disabled),select:not(:disabled),textarea:not(:disabled),button:not(:disabled),[tabindex="0"]');
+  (first||$('modalClose')).focus({preventScroll:true});
+}
+async function modalCommand(type,fields){try{await command(type,fields);$('modal').close();}catch(error){toast(error.message);}}
 $('modalClose').onclick=()=>$('modal').close();
+$('modal').addEventListener('close',()=>{if(!$('modal').open){modalRefresh=null;$('modalNotice').textContent='';queueMicrotask(flushPanelRefresh);}});
 function field(parent,label,value,type='text'){const holder=el('label',null,label),input=el(type==='textarea'?'textarea':'input');if(type!=='textarea')input.type=type;input.value=value??'';holder.append(input);parent.append(holder);return input;}
 function select(parent,label,values,value){const holder=el('label',null,label),input=el('select');input.setAttribute('aria-label',label);for(const item of values){const pair=typeof item==='string'?[item,item]:item;const option=el('option',null,pair[1]);option.value=pair[0];input.append(option);}input.value=value;holder.append(input);parent.append(holder);return input;}
 function persistDrafts(){
@@ -104,11 +115,13 @@ function changeSession(id){
 function resizeComposer(){const input=$('input');const cap=parseFloat(getComputedStyle(input).maxHeight)||230;input.style.height='auto';input.style.height=Math.min(input.scrollHeight,cap)+'px';}
 function grow(){resizeComposer();saveDraft();refresh();}
 function renderAttachments(){
+  const active=document.activeElement,focused=$('attachments').contains(active),focusId=active?.dataset.fileId,index=[...$('attachments').children].indexOf(active);
   $('attachments').replaceChildren();
   uploads.forEach((file,index)=>{
     const remove=button(file.name+' ×',()=>{uploads.splice(index,1);renderAttachments();saveDraft();});
-    remove.title='Remove '+file.name;remove.setAttribute('aria-label',remove.title);$('attachments').append(remove);
+    remove.dataset.fileId=file.id;remove.title='Remove '+file.name;remove.setAttribute('aria-label',remove.title);$('attachments').append(remove);
   });
+  if(focused){const remaining=[...$('attachments').children];(remaining.find(n=>n.dataset.fileId===focusId)||remaining[Math.min(index,remaining.length-1)]||$('attach')).focus({preventScroll:true});}
   setBusy(busy);
 }
 function hasContent(){return !!$('input').value.trim()||uploads.length>0||!!(window.UAI&&UAI.pictures&&UAI.pictures.hasStaged());}
@@ -154,10 +167,10 @@ function fallbackCopy(text){
 }
 // Two-step arm/confirm for destructive actions (replaces raw confirm()).
 function armButton(btn,confirmLabel,fn){
-  const original=[...btn.childNodes].map(n=>n.cloneNode(true));let armed=false,timer;
-  const reset=()=>{armed=false;btn.replaceChildren(...original.map(n=>n.cloneNode(true)));btn.classList.remove('armed');};
+  const original=[...btn.childNodes].map(n=>n.cloneNode(true)),label=btn.getAttribute('aria-label'),title=btn.getAttribute('title');let armed=false,timer;
+  const reset=()=>{armed=false;btn.replaceChildren(...original.map(n=>n.cloneNode(true)));btn.classList.remove('armed');for(const [name,value]of [['aria-label',label],['title',title]]){if(value===null)btn.removeAttribute(name);else btn.setAttribute(name,value);}};
   btn.onclick=()=>{
-    if(!armed){armed=true;btn.textContent=confirmLabel;btn.classList.add('armed');timer=setTimeout(reset,4000);return;}
+    if(!armed){armed=true;btn.textContent=confirmLabel;btn.setAttribute('aria-label',confirmLabel);btn.title=confirmLabel;btn.classList.add('armed');timer=setTimeout(reset,4000);return;}
     clearTimeout(timer);reset();fn();
   };
 }
@@ -270,7 +283,7 @@ const renderer=window.UAIStreamRenderer.create({
   onRetry:resendLast,
   onFinal:decorateMessage,
 });
-UAI.pictures=UAI.createPictures({token,browserId,getSession:()=>sessionId,api,toast,tray:$('pictureTray'),input:$('pictureInput'),dropZone:$('composer'),onTextFiles:attachFiles,onChange:refresh});
+UAI.pictures=UAI.createPictures({token,browserId,getSession:()=>sessionId,api,toast,tray:$('pictureTray'),input:$('pictureInput'),pickerButton:$('attachPictures'),dropZone:$('composer'),onTextFiles:attachFiles,onChange:refresh});
 function apply(e){
   if(typeof e.kind!=='string')return;
   if(e.kind==='bridge:reset'){events=[];eventBytes=0;renderer.reset();tools.clear();UAI.pictures.resetMessages();$('transcript').replaceChildren();welcome();if(e.resync)toast('Connection restored. Reloaded the latest saved conversation.');return;}
@@ -289,7 +302,7 @@ function apply(e){
     }
     return;
   }
-  if(e.kind==='bridge:game'){const changed=connected!==!!e.connected;connected=!!e.connected;setBusy(state.agent?.busy);welcome();if(changed&&page==='cowork')renderPanel();return;}
+  if(e.kind==='bridge:game'){const changed=connected!==!!e.connected;connected=!!e.connected;setBusy(state.agent?.busy);welcome();if(changed&&page==='cowork')requestPanelRefresh();return;}
   if(e.kind==='inference:start'){renderer.start(e);return;}
   if(e.kind==='inference:delta'){renderer.delta(e);return;}
   if(e.kind==='inference:done'){renderer.done(e);return;}
@@ -332,10 +345,11 @@ function renderState(){
   document.body.dataset.motion=ui.reduceMotion==='on'?'off':'auto';
   document.body.dataset.reasoning=ui.showReasoning===false?'hidden':'visible';document.body.dataset.density=ui.density||'comfortable';document.body.dataset.codeTheme=ui.codeTheme||UAI.theme.resolved();
   $('playerName').textContent=state.player||'you';$('providerName').textContent=state.agent?.provider||'No provider connected';$('modelLabel').textContent=state.agent?.model||'Select model';$('runtimeBadge').textContent=state.runtime==='web'?'Web · streaming':'Game runtime';
+  $('modelButton').setAttribute('aria-label',state.agent?.model?'Select model, current model '+state.agent.model:'Select model');
   $('runtimeBadge').dataset.runtime=state.runtime||'game';$('playerInitial').textContent=(state.player||'U').slice(0,1).toUpperCase();
   const permission=({readonly:'Read only',ask:'Ask first',auto:'Auto',full:'Allow all'})[state.permissions?.mode]||'Ask first';$('permissionBadge').querySelector('span').textContent=permission;
   setBusy(state.agent?.busy);
-  renderThreads();renderQuestions();renderStrips();welcome();if(page!=='chat'&&!$('panel').contains(document.activeElement))renderPanel();
+  renderThreads();renderQuestions();renderStrips();welcome();if($('modal').open)modalRefresh?.();if(page!=='chat')requestPanelRefresh();
 }
 function renderThreads(){
   const search=$('threadSearch').value.toLowerCase(),root=$('threads'),signature=JSON.stringify([search,state.threads]);
@@ -345,23 +359,73 @@ function renderThreads(){
   for(const t of state.threads||[]){if(search&&!String(t.title||'New chat').toLowerCase().includes(search))continue;const group=t.place||'Current game';if(!groups.has(group))groups.set(group,[]);groups.get(group).push(t);}
   for(const [name,list]of groups){root.append(el('div','place-heading',name));for(const thread of list){
     const row=el('div','thread'+(thread.active?' active':''));row.dataset.id=thread.id;
-    const open=button((thread.busy?'◌ ':'')+(thread.title||'New chat'),()=>action('thread',{id:thread.id}));open.title=thread.title||'New chat';if(thread.active)open.setAttribute('aria-current','true');
+    const open=button((thread.busy?'◌ ':'')+(thread.title||'New chat'),()=>openConversation(thread.id));open.title=thread.title||'New chat';if(thread.active)open.setAttribute('aria-current','true');
     const more=button('···',()=>threadMenu(thread),'thread-menu');more.setAttribute('aria-label','Options for '+(thread.title||'New chat'));row.append(open,more);root.append(row);
     if(thread.id===focusId)(menu?more:open).focus({preventScroll:true});
   }}
   if(!groups.size)root.append(el('p','history-empty',search?'No matching conversations.':'Your conversations will appear here.'));
 }
-function threadMenu(thread){modal(thread.title||'Conversation',root=>{const name=field(root,'Title',thread.title);const del=button('Delete',()=>{},'danger');armButton(del,'Confirm delete?',async()=>{await action('thread:delete',{id:thread.id});$('modal').close();});root.append(button('Rename',async()=>{await action('thread:rename',{id:thread.id,title:name.value});$('modal').close();}),button(thread.ephemeral?'Save conversation':'Make isolated',()=>action('thread:isolate',{sessionId:thread.id,value:!thread.ephemeral})),del);});}
-function renderStrips(){const todos=state.todos||[];$('taskStrip').hidden=!todos.length;$('taskStrip').replaceChildren();if(todos.length){const d=el('details');d.append(el('summary',null,`${todos.filter(t=>t.status==='done').length}/${todos.length} tasks completed`));for(const t of todos)d.append(el('div',null,`${t.status==='done'?'✓':'○'} ${t.text}`));$('taskStrip').append(d);}const loops=(state.loops||[]).filter(l=>l.state==='running');$('loopStrip').hidden=!loops.length;$('loopStrip').replaceChildren();if(loops.length)$('loopStrip').append(button(`${loops.length} chat loop(s) running`,()=>show('loops')),button('Stop all',()=>action('loops:stop',{id:'all'}),'danger'));}
-function renderQuestions(){const root=$('questions'), signature=JSON.stringify([state.pendingPermissions,state.questions]);if(root.dataset.signature===signature)return;root.dataset.signature=signature;root.replaceChildren();for(const req of state.pendingPermissions||[]){const card=el('section','question');card.append(el('strong',null,'Allow '+req.name+'?'),el('pre',null,JSON.stringify(req.args||{},null,2)));const remember=el('input');remember.type='checkbox';const label=el('label',null,'Remember this decision');label.prepend(remember);const row=el('div','row');for(const allowed of [true,false])row.append(button(allowed?'Allow':'Deny',()=>action('permission',{id:req.id,allow:allowed,remember:remember.checked}),allowed?'primary':'danger'));row.append(label);card.append(row);root.append(card);}for(const req of state.questions||[]){const card=el('section','question');card.append(el('strong',null,req.question),el('small',null,req.sessionTitle||''));const row=el('div','row');for(const option of req.options||[])row.append(button(option,()=>action('ask:answer',{id:req.id,text:option})));const input=el('input');input.type='text';input.placeholder='Or type an answer';row.append(input,button('Send',()=>action('ask:answer',{id:req.id,text:input.value}),'primary'),button('Dismiss',()=>action('ask:answer',{id:req.id,text:''})));card.append(row);root.append(card);}}
-function show(next){page=next;document.body.dataset.page=page;closeSidebar();$('chatPage').hidden=page!=='chat';$('panel').hidden=page==='chat';$('pageTitle').textContent=({chat:'Chat',cowork:'Cowork',agents:'Subagents',providers:'Providers',tools:'Tools',loops:'Chat loops',logs:'Logs & traces',memory:'Memory & skills',settings:'Settings'})[page]||page;document.querySelectorAll('button[data-page]').forEach(b=>{b.classList.toggle('selected',b.dataset.page===page);if(b.dataset.page===page)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});if(page==='chat'){welcome();resizeComposer();}else{renderPanel();$('panel').classList.remove('panel-enter');requestAnimationFrame(()=>$('panel').classList.add('panel-enter'));}refresh();}
+function threadMenu(thread){modal(thread.title||'Conversation',root=>{const name=field(root,'Title',thread.title);const del=button('Delete',()=>{},'danger');armButton(del,'Confirm delete?',()=>modalCommand('thread:delete',{id:thread.id}));root.append(button('Rename',()=>modalCommand('thread:rename',{id:thread.id,title:name.value})),button(thread.ephemeral?'Save conversation':'Make isolated',()=>modalCommand('thread:isolate',{sessionId:thread.id,value:!(state.threads?.find(t=>t.id===thread.id)||thread).ephemeral})),del);});}
+function renderStrips(){
+  const todos=state.todos||[],root=$('taskStrip'),signature=JSON.stringify([sessionId,todos]);root.hidden=!todos.length;
+  if(root.dataset.signature!==signature){
+    let details=root.querySelector('details');
+    if(!details){details=el('details');details.append(el('summary'),el('div','task-list'));root.append(details);}
+    if(root.dataset.session!==sessionId)details.open=false;
+    details.querySelector('summary').textContent=`${todos.filter(t=>t.status==='done').length}/${todos.length} tasks completed`;
+    details.querySelector('.task-list').replaceChildren(...todos.map(t=>el('div',null,`${t.status==='done'?'✓':'○'} ${t.text}`)));
+    root.dataset.signature=signature;root.dataset.session=sessionId||'';
+  }
+  const loops=(state.loops||[]).filter(l=>l.state==='running'),strip=$('loopStrip');strip.hidden=!loops.length;
+  if(!strip.children.length)strip.append(button('',()=>show('loops')),button('Stop all',()=>action('loops:stop',{id:'all'}),'danger'));
+  strip.firstElementChild.textContent=`${loops.length} chat loop(s) running`;
+}
+function renderQuestions(){
+  const root=$('questions'),entries=[...(state.pendingPermissions||[]).map(req=>({type:'permission',req})),...(state.questions||[]).map(req=>({type:'question',req}))];
+  for(const entry of entries){const req=entry.req;entry.key=entry.type+':'+req.id;entry.context=req.sessionTitle||state.threads?.find(t=>t.id===req.sessionId)?.title||req.sessionId||'Current conversation';}
+  const signature=JSON.stringify(entries);if(root.dataset.signature===signature)return;root.dataset.signature=signature;
+  const focused=root.contains(document.activeElement)?document.activeElement:null,selection=focused&&typeof focused.selectionStart==='number'?[focused.selectionStart,focused.selectionEnd,focused.selectionDirection]:null;
+  const existing=new Map([...root.children].map(card=>[card.dataset.requestKey,card])),keys=new Set(entries.map(entry=>entry.key));
+  for(const [key,card]of existing)if(!keys.has(key))card.remove();
+  entries.forEach(({type,req,key,context},index)=>{
+    let card=existing.get(key);
+    if(!card){
+      card=el('section','question');card.dataset.requestKey=key;
+      const title=el('strong'),caption=el('small','question-context');title.id='request-title-'+uuid();caption.id=title.id+'-context';
+      card.setAttribute('aria-labelledby',title.id);card.setAttribute('aria-describedby',caption.id);card.append(title,caption);card._title=title;card._context=caption;
+      if(type==='permission'){
+        const args=el('pre');args.tabIndex=0;card._args=args;card.append(args);
+        const remember=el('input');remember.type='checkbox';const label=el('label',null,'Remember this decision');label.prepend(remember);
+        const row=el('div','row');
+        for(const allowed of [true,false])row.append(button(allowed?'Allow':'Deny',()=>{const current=card._request;return action('permission',{id:current.id,allow:allowed,remember:remember.checked,...(current.sessionId?{sessionId:current.sessionId}:{})});},allowed?'primary':'danger'));
+        row.append(label);card.append(row);
+      }else{
+        const form=el('form','row'),options=el('div','row question-options'),input=el('input'),send=el('button','primary','Send');input.type='text';input.required=true;input.placeholder='Or type an answer';input.setAttribute('aria-labelledby',title.id);input.setAttribute('aria-describedby',caption.id);send.type='submit';
+        form.onsubmit=event=>{event.preventDefault();action('ask:answer',{id:card._request.id,text:input.value});};
+        form.append(options,input,send,button('Dismiss',()=>action('ask:answer',{id:card._request.id,text:''})));card.append(form);card._options=options;
+      }
+    }
+    card._request=req;card._title.textContent=type==='permission'?'Allow '+req.name+'?':req.question;card._context.textContent='Conversation: '+context;
+    if(type==='permission'){card._args.textContent=JSON.stringify(req.args||{},null,2);card._args.setAttribute('aria-label','Arguments for '+req.name);}
+    else{const optionsSignature=JSON.stringify(req.options||[]);if(card._options.dataset.signature!==optionsSignature){card._options.replaceChildren(...(req.options||[]).map(option=>button(option,()=>action('ask:answer',{id:card._request.id,text:option}))));card._options.dataset.signature=optionsSignature;}}
+    if(root.children[index]!==card)root.insertBefore(card,root.children[index]||null);
+  });
+  if(focused){const target=focused.isConnected?focused:root.querySelector('button,input,[tabindex="0"]')||$('input');if(document.activeElement!==target)target.focus({preventScroll:true});if(selection&&target===focused)focused.setSelectionRange(...selection);}
+}
+function show(next){page=next;document.body.dataset.page=page;closeSidebar();$('chatPage').hidden=page!=='chat';$('panel').hidden=page==='chat';$('pageTitle').textContent=({chat:'Chat',cowork:'Cowork',agents:'Subagents',providers:'Providers',tools:'Tools',loops:'Chat loops',logs:'Logs & traces',memory:'Memory & skills',settings:'Settings'})[page]||page;document.querySelectorAll('button[data-page]').forEach(b=>{b.classList.toggle('selected',b.dataset.page===page);if(b.dataset.page===page)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});if(page==='chat'){welcome();resizeComposer();}else{renderPanel();$('panel').classList.remove('panel-enter');requestAnimationFrame(()=>$('panel').classList.add('panel-enter'));}refresh();(page==='chat'?$('input'):$('panel')).focus({preventScroll:true});}
+async function openConversation(id){
+  try{await command(id?'thread':'thread:new',id?{id}:{});show('chat');}catch(error){toast(error.message);}
+}
 function heading(root,title,control){const h=el('div','panel-heading');h.append(el('h1',null,title));if(control)h.append(control);root.append(h);}
 function card(root,title){const n=el('section','card');if(title)n.append(el('h3',null,title));root.append(n);return n;}
 let toolFilter='';
 function buildPanel(root){root.replaceChildren();
   if(page==='memory'){heading(root,'Memory & skills');const list=el('div','tool-grid');root.append(list);for(const tool of state.tools||[]){if(tool.name.startsWith('memory_')||tool.name.startsWith('skills_')){const c=card(list,tool.name);c.append(el('p','muted',tool.description),button('Open',()=>runTool(tool.name),'outline'));}}return;}
   if(page==='cowork'){renderCowork(root);}
-  else if(page==='providers'){heading(root,'Providers',button('＋ Add provider',()=>providerEditor(),'outline'));for(const p of state.providers||[]){const c=card(root,p.label),row=el('div','row');row.append(el('span','muted',p.baseUrl||''),el('span','spacer'),button(state.activeProvider===p.id?'Active':'Use',()=>action('provider',{id:p.id})),button('Edit',()=>providerEditor(p)));c.append(row,el('p',null,p.model||'No model selected'),el('small',null,`${p.health?.ok||0} successful · ${p.health?.fail||0} failed`));if(p.health?.lastError)c.append(el('p','danger',p.health.lastError));}}
+  else if(page==='providers'){
+    heading(root,'Providers',button('＋ Add provider',()=>providerEditor(),'outline','provider:add'));
+    for(const p of state.providers||[]){const c=card(root,p.label),row=el('div','row'),use=button(state.activeProvider===p.id?'Active':'Use',()=>action('provider',{id:p.id}),null,'provider:'+p.id+':use');use.setAttribute('aria-pressed',String(state.activeProvider===p.id));row.append(el('span','muted',p.baseUrl||''),el('span','spacer'),use,button('Edit',()=>providerEditor(p),null,'provider:'+p.id+':edit'));c.append(row,el('p',null,p.model||'No model selected'),el('small',null,`${p.health?.ok||0} successful · ${p.health?.fail||0} failed`));if(p.health?.lastError)c.append(el('p','danger',p.health.lastError));}
+  }
   else if(page==='tools'){const filter=el('input');filter.placeholder='Search tools…';filter.setAttribute('aria-label','Search tools');filter.value=toolFilter;filter.oninput=()=>{toolFilter=filter.value;renderToolCards(list);};heading(root,'Tools',filter);const list=el('div','tool-grid');root.append(list);renderToolCards(list);}
   else if(page==='agents'){heading(root,'Subagents');for(const a of state.subagents||[]){const c=card(root,a.label||a.id);c.append(el('p',null,a.task),el('small',null,a.status));if(a.report)c.append(el('pre','json-output',a.report));if(['running','queued'].includes(a.status))c.append(button('Stop',()=>action('subagent:stop',{id:a.id}),'danger'));}if(!state.subagents?.length)root.append(el('p','muted','Dispatch a subagent from chat to see its progress here.'));}
   else if(page==='loops'){heading(root,'Chat loops',button('Start chatbot',()=>runTool('chat_bot',{instructions:'Be friendly, casual, and helpful.'}),'outline'));for(const l of state.loops||[]){const c=card(root,`${l.kind==='bot'?'Chatbot':l.kind} · ${l.channel}`);c.append(el('p',null,`${l.state} · ${l.sent}/${l.count} sent`));if(l.reason)c.append(el('small',null,l.reason));for(const score of Object.values(l.scores||{}))c.append(el('div',null,`${score.name}: ${score.points}`));if(l.state==='running')c.append(button('Stop',()=>action('loops:stop',{id:l.id}),'danger'));}const row=el('div','row');for(const name of ['quiz_bot','auto_chat','auto_reply'])row.append(button(name,()=>runTool(name)));root.append(row);}
@@ -437,12 +501,36 @@ function runTool(name,initial){
     };
   });
 }
-function providerEditor(provider){modal(provider?'Edit provider':'Add provider',root=>{const form=el('div','form-grid');root.append(form);const preset=select(form,'Preset',(state.presets||[]).map(p=>[p.id,p.label]),provider?.preset||'custom');const label=field(form,'Name',provider?.label||''),url=field(form,'Base URL',provider?.baseUrl||''),apiStyle=select(form,'API',['openai','anthropic'],provider?.api||'openai'),auth=select(form,'Authentication',['bearer','api-key','none'],provider?.authStyle||'bearer'),key=field(form,provider?.hasKey?'API key (blank keeps current key)':'API key','','password'),model=field(form,'Model',provider?.model||'');preset.onchange=()=>{const p=state.presets?.find(p=>p.id===preset.value);if(p){label.value=p.label||'';url.value=p.baseUrl||'';apiStyle.value=p.api||'openai';auth.value=p.authStyle||'bearer';}};root.append(button('Save',async()=>{const fields={id:provider?.id,preset:preset.value,label:label.value,baseUrl:url.value,api:apiStyle.value,authStyle:auth.value,model:model.value};if(key.value)fields.apiKey=key.value;try{await command('provider:save',{provider:fields});$('modal').close();}catch(e){toast(e.message);}},'primary'));if(provider){const del=button('Delete',()=>{},'danger');armButton(del,'Confirm delete?',async()=>{await action('provider:remove',{id:provider.id});$('modal').close();});root.append(del);}});}
-function models(){modal('Models',root=>{const provider=select(root,'Provider',(state.providers||[]).map(p=>[p.id,p.label]),state.activeProvider);const search=field(root,'Search models','');const freeLabel=el('label','row'),free=el('input');free.type='checkbox';freeLabel.append(free,document.createTextNode('Free only'));root.append(freeLabel);const list=el('div','model-list');root.append(list);function paint(){list.replaceChildren();const p=state.providers?.find(p=>p.id===provider.value);for(const id of p?.models||[]){if(!id.toLowerCase().includes(search.value.toLowerCase())||(free.checked&&!/free|big-pickle/i.test(id)))continue;list.append(button(id,()=>action('model',{provider:p.id,model:id}),p.model===id?'selected':''));}}provider.onchange=paint;search.oninput=paint;free.onchange=paint;paint();const effort=select(root,'Reasoning effort',['low','medium','high','xhigh','max'],state.settings?.agent?.effort||'high');effort.onchange=()=>action('setting',{path:'agent.effort',value:effort.value});root.append(button('Refresh models',async()=>{await action('models:discover',{provider:provider.value});toast('Model discovery requested. Reopen this picker when complete.')}),button('Manage providers',()=>{$('modal').close();show('providers');}));});}
+function providerEditor(provider){modal(provider?'Edit provider':'Add provider',root=>{const form=el('div','form-grid');root.append(form);const preset=select(form,'Preset',(state.presets||[]).map(p=>[p.id,p.label]),provider?.preset||'custom');const label=field(form,'Name',provider?.label||''),url=field(form,'Base URL',provider?.baseUrl||''),apiStyle=select(form,'API',['openai','anthropic'],provider?.api||'openai'),auth=select(form,'Authentication',['bearer','api-key','none'],provider?.authStyle||'bearer'),key=field(form,provider?.hasKey?'API key (blank keeps current key)':'API key','','password'),model=field(form,'Model',provider?.model||'');preset.onchange=()=>{const p=state.presets?.find(p=>p.id===preset.value);if(p){label.value=p.label||'';url.value=p.baseUrl||'';apiStyle.value=p.api||'openai';auth.value=p.authStyle||'bearer';}};root.append(button('Save',async()=>{const fields={id:provider?.id,preset:preset.value,label:label.value,baseUrl:url.value,api:apiStyle.value,authStyle:auth.value,model:model.value};if(key.value)fields.apiKey=key.value;try{await command('provider:save',{provider:fields});$('modal').close();}catch(e){toast(e.message);}},'primary'));if(provider){const del=button('Delete',()=>{},'danger');armButton(del,'Confirm delete?',()=>modalCommand('provider:remove',{id:provider.id}));root.append(del);}});}
+function models(){modal('Models',root=>{
+  const provider=select(root,'Provider',(state.providers||[]).map(p=>[p.id,p.label]),state.activeProvider),search=field(root,'Search models','');
+  const freeLabel=el('label','row'),free=el('input');free.type='checkbox';freeLabel.append(free,document.createTextNode('Free only'));root.append(freeLabel);
+  const list=el('div','model-list');root.append(list);
+  function paint(){
+    const p=state.providers?.find(p=>p.id===provider.value),ids=(p?.models||[]).filter(id=>id.toLowerCase().includes(search.value.toLowerCase())&&(!free.checked||/free|big-pickle/i.test(id)));
+    const focused=list.contains(document.activeElement)?document.activeElement:null,existing=new Map([...list.children].map(n=>[n.dataset.model,n])),wanted=new Set(ids);
+    for(const [id,node]of existing)if(!wanted.has(id))node.remove();
+    ids.forEach((id,index)=>{const node=existing.get(id)||button(id,()=>action('model',{provider:provider.value,model:id}));node.dataset.model=id;node.classList.toggle('selected',p.model===id);node.setAttribute('aria-pressed',String(p.model===id));if(list.children[index]!==node)list.insertBefore(node,list.children[index]||null);});
+    if(focused&&document.activeElement!==focused)(focused.isConnected?focused:search).focus({preventScroll:true});
+  }
+  provider.onchange=paint;search.oninput=paint;free.onchange=paint;paint();
+  const effort=select(root,'Reasoning effort',['low','medium','high','xhigh','max'],state.settings?.agent?.effort||'high');effort.onchange=()=>action('setting',{path:'agent.effort',value:effort.value});
+  modalRefresh=()=>{paint();if(document.activeElement!==effort)effort.value=state.settings?.agent?.effort||'high';};
+  root.append(button('Refresh models',async()=>{try{await command('models:discover',{provider:provider.value});paint();toast('Model discovery requested. The list updates when ready.');}catch(error){toast(error.message);}}),button('Manage providers',()=>{$('modal').close();show('providers');}));
+});}
 function emptyState(root,symbol,title,detail,control){const n=el('section','empty-state');n.append(icon(symbol),el('h2',null,title),el('p',null,detail));if(control)n.append(control);root.append(n);}
+function panelIsEditing(){
+  if($('modal').open||panelPointerActive)return true;
+  const root=$('panel'),active=document.activeElement;if(root.querySelector('.setting[data-state="saving"]')||(root.contains(active)&&active.matches('input,textarea,select')))return true;
+  const selection=document.getSelection();return !!selection&&!selection.isCollapsed&&(root.contains(selection.anchorNode)||root.contains(selection.focusNode));
+}
+function requestPanelRefresh(){panelRefreshPending=true;flushPanelRefresh();}
+function flushPanelRefresh(){if(panelRefreshPending&&page!=='chat'&&!$('app').hidden&&!panelIsEditing())renderPanel();}
 function renderPanel(){
-  const root=$('panel'),position=root.scrollTop,open=new Set([...root.querySelectorAll('details[open]')].map(d=>d.querySelector('summary')?.textContent));
+  const root=$('panel'),position=root.scrollTop,active=root.contains(document.activeElement)?document.activeElement:null,focusKey=active?.dataset.focusKey,open=new Set([...root.querySelectorAll('details[open]')].map(d=>d.querySelector('summary')?.textContent));panelRefreshPending=false;
+  const errors=new Map([...root.querySelectorAll('.setting[data-state="error"]')].map(row=>{const input=row.querySelector('[data-setting]');return [input.dataset.setting,{value:input.value,checked:input.checked,message:row.querySelector('.save-status').textContent}];}));
   buildPanel(root);
+  for(const input of root.querySelectorAll('[data-setting]')){const error=errors.get(input.dataset.setting);if(error){input.value=error.value;if(input.type==='checkbox')input.checked=error.checked;const row=input.closest('.setting');row.dataset.state='error';row.querySelector('.save-status').textContent=error.message;}}
   if(page==='providers'){
     if(!state.providers?.length)emptyState(root,'providers','Choose who you think with.','Connect an AI provider and choose a model to start working in your game.',button('Add provider',()=>providerEditor(),'primary'));
     else{const c=card(root,'Check your connection');c.append(el('p','muted','Send a small test request to check each provider.'));for(const p of state.providers)c.append(button('Test '+p.label,async()=>{try{const result=await command('provider:test',{id:p.id});toast(result.text+' · '+result.ms+' ms');}catch(e){toast(e.message);}},'outline'));}
@@ -453,6 +541,8 @@ function renderPanel(){
   if(page==='logs'&&!state.logs?.length&&!state.requests?.length)emptyState(root,'logs','A clear view of your activity.','Connection checks, requests, and diagnostic messages will appear here as you work.');
   if(page==='loops'&&!state.loops?.length)emptyState(root,'loop','Keep the conversation going.','Start a chatbot or use the chat tools above. Running loops and their Stop controls appear here.');
   for(const details of root.querySelectorAll('details'))if(open.has(details.querySelector('summary')?.textContent))details.open=true;
+  for(const control of root.querySelectorAll('button,summary'))if(!control.dataset.focusKey){const scope=control.closest('.card,.setup-step,.setup-faq details,.panel-heading,.empty-state')||root,heading=scope.querySelector('h1,h2,summary,h3')?.textContent||scope.className,index=[...scope.querySelectorAll('button,summary')].indexOf(control);control.dataset.focusKey='panel:'+page+':'+heading+':'+index;}
+  if(active){const replacement=focusKey&&[...root.querySelectorAll('[data-focus-key]')].find(n=>n.dataset.focusKey===focusKey);(replacement&&!replacement.disabled?replacement:root).focus({preventScroll:true});}
   root.scrollTop=position;
 }
 
@@ -480,7 +570,7 @@ function renderCowork(root){
   root.append(el('h2','section-heading','Choose how responses arrive'));
   const modes=el('div','runtime-options');
   for(const [value,name,badge,copy]of [['web','Web runtime','LIVE IN YOUR BROWSER','Get responses as they arrive when your provider supports streaming. Roblox still runs your tools and saves the conversation.'],['game','Game runtime','DIRECT FROM ROBLOX','Use the provider connection from your game. The browser shows the response once Roblox receives it.']]){
-    const n=button('',()=>action('runtime',{value}),'runtime-option'+(state.runtime===value?' selected':''));n.setAttribute('aria-pressed',String(state.runtime===value));n.setAttribute('aria-label',name);n.disabled=!connected||busy||state.subagents?.some(a=>a.status==='running')||state.loops?.some(l=>l.state==='running');const head=el('div');head.append(el('strong',null,name),el('span','pill',badge));n.append(head,el('p',null,copy));modes.append(n);
+    const n=button('',()=>action('runtime',{value}),'runtime-option'+(state.runtime===value?' selected':''),'runtime:'+value);n.setAttribute('aria-pressed',String(state.runtime===value));n.setAttribute('aria-label',name);n.disabled=!connected||busy||state.subagents?.some(a=>a.status==='running')||state.loops?.some(l=>l.state==='running');const head=el('div');head.append(el('strong',null,name),el('span','pill',badge));n.append(head,el('p',null,copy));modes.append(n);
   }root.append(modes,el('p','runtime-note','Switch modes when work is idle. Keep both Roblox and the bridge running in either mode.'));
   const usage=card(root,'This session');usage.classList.add('metrics');usage.append(metric(state.usage?.total||0,state.usage?.estimated?'Tokens · estimated':'Tokens'),metric(state.usage?.requests||0,'Requests'),metric('$'+(state.usage?.cost||0).toFixed(4),'Estimated cost'));
   const faq=el('div','setup-faq');
@@ -512,7 +602,7 @@ function renderSettings(root){
   const theme=select(appearance,'Theme',[['system','Follow this computer'],['light','Light'],['dark','Dark'],['game','Match Roblox']],UAI.theme.get());theme.onchange=()=>UAI.theme.set(theme.value);
   appearance.append(el('small','setup-detail','Saved in this browser. Match Roblox uses your game’s palette.'));
   const permissions=card(root,'Permissions'),modes=el('div','segments');
-  for(const [mode,name]of [['readonly','Read only'],['ask','Ask first'],['auto','Auto'],['full','Allow all']]){const n=button(name,()=>action('permission-mode',{mode}),state.permissions?.mode===mode?'selected':'');n.setAttribute('aria-pressed',String(state.permissions?.mode===mode));n.disabled=!connected;modes.append(n);}permissions.append(modes,el('small','setup-detail','Ask first lets you review actions that change your game.'));
+  for(const [mode,name]of [['readonly','Read only'],['ask','Ask first'],['auto','Auto'],['full','Allow all']]){const n=button(name,()=>action('permission-mode',{mode}),state.permissions?.mode===mode?'selected':'','permission:'+mode);n.setAttribute('aria-pressed',String(state.permissions?.mode===mode));n.disabled=!connected;modes.append(n);}permissions.append(modes,el('small','setup-detail','Ask first lets you review actions that change your game.'));
   for(const [section,values]of Object.entries(state.settings||{})){
     const details=el('details','card');details.append(el('summary',null,({ui:'Workspace appearance',agent:'Agent behavior',logs:'Logging',iy:'Infinite Yield',identity:'Provider identity'})[section]||section));
     for(const [key,value]of Object.entries(values)){
@@ -523,7 +613,15 @@ function renderSettings(root){
       else if(SETTING_CHOICES[path]){input=el('select');for(const item of SETTING_CHOICES[path]){const [id,title]=Array.isArray(item)?item:[item,item[0].toUpperCase()+item.slice(1)];const option=el('option',null,title);option.value=id;input.append(option);}input.value=value;}
       else{input=el(key==='customInstructions'?'textarea':'input');if(input.tagName==='INPUT')input.type=typeof value==='number'?'number':'text';input.value=value;if(typeof value==='number'){const [min,max,step]=SETTING_RANGES[path]||[0,10000000,1];input.min=min;input.max=max;input.step=step;}else input.maxLength=16000;}
       input.dataset.setting=path;input.disabled=!connected;
-      input.onchange=async()=>{if(!input.reportValidity())return;status.textContent='Saving…';row.dataset.state='saving';try{await command('setting',{path,value:typeof value==='boolean'?input.checked:typeof value==='number'?Number(input.value):input.value});status.textContent='Saved';row.dataset.state='saved';}catch(e){status.textContent=e.message;row.dataset.state='error';}};
+      let saveVersion=0;
+      input.onchange=async()=>{
+        const version=++saveVersion;
+        if(!input.reportValidity()){status.textContent=input.validationMessage;row.dataset.state='error';return;}
+        status.textContent='Saving…';row.dataset.state='saving';
+        try{await command('setting',{path,value:typeof value==='boolean'?input.checked:typeof value==='number'?Number(input.value):input.value});if(version===saveVersion){status.textContent='Saved';row.dataset.state='saved';}}
+        catch(e){if(version===saveVersion){status.textContent=e.message;row.dataset.state='error';toast(e.message);}}
+        finally{queueMicrotask(flushPanelRefresh);}
+      };
       row.append(input);details.append(row);
     }root.append(details);
   }
@@ -647,7 +745,7 @@ $('send').onclick=submit;$('stop').onclick=async()=>{if(sendPhase==='stopping')r
 $('input').oninput=grow;
 $('input').onpaste=pasteInput;
 $('input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();submit();}};
-$('newThread').onclick=$('newConversation').onclick=()=>action('thread:new');$('modelButton').onclick=models;
+$('newThread').onclick=$('newConversation').onclick=()=>openConversation();$('modelButton').onclick=models;
 $('attach').onclick=()=>$('fileInput').click();$('fileInput').onchange=attachFiles;
 $('attachPictures').onclick=()=>{if(window.UAI&&UAI.pictures)UAI.pictures.openPicker();};
 $('themeToggle').onclick=()=>{if(window.UAI&&UAI.theme)UAI.theme.toggle();};
@@ -671,6 +769,14 @@ document.addEventListener('keydown',e=>{
 $('closeSidebar').onclick=()=>closeSidebar(true);
 $('searchThreads').onclick=()=>{$('threadSearch').hidden=!$('threadSearch').hidden;$('searchThreads').setAttribute('aria-expanded',String(!$('threadSearch').hidden));if(!$('threadSearch').hidden)$('threadSearch').focus();};
 $('threadSearch').oninput=renderThreads;document.querySelectorAll('button[data-page]').forEach(b=>b.onclick=()=>show(b.dataset.page));
+$('panel').addEventListener('focusout',()=>queueMicrotask(flushPanelRefresh));
+$('panel').addEventListener('pointerdown',()=>{panelPointerActive=true;clearTimeout(panelPointerTimer);},true);
+const releasePanelPointer=()=>{panelPointerActive=false;clearTimeout(panelPointerTimer);flushPanelRefresh();};
+document.addEventListener('pointerup',()=>{if(panelPointerActive)panelPointerTimer=setTimeout(releasePanelPointer,400);});
+document.addEventListener('pointercancel',()=>{if(panelPointerActive)panelPointerTimer=setTimeout(releasePanelPointer,0);});
+document.addEventListener('click',()=>{if(panelPointerActive)queueMicrotask(releasePanelPointer);});
+window.addEventListener('blur',releasePanelPointer);
+document.addEventListener('selectionchange',()=>queueMicrotask(flushPanelRefresh));
 $('latest').onclick=()=>{$('transcript').scrollTop=$('transcript').scrollHeight;};$('transcript').onscroll=()=>$('latest').hidden=stick();
 $('exportChat').onclick=()=>{
   const transcript=events.filter(e=>['user','assistant:text'].includes(e.kind)).map(e=>`### ${e.kind==='user'?'You':'Assistant'}\n\n${e.text}\n`).join('\n');
@@ -697,9 +803,9 @@ document.addEventListener('uai:theme',themeChanged);themeChanged();
 window.addEventListener('resize',()=>{syncSidebar();resizeComposer();});syncSidebar();
 window.addEventListener('pagehide',()=>{saveDraft();persistDrafts();});
 function showGate(reason=''){
-  saveDraft();persistDrafts();stream?.close();clearTimeout(connectionRetry);closeSidebar();
+  saveDraft();persistDrafts();stream?.close();clearTimeout(connectionRetry);closeSidebar();if($('modal').open)$('modal').close();
   connected=false;link='disconnected';$('app').hidden=true;$('gate').hidden=false;$('gate-error').textContent=reason;
-  $('gate-connect').disabled=false;refresh();
+  $('gate-connect').disabled=false;refresh();$('gate-token').focus({preventScroll:true});
 }
 async function checkConnection(){
   try{await api('/hello');}catch(error){if(error.status===401)return;}
@@ -715,7 +821,7 @@ async function enter(){
   instance=hello.instance;connected=!!hello.connected;link='online';
   UAI.pictures.setToken(token);await UAI.pictures.configure(hello);
   try{sessionStorage.setItem('uai.token',token);sessionStorage.setItem('uai.instance',instance);localStorage.removeItem('uai.token');}catch{}
-  $('gate').hidden=true;$('gate-error').textContent='';$('gate-token').value='';$('app').hidden=false;refresh();welcome();syncSidebar();
+  $('gate').hidden=true;$('gate-error').textContent='';$('gate-token').value='';$('app').hidden=false;refresh();welcome();syncSidebar();(page==='chat'?$('input'):$('panel')).focus({preventScroll:true});
   stream?.close();stream=new EventSource('/api/stream?token='+encodeURIComponent(token));
   stream.onopen=()=>{clearTimeout(connectionRetry);link='online';refresh();};
   stream.onmessage=e=>{try{apply(JSON.parse(e.data));}catch(err){console.error(err);toast('Could not render bridge update: '+err.message);}};

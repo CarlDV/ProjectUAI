@@ -19,6 +19,30 @@ return function(env)
 	local CATEGORY_ORDER = { "added", "improved", "fixed" }
 	local ENTRIES = {
 		{
+			version = "1.9.0",
+			revision = "2026-09-26",
+			date = "September 26, 2026",
+			title = "Cowork browser workspace",
+			highlights = "A refreshed browser workspace with verified bridge installation, live responses, picture previews and persistent drafts. Small screens and keyboard controls stay usable during live updates.",
+			sections = {
+				{ category = "added", label = "Browser workspace", items = {
+					"Cowork provides responsive navigation, a step-by-step setup guide and system, light, dark or Match Roblox themes.",
+					"Attach PNG, JPEG and WebP previews with upload progress, cancellation, retry and reload recovery. The AI receives text markers only; describe what matters in the image.",
+				} },
+				{ category = "improved", label = "Installation and conversations", items = {
+					"Executor downloads use .txt files. Node verifies a pinned package and restores filenames before starting; a failed download preserves the previous launcher.",
+					"Live replies retain stable Markdown blocks and reconcile with the saved response. Provider failures, replay gaps and uncertain delivery have visible recovery controls.",
+					"Full text and code drafts persist per conversation, including attachments and edits made while a message is being delivered.",
+				} },
+				{ category = "fixed", label = "Layout and interaction", items = {
+					"Task lists and attached drafts scroll within short screens. Long URLs, model names and dialog titles wrap, and Jump to latest stays above the composer.",
+					"Pending answers, remembered permission choices, open tasks and keyboard focus survive updates. Permission requests identify their conversation and selected provider/model controls stay current.",
+					"Dialog errors remain visible, expired tokens return focus to connection setup, and keyboard navigation reaches the selected conversation.",
+					"Light-theme text and code-button hover states have readable contrast. Save failures use error colors, and high-contrast mode retains input focus and the Stop symbol.",
+				} },
+			},
+		},
+		{
 			version = "1.8.0",
 			revision = "2026-09-25",
 			date = "September 25, 2026",

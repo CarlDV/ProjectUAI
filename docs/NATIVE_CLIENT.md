@@ -1,6 +1,6 @@
 # Native client features and limits
 
-Current source of truth for native release **1.8.0**, September 25, 2026.
+Current native feature contract for **1.9.0**, September 26, 2026.
 Internal APIs are described in
 [SPEC.md](../SPEC.md); verification and native-device scenarios are in
 [CODE_WORKSPACE_TESTING.md](CODE_WORKSPACE_TESTING.md).

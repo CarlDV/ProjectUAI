@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased — Cowork bridge
+## 1.9.0 — September 26, 2026
+
+Cowork browser workspace, executor installation, and UI reliability.
 
 - Rework the browser workspace with quieter surfaces, responsive navigation,
   clearer setup, local themes, accessible controls, and restrained motion.
@@ -16,6 +18,16 @@
   delivery recovery when an acknowledgement is lost.
 - Organize bridge tests under `bridge/tests/`; replace obsolete plans and handoff
   logs with the [bridge guide](bridge/README.md) and lasting native documentation.
+- Keep the composer and task controls reachable on short screens, wrap long
+  provider URLs and dialog titles, and anchor Jump to latest above the composer.
+- Preserve pending answers, permission choices, open tasks, and keyboard focus
+  during live updates. Show each permission request's conversation and refresh
+  provider, model, and permission selections without discarding active edits.
+- Keep errors inside their dialog, recover token entry after authentication
+  failures, and correct light-theme contrast, code hover states, and high-contrast
+  focus and Stop controls.
+- Number this Cowork release consistently in the changelog, in-game notes,
+  client bundle, and generated website.
 
 ## 1.8.0 — September 25, 2026
 

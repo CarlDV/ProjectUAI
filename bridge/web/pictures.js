@@ -120,14 +120,26 @@
     }
 
     function render() {
+      const focused = deps.tray.contains(document.activeElement) ? document.activeElement : null;
+      const oldCard = focused?.closest('.picture-card'), oldCards = [...deps.tray.querySelectorAll('.picture-card')];
+      const focusedId = oldCard?.dataset.pictureId, focusedIndex = oldCards.indexOf(oldCard), retryFocused = focused?.classList.contains('picture-retry');
+      const scroll = deps.tray.querySelector('.picture-cards')?.scrollLeft || 0;
+      function restoreFocus() {
+        if (!focused) return;
+        const cards = [...deps.tray.querySelectorAll('.picture-card')];
+        const card = cards.find(n => n.dataset.pictureId === focusedId) || cards[Math.min(Math.max(0, focusedIndex), cards.length - 1)];
+        const control = (retryFocused && card?.querySelector('.picture-retry')) || card?.querySelector('.picture-remove');
+        const picker = deps.pickerButton && !deps.pickerButton.hidden ? deps.pickerButton : deps.dropZone?.querySelector('textarea');
+        (control || picker)?.focus({ preventScroll: true });
+      }
       const list = drafts(); deps.tray.replaceChildren(); deps.tray.hidden = list.length === 0;
-      if (!list.length) return;
+      if (!list.length) { restoreFocus(); return; }
       const summary = el('div', 'picture-summary');
       summary.append(el('strong', '', list.length + (list.length === 1 ? ' picture' : ' pictures') + ' · ' + fmtBytes(list.reduce((n, r) => n + r.bytes, 0))),
         el('span', '', 'Preview only. Describe the image for the AI.'));
       const cards = el('div', 'picture-cards'); deps.tray.append(summary, cards);
       for (const rec of list) {
-        const card = el('div', 'picture-card'); card.dataset.status = rec.status;
+        const card = el('div', 'picture-card'); card.dataset.status = rec.status; card.dataset.pictureId = rec.id;
         if (rec.url) { const img = el('img', 'picture-thumb'); img.src = rec.url; img.alt = rec.name; card.append(img); }
         const info = el('div', 'picture-meta');
         const status = rec.status === 'staged' ? 'Ready' : rec.status === 'expired' ? 'Expired · attach again' : rec.status === 'failed' ? rec.error || 'Upload failed' : rec.status === 'reading' ? 'Reading…' : 'Uploading…';
@@ -141,6 +153,7 @@
         const dismiss = el('button', 'picture-remove', '×'); dismiss.type = 'button'; dismiss.setAttribute('aria-label', 'Remove ' + rec.name);
         dismiss.onclick = () => { remove(rec); render(); notify(); }; card.append(info, dismiss); cards.append(card);
       }
+      cards.scrollLeft = scroll; restoreFocus();
     }
 
     function decorate(commandId) {

@@ -106,8 +106,11 @@ node bridge/tests/run.js --browser-only
 
 The browser suites cover navigation, forms, streaming, picture ownership/replay,
 upload cancellation, receipt races, full drafts, themes, drawer focus, token
-recovery, CSP, reduced motion, and 320–1440px layouts. Inspect the saved screenshots
-as well as checking geometry. These fixtures do not replace a live executor check.
+recovery, CSP, reduced motion, and 320–1440px layouts. The UI audit suite also checks
+short screens with full drafts, long task lists and model names, live question and
+selection updates, dialog errors, keyboard focus, contrast, and forced colors.
+Inspect the saved screenshots as well as checking geometry. These fixtures do not
+replace a live executor check. See the [UI audit](UI_AUDIT.md) for the findings.
 
 Protocol remains version 2. `/api/hello` advertises optional picture and normalized
 stream capabilities. `--legacy` disables pictures and uses compatibility delta

@@ -13,5 +13,5 @@ function run(files, test = false) {
 }
 if (!args.includes('--browser-only')) run(fs.readdirSync(__dirname).filter(name => name.endsWith('.test.js')).sort().map(name => path.join(__dirname, name)), true);
 if (args.includes('--browser') || args.includes('--browser-only')) {
-  for (const name of ['browser.js', 'browser-workflows.js', 'browser-revamp.js']) run([path.join(__dirname, name)]);
+  for (const name of ['browser.js', 'browser-workflows.js', 'browser-revamp.js', 'browser-ui-audit.js']) run([path.join(__dirname, name)]);
 }

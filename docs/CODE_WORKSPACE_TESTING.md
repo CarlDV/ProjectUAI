@@ -1,6 +1,6 @@
 # Code workspace: native testing guide
 
-Updated September 25, 2026 for native release 1.8.0. Use synthetic workspaces
+Current testing guide for release 1.9.0, September 26, 2026. Use synthetic workspaces
 and an isolated fixture place; do not touch a user's live Roblox session or private
 usage/accounting files. Current features and limits are in
 [NATIVE_CLIENT.md](NATIVE_CLIENT.md), with internal contracts in [SPEC.md](../SPEC.md).
