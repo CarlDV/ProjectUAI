@@ -33,10 +33,8 @@ return function(env)
 
 		P.sectionHeader(scroll.instance, {
 			title = "Cowork",
-			description = "Share this conversation with a browser on the same machine. "
-				.. "Run bridge/server.js, paste the token it prints, and whoever opens the page "
-				.. "joins the conversation that is already open here -- a turn begun in one place "
-				.. "continues in the other, and a permission prompt can be answered from either.",
+			description = "Give your conversation more room in the browser. Follow the steps below on this computer. "
+				.. "Messages, tools, and permissions stay connected to this Roblox session.",
 			layoutOrder = 1,
 		})
 
@@ -102,18 +100,18 @@ return function(env)
 			local shared = sessions.current()
 			if not status.running then
 				dot.BackgroundColor3 = theme.color.textTertiary
-				statusText.Text = "Off. Nothing is listening and nothing is being polled."
+				statusText.Text = "Not connected. Start the bridge, paste its token, then turn Enabled on."
 				detail.Text = string.format("%s\nwould share: %s", status.url, shared.title)
 				return
 			end
 			if status.online then
 				dot.BackgroundColor3 = theme.color.success
-				statusText.Text = "Connected. Open the link the bridge printed in a browser."
+				statusText.Text = "Connected. Open the browser link and start chatting."
 				detail.Text = string.format("%s\nsharing: %s\nqueued: %d", status.url, shared.title, status.queued or 0)
 				return
 			end
 			dot.BackgroundColor3 = theme.color.warn
-			statusText.Text = "Polling, but nothing answered yet. Is bridge/server.js running?"
+			statusText.Text = "Waiting for the bridge. Keep its terminal open and check the token and port."
 			detail.Text = string.format("%s\n%s", status.url, tostring(status.error or "no answer yet"))
 		end
 
@@ -132,7 +130,7 @@ return function(env)
 		})
 		P.text(switchText, { text = "Enabled", role = "small" })
 		P.text(switchText, {
-			text = "Off until you turn it on: it is a second way in to an agent that can run code.",
+			text = "Turn on after starting the bridge and pasting its token below.",
 			role = "caption",
 			color = theme.color.textTertiary,
 			wrap = true,
@@ -162,11 +160,10 @@ return function(env)
 		-- label above the token field, that field, the hint and the button row were sorted
 		-- by whatever the tie-break happened to produce -- which is a card whose two
 		-- labels can end up over the wrong two fields.
-		local settings = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
 		local installerCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
-		P.text(installerCard, { text = "Bridge files", role = "label", layoutOrder = 1 })
+		P.text(installerCard, { text = "1. Download and start", role = "label", layoutOrder = 1 })
 		local installStatus = P.text(installerCard, { name = "BridgeDownloadStatus",
-			text = "Download the bridge from GitHub into UAI/bridge in your executor workspace. Requires Node.js 18+ to run.",
+			text = "Install Node.js 18+ on this computer. Download the files, then open a terminal in your executor workspace (the folder containing UAI). Run: node UAI/bridge/start.txt",
 			role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
 		P.button(installerCard, { name = "DownloadBridge", text = "Download bridge files", icon = "folder",
 			variant = "secondary", size = "sm", fill = true, layoutOrder = 3,
@@ -184,9 +181,20 @@ return function(env)
 					overlay.toast(ok and "Bridge files downloaded" or message, ok and "good" or "warn", 4)
 				end)
 			end })
+		if caps.clipboard then
+			P.button(installerCard, { name = "CopyBridgeStart", text = "Copy start command", variant = "ghost", size = "sm", fill = true, layoutOrder = 4,
+				onClick = function()
+					local ok = pcall(caps.fn.clipboard, "node " .. env.require("runtime/fsx").root .. "/bridge/start.txt")
+					overlay.toast(ok and "Start command copied" or "Could not reach the clipboard", ok and "good" or "warn", 2)
+				end })
+		end
+		P.text(installerCard, { text = "No npm install or file renaming needed. Keep the terminal and Roblox open. From a Git checkout, run node bridge/server.js instead.",
+			role = "caption", wrap = true, auto = "Y", layoutOrder = 5 })
+		local settings = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
+		P.text(settings, { text = "2. Connect Roblox", role = "label", layoutOrder = 0 })
 		local runtimeCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
-		P.text(runtimeCard, { text = "Inference runtime", role = "label", layoutOrder = 1 })
-		P.text(runtimeCard, { text = "Web mode runs provider connections in Node and streams to the browser. Tools, memory, permissions, and subagents stay in this Roblox client.",
+		P.text(runtimeCard, { text = "3. Open the browser link", role = "label", layoutOrder = 1 })
+		P.text(runtimeCard, { text = "Open the link printed in the terminal. Choose a provider and model, then send a message. Web shows live responses when supported; Game shows replies after Roblox receives them. Tools and permissions stay in Roblox.",
 			role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
 		C.segmented(runtimeCard, { options = { { label = "Game", value = "game" }, { label = "Web", value = "web" } },
 			value = config.get("bridge.runtime", "game"), layoutOrder = 3, onChange = function(value)
@@ -212,12 +220,12 @@ return function(env)
 		P.field(settings, {
 			name = "BridgeToken",
 			text = tostring(config.get("bridge.token", "")),
-			placeholder = "paste from the bridge console",
+			placeholder = "paste the Token from your terminal",
 			layoutOrder = 4,
 			onBlur = function(text) config.set("bridge.token", util.trim(text)) end,
 		})
 		local tokenHint = P.text(settings, {
-			text = "The token is regenerated every time bridge/server.js starts, so a stale one left here grants nothing.",
+			text = "Match the port printed in the terminal, paste its Token, then turn Enabled on above. After restarting the bridge, paste the new token and reopen its browser link.",
 			role = "caption",
 			color = theme.color.textTertiary,
 			wrap = true,

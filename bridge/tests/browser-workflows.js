@@ -13,7 +13,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   await once(reserve, 'listening');
   const port = reserve.address().port;
   await new Promise(resolve => reserve.close(resolve));
-  const server = spawn(process.execPath, ['bridge/server.js', '--port', String(port)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const server = spawn(process.execPath, ['bridge/server.js', '--port', String(port)], { cwd: require('./helpers/bridge').root, stdio: ['ignore', 'pipe', 'pipe'] });
   let browser;
   try {
     const token = await new Promise((resolve, reject) => {
@@ -122,7 +122,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await parameter('enabled').evaluate(node => node.tagName), 'SELECT');
     await parameter('items').fill('{"incorrect":"object"}');
     await page.getByRole('button', { name: 'Run tool', exact: true }).click();
-    assert.match(await page.locator('.form-error').textContent(), /JSON array/);
+    assert.match(await page.locator('#modal .form-error').textContent(), /JSON array/);
     assert.equal(commands.length, 1);
     await parameter('items').fill('[1, 2]');
     await parameter('enabled').selectOption('false');
@@ -153,6 +153,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     await page.locator('#input').fill('New draft');
     await page.locator('#input').fill('Draft prompt');
     receipts.set(sent.commandId, { ok: true });
+    await post({ events: [{ kind: 'turn:start', sessionId: 's1' }, { kind: 'turn:end', sessionId: 's1' }] });
     await page.waitForFunction(() => !document.querySelector('#send').disabled);
     assert.equal(await page.locator('#input').inputValue(), 'Draft prompt');
     assert.equal(await page.locator('#attachments button').count(), 1);

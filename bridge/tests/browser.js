@@ -9,7 +9,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 (async()=>{
   const reserve=http.createServer();reserve.listen(0,'127.0.0.1');await once(reserve,'listening');const port=reserve.address().port;await new Promise(r=>reserve.close(r));
-  const server=spawn(process.execPath,['bridge/server.js','--port',String(port)],{stdio:['ignore','pipe','pipe']});
+  const server=spawn(process.execPath,['bridge/server.js','--port',String(port)],{cwd:require('./helpers/bridge').root,stdio:['ignore','pipe','pipe']});
   let browser,upstream;
   try{
     let output='';const token=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Bridge did not start')),5000);server.stdout.on('data',c=>{output+=c;const m=output.match(/Token\s+([a-f0-9]{64})/);if(m){clearTimeout(timer);resolve(m[1]);}});});
@@ -50,10 +50,10 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
     await page.waitForFunction(()=>document.querySelector('#input').value==='');
     await post('/api/agent/events',{batchId:'switch-back-browser',snapshot:[],sessionId:'s1',state});
     await page.waitForFunction(()=>document.querySelector('#input').value==='keep draft on switch');
-    if(process.env.UAI_SCREENSHOTS)await page.screenshot({path:process.env.UAI_SCREENSHOTS+'/bridge-desktop.png'});
+    if(process.env.UAI_SCREENSHOTS)await page.screenshot({path:process.env.UAI_SCREENSHOTS+'/bridge-desktop.png',animations:'disabled'});
     await page.setViewportSize({width:390,height:844});await page.locator('#sidebarToggle').click();await page.locator('#sidebar').waitFor({state:'visible'});await page.locator('#closeSidebar').click();
     const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);assert.equal(overflow,false);
-    if(process.env.UAI_SCREENSHOTS)await page.screenshot({path:process.env.UAI_SCREENSHOTS+'/bridge-mobile.png'});
+    if(process.env.UAI_SCREENSHOTS)await page.screenshot({path:process.env.UAI_SCREENSHOTS+'/bridge-mobile.png',animations:'disabled'});
     assert.deepEqual(errors,[]);console.log('Browser checks passed: navigation, model picker, real streaming, reload reconciliation, drafts, mobile bounds');
   }finally{await browser?.close();upstream?.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

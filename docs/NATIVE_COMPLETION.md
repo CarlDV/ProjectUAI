@@ -1,13 +1,15 @@
 # Native improvement implementation report — 1.8.0
 
-Scope: [PLAN.md](../PLAN.md), native Roblox/Luau only. Changes remain local and
-uncommitted. Current features and limits live in [NATIVE_CLIENT.md](NATIVE_CLIENT.md).
+This report records the September 25 native Roblox/Luau release. Current features
+and limits live in [NATIVE_CLIENT.md](NATIVE_CLIENT.md).
 Verification evidence is recorded by `tools/test_native.js` under ignored
 `refer/native-verification/`; an incomplete report is not a passing result.
-The September 25 release is numbered **1.8.0**. Its chat and provider follow-ups
-and current release validation are tracked in
-[chat stability](../CHANGES-2026-09-25-chat-stability.md) and
-[provider compatibility](../CHANGES-2026-09-25-provider-compatibility.md).
+The September 25 release is numbered **1.8.0**. Provider behavior is documented in
+[provider compatibility](PROVIDER_COMPATIBILITY.md), and native scenarios in
+[the testing guide](CODE_WORKSPACE_TESTING.md). Superseded plans and handoff logs
+have been removed. The later browser work is documented in the
+[bridge guide](../bridge/README.md); historical native results below do not
+validate subsequent changes.
 
 The September 25 correction pass also repairs the token context inspector, rejects
 source navigation after a view changes, preserves durable transcripts during
@@ -44,7 +46,7 @@ version so existing users see the unread marker again.
 | Phase 5: resident conversations | Newest 64 saved conversations restore by activity; eviction preserves older disk history. The 64-thread memory target excludes busy/preparing/unsaved/ephemeral conversations, which can exceed it. A hard bound without discarding unsaved data and an archive browser are unsupported. |
 | Phase 5: transport and parsing | Bounded HTTP/socket workers and responses, shared terminal deadlines, protected retry callbacks, bounded SSE/tool arguments, safe malformed-stream errors. No resend/fallback after unknown outcome; no timed-out replay retry. |
 | Phase 6: tests and build hygiene | Main native mode, all focused suites, improvement/performance regressions, manifest/freshness/icon/catalog checks and official Luau syntax compilation. Synthetic coverage reports replace unsupported line/host coverage claims; strict Roblox type analysis remains unsupported. |
-| Phase 7: current documentation | README/SPEC/native CHANGELOG and in-game What's new updated for 1.8.0; native contract/testing/report consolidated. Revised notes restore the unread marker. Prior plans/handoffs marked historical. No commit or remote publication performed. |
+| Phase 7: current documentation | README/SPEC/native CHANGELOG and in-game What's new updated for 1.8.0; native contract/testing/report consolidated. Revised notes restore the unread marker. Superseded plans and handoffs have since been retired. |
 | Requested token context repair | Explicit category widths, shared pressure/breakdown, prepared prompt/schema estimates, dispatch-time calibration per provider/endpoint/model, finite limits, over-budget display and coalesced lifecycle-safe updates. |
 | Requested reply/progress/provider fixes | Remove the executor ceiling while retaining configured/model limits; immediate buffered replies, bounded real-frame previews, single final rendering, progress guidance and horizontal Add centering. Buffered HTTP and provider-internal reasoning cannot deliver unseen tokens. |
 
@@ -138,10 +140,6 @@ continue to provide their existing contracts; listed tests also exercise them.
 | `docs/NATIVE_CLIENT.md` | Current feature/limitation reference. |
 | `docs/CODE_WORKSPACE_TESTING.md` | Exact native command, prerequisites, suite coverage and host scenarios. |
 | `docs/NATIVE_COMPLETION.md` | This implementation/file/requirements report. |
-| `PLAN.md`, `completions.md` | Current task status and verification handoff. |
-| `CODE_WORKSPACE_PLAN.md` | Historical banner; superseded guidance retained as context. |
-| `continuation-code-workspace-2026-09-23.md` | Historical checkpoint banner. |
-| `plan-2026-09-23.md` | Historical brief banner. |
 
 ## Verification, limitations and follow-ups
 
@@ -149,9 +147,16 @@ The single command is `node tools/test_native.js`; the exact stage order and sui
 discovery are documented in the testing guide. Run it only after all edits. A failed
 stage stops the sequence and requires implementation fixes followed by a full
 restart. Final scope, secret, whitespace, comments and artifact review follow a
-successful sequence; the current 1.8.0 outcome is recorded in the provider
-investigation log and machine-readable report. The runs below are earlier
-checkpoints, not evidence for the final release revision.
+successful sequence. The final September 25 run started at
+`2026-09-25T12:58:39Z`, completed with exit 0 in approximately 760 seconds, and
+produced build `1.8.0-d103d8c75bbe8744`: **44 stages, 33 focused suites, no failures**.
+It covered 174 parsed files/173 modules, 129 main scenarios/1,867 checks, provider
+compatibility (36 cases/610 assertions), transport (17/512), provider editor
+(14/118), chat stability (16/304), 313 chat regression checks, 67 context checks,
+42 native improvement cases/154 assertions, and five performance cases/13
+assertions. Bundle/catalog freshness, mock self-tests and official Luau compilation
+also passed. The machine-readable report was saved under
+`refer/native-verification/`. The following runs are older checkpoints.
 
 The complete run started at `2026-09-25T02:54:12.059Z` passed all 40 stages and
 29 focused suites in about 604 seconds. Recorded results included 129 main

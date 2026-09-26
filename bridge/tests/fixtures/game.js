@@ -22,6 +22,7 @@ const snapshot = [
 ];
 
 const state = {
+  protocol: 2, runtime: 'game', sessionId: 't1',
   place: { id: 275, name: 'Arsenal' },
   caps: { executor: 'Synapse Z', http: 'executor', summary: 'Synapse Z | transport executor | ua yes | fs yes | exec yes' },
   agent: { status: 'Ready', busy: false, provider: 'OpenRouter', model: 'anthropic/claude-sonnet-4.5' },

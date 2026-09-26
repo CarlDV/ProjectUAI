@@ -4038,7 +4038,7 @@ scenario("cowork is the web bridge rather than a slogan", function()
 	harness.settle(1)
 	local panel = harness.byName("Cowork")
 	truthy("the cowork panel builds", panel ~= nil)
-	contains("and says the bridge is off", harness.textOf(panel), "Off.")
+	contains("and explains how to connect", harness.textOf(panel), "Not connected.")
 
 	handle.config.set("bridge.token", ("c"):rep(64))
 	handle.config.set("bridge.enabled", true)

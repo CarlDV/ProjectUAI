@@ -205,7 +205,7 @@ node tools/test_native.js
 The full native command rebuilds the bundle, checks generated artifacts, runs the
 main/focused suites and performance contracts, then compiles with official Luau.
 Results and any remaining limitations are recorded in
-[the investigation log](../CHANGES-2026-09-25-provider-compatibility.md).
+[the native release report](NATIVE_COMPLETION.md).
 
 Published protocol references consulted September 25, 2026:
 

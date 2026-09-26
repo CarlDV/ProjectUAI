@@ -569,76 +569,53 @@ Nothing on disk until then, and only three things after: `config.json`,
 A conversation can be marked isolated from the composer, which keeps it out of the
 first two entirely.
 
-## Cowork: browser UI and web inference
+## Cowork: your browser workspace
 
-A Roblox client cannot accept a connection, so it cannot be talked to directly. A
-small local process sits in between and both sides dial out to it: the browser
-holds an SSE stream, the client long-polls for whatever you typed.
+Cowork gives your Roblox conversation more room in the browser. Keep Roblox and
+its local bridge running on the same computer. **Node.js 18+** is required; there
+are no production npm dependencies.
 
-```bash
-node bridge/server.js
-```
+1. In Roblox, open **UAI → Cowork → Download bridge files**. Open a terminal in
+   your executor workspace (the folder containing `UAI`) and run:
 
-You can also use **Roblox → Cowork → Download bridge files**. It downloads the
-entire GitHub `bridge/` folder at one pinned revision into **`UAI/bridge`** inside
-your executor's workspace, preserving its subfolders. Open a terminal in that
-workspace and run `node UAI/bridge/server.js`. Downloads report progress and
-verify saved files; your executor must support HTTP, file I/O, and folder creation.
+   ```powershell
+   node UAI/bridge/start.txt
+   ```
 
-It prints a link with a one-time token in the fragment. Open it, then paste the
-same token into **Roblox → Cowork → Token** and enable the bridge. The browser
-uses the Roblox client's warm palette, sidebar, conversation list, compact
-composer, prompt starters, and model picker. It follows the active conversation.
+   From a Git checkout, run `node bridge/server.js` from the repository folder.
+2. Paste the terminal's **Token** into **UAI → Cowork**, match the printed
+   **Port**, and turn **Enabled** on.
+3. Open the terminal's browser link, choose a provider and model, and send a
+   message. Keep both Roblox and the terminal open.
 
-Select **Cowork → Web · real streaming** in the browser (or **Inference runtime →
-Web** in Roblox) while work is idle. Node now owns provider HTTP connections and
-streams OpenAI-compatible or Anthropic SSE responses to the browser as they arrive.
-Roblox submits once, then retrieves the result with short authenticated requests;
-its executor's 30–60 second request limit no longer bounds model generation.
-The provider deadline defaults to 180 seconds and is configurable up to one day.
-Provider/proxy disconnects and truncated streams are reported as failures.
+The installer saves `.txt` files so executors that block executable extensions
+can download them. Node verifies the package and restores its real filenames.
+No manual renaming is needed. A failed download preserves the previous launcher.
+After restarting the bridge, use its new token and browser link.
 
-The existing Roblox agent loop remains authoritative in both modes. Tools,
-permission rules, hooks, context compaction, provider fallback/key rotation,
-subagents, memory, skills, accounting, and background chatbots retain their existing
-behavior. Roblox must stay connected and running to execute tools and advance a
-turn; this is not a standalone Node reimplementation of the agent. Web mode also
-routes subagent and chatbot inference through Node, without posting those private
-streams into the main transcript.
+Choose **Web runtime** in Cowork for live responses when your provider supports
+streaming. **Game runtime** uses the provider connection in Roblox. Switch while
+work is idle. The provider deadline defaults to 180 seconds and can be changed
+in Cowork's advanced settings.
 
-Browser controls include provider creation/editing/testing, model discovery,
-search and effort, conversation switching/renaming/deletion/isolation, attachments,
-per-thread drafts, tool schemas and execution, tool-group and permission controls,
-pending approvals and `ask_user` answers, subagent stops, chat-loop status/stops,
-memory/skill tools, settings, logs, usage, and configuration/transcript export.
-Full configuration exports contain API keys; ordinary state updates never include
-provider credentials. The bridge holds request credentials only in memory.
+The browser includes conversations, provider/model controls, code attachments,
+permissions, tool forms, subagents, chat loops, memory, logs, exports and settings.
+Drafts are saved per conversation using asynchronous browser storage. System,
+light, dark, and Match Roblox themes work on desktop and small screens.
 
-Commands carry IDs and stay queued until acknowledged. The client remembers
-handled IDs, and inference submissions reuse the same ID after a lost response.
-Browser SSE reconnects use event cursors; final replies reconcile with streamed
-previews instead of appearing twice. A lost relay job is terminal and is not
-silently restarted. Refreshing the browser does not stop a turn; stopping the
-bridge/client or a turn cancels its pending provider request. Results are retained
-for five minutes, with ID tombstones preventing expired submissions from rerunning.
+PNG, JPEG and WebP pictures can be pasted, dropped, or attached as **local previews**.
+The AI receives a `[PICTURE]` text marker, not image bytes; describe the details
+that matter. Text and code attachments can be read by the agent.
 
-The game connection uses continuously renewed long-polls: a waiting poll returns
-as soon as a command arrives. It does not hammer localhost with empty requests.
-Run the bridge on the same computer as the Roblox executor; it binds loopback.
-Node 18 or newer is required. There are no production npm dependencies.
+Roblox remains in control of tools, permissions, memory, accounting, and saved
+conversation history. It must stay connected to advance a turn. Refreshing the
+browser reconnects to the conversation; use **Stop** to cancel work. Delivery
+receipts and streamed replies reconcile without creating duplicate messages.
 
-```bash
-node --test bridge/test-runtime.js
-luajit test/web_runtime.lua
-luajit test/bridge_install.lua
-# Optional browser checks, with Playwright installed:
-node bridge/test-browser.js
-node bridge/test-browser-workflows.js
-```
-
-Loopback only, token-gated, and Origin-checked. Whoever reaches it drives an agent
-that can run code on your machine, so it stays off until you turn it on and the
-token is regenerated on every start.
+The bridge binds to loopback, requires a token, checks browser origins, and loads
+local UI assets without a CDN. Full configuration exports include API keys;
+ordinary browser state does not. See the [bridge guide](bridge/README.md) for
+troubleshooting, limits, architecture, and organized Node/Lua/browser tests.
 
 ## Embedding
 

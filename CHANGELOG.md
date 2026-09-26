@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — Cowork bridge
+
+- Rework the browser workspace with quieter surfaces, responsive navigation,
+  clearer setup, local themes, accessible controls, and restrained motion.
+- Download bridge packages with `.txt` extensions for restricted executor
+  filesystems. Verify pinned packages, restore filenames with Node, and preserve
+  the previous launcher after failed downloads or reinstalls.
+- Render incremental responses without rebuilding stable Markdown blocks.
+  Reconcile saved replies, show provider errors and replay gaps, and bound
+  command, response, and preview memory.
+- Add validated PNG/JPEG/WebP previews with upload progress, cancellation, retry,
+  ownership, and reload recovery. The model receives text markers only.
+- Preserve full text/code drafts asynchronously, guard repeated sends, and show
+  delivery recovery when an acknowledgement is lost.
+- Organize bridge tests under `bridge/tests/`; replace obsolete plans and handoff
+  logs with the [bridge guide](bridge/README.md) and lasting native documentation.
+
 ## 1.8.0 — September 25, 2026
 
 Chat stability, provider compatibility, and native client improvements.
@@ -20,7 +37,7 @@ Available in game under **App menu → What's new**, also reachable from
   and combined SSE events, clean up late connections, and allow HTTP fallback only
   before dispatch. Document the custom gateway contract and remove obsolete
   transport-ceiling claims. See [provider compatibility](docs/PROVIDER_COMPATIBILITY.md)
-  and [the investigation log](CHANGES-2026-09-25-provider-compatibility.md).
+  and [native release evidence](docs/NATIVE_COMPLETION.md).
 - Preserve dialogue during long tool/subagent runs with independent history
   budgets. Keep call/result pairs and worker summaries together, save the same
   retained history, disclose history limits, and recover surviving dialogue from
@@ -33,8 +50,8 @@ Available in game under **App menu → What's new**, also reachable from
 - Add **Message options → Refresh conversation** for recovery during live work.
   Fall back to readable source when Markdown rendering fails, preserve original
   worker timings/counts, and search retained dialogue after model compaction.
-- Track this work and its validation in
-  [CHANGES-2026-09-25-chat-stability.md](CHANGES-2026-09-25-chat-stability.md).
+- Record native behavior and validation in
+  [the implementation report](docs/NATIVE_COMPLETION.md).
 - Include these changes in the in-game notes and restore the unread marker when
   notes change within the same client version.
 - Remove the 8,192-token executor reply ceiling from both provider adapters,
@@ -106,7 +123,7 @@ Available in game under **App menu → What's new**, also reachable from
 
 ## Documentation — September 23, 2026
 
-- Expand `CODE_WORKSPACE_PLAN.md` with the native Dex/Explorer and SimpleSpy/Remotes implementation plan: upstream provenance, shared services, UI and AI controls, capture/replay behavior, capability fallbacks, phased delivery, and verification. These integrations remain planned; the released 1.6.0 client is unchanged.
+- Document the planned native Explorer and Remotes integration, including provenance, shared services, controls, capability fallbacks, and verification. Those features subsequently shipped in 1.7.0; the old plan has been retired in favor of the current native documentation.
 
 ## 1.6.0 — September 23, 2026
 

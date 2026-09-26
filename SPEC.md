@@ -818,12 +818,17 @@ luajit test/tool_workflows.lua # batch tools, pagination, scopes, cancellation
 luajit test/attachments.lua    # exact saved inputs, compact payloads, upload recovery
 luajit test/gravity.lua        # live adapter and plugin registration contracts
 luajit test/execution_tools.lua # managed execution and released callback cancellation
-node --test bridge/test-runtime.js
-node bridge/test-browser-workflows.js # requires Playwright
+node bridge/tests/run.js
+node bridge/tests/run.js --browser-only # requires external Playwright
 node tools/build_site.js      # actual tool catalog and root/docs site copies
 node tools/build_site.js --check
 python test/site_static.py    # structural checks; no browser or image loading
 ```
+
+The bridge's protocol, installation, browser workflow and verification are
+documented in [bridge/README.md](bridge/README.md). Executor downloads start with
+`node UAI/bridge/start.txt`; Git checkouts use `node bridge/server.js`. Bridge test
+fixtures and helpers live under `bridge/tests/` and are excluded from downloads.
 
 `dist/uai.lua` is what a user runs:
 

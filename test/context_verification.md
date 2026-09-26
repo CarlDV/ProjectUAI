@@ -1,6 +1,6 @@
 # Context and provider verification — September 23, 2026
 
-This change implements all seven feature tasks in `plan-2026-09-23.md`. The
+This historical checkpoint covers the September 23 context and provider work. The
 separate free-provider proposal is deferred, as requested.
 
 The inspector uses the plan's Message options fallback: **Context breakdown**
