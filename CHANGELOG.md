@@ -20,7 +20,10 @@ Project UAI UI LIB and shared script interface guidance.
   callback tasks, input listeners, and script cleanup in the library. Reusing a
   window Id releases its previous window and registered resources.
 - Keep the fixed `Project UAI | UI LIB.` footer without a leading separator and
-  use text-only headers without a logo. The existing agent client UI is preserved.
+  draw the mark and icons from frames, so no uploaded asset is required. Dropdown
+  options accept a player profile image at the start of the row and in the closed
+  field, the minimize/close controls carry no resting fill, and minimize leaves a
+  draggable, branded restore pill. The existing agent client UI is preserved.
 - Publish both bundles and manifests with the 2.0.0 release. The
   [manual audit and validation record](docs/UI_LIBRARY_AUDIT.md) documents library
   coverage and the remaining native Roblox rendering/input checks.

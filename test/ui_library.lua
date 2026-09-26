@@ -30,7 +30,9 @@ local function input(kind, x, y, key)
 end
 local function key(name) return input(E.UserInputType.Keyboard, 0, 0, E.KeyCode[name]) end
 check("fixed attribution is part of the window and launcher", node("Attribution", window.Frame).Text == "Project UAI | UI LIB." and node("Attribution", node("Restore")).Text == "Project UAI | UI LIB.")
-check("public metadata points to this repository", UI.Version == "1.0.0" and UI.URL:find("Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua", 1, true) ~= nil)
+check("public metadata points to this repository", UI.Version == "1.1.0" and UI.URL:find("Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua", 1, true) ~= nil)
+check("window chrome draws the mark and leaves the window controls unfilled",
+	node("Brand", window._header) ~= nil and window._minimize.BackgroundTransparency == 1 and window._close.BackgroundTransparency == 1)
 local changes, commits = 0, 0
 local toggle = section:Toggle({ Id = "enabled", Text = "Enable", Default = true, Callback = function() changes = changes + 1 end })
 local checkbox = section:Checkbox({ Id = "check", Text = "Remember", Default = false })
@@ -40,6 +42,12 @@ local numeric = section:Input({ Id = "numeric", Text = "Limit", Numeric = true, 
 local dropdown = section:Dropdown({ Id = "choice", Text = "Choice", Options = { "A", "B", "C" }, Default = "A" })
 local multi = section:Dropdown({ Id = "multi", Text = "Include", Options = { "A", "B", "C" }, Default = { "A" }, Multi = true })
 local segmented = section:Segmented({ Id = "segment", Text = "Mode", Options = { "Fast", "Balanced", "Quiet" }, Default = "Balanced" })
+local targetPlayer = section:Dropdown({
+	Id = "players", Text = "Player", Default = 1, Options = {
+		{ Label = "TestPlayer", Value = 1, Image = "rbxthumb://type=AvatarHeadShot&id=1&w=150&h=150" },
+		{ Label = "Builder", Value = 2 },
+	},
+})
 local color = section:ColorPicker({ Id = "color", Text = "Color", Default = dt.Color3.fromRGB(217, 119, 87), Alpha = 0.75 })
 section:Label({ Text = "A label" })
 section:Paragraph({ Text = "Paragraph", Content = "A wrapping body." })
@@ -52,6 +60,7 @@ check("duplicate control IDs are rejected", not pcall(function() section:Toggle(
 check("invalid slider range is rejected", not pcall(function() section:Slider({ Min = 10, Max = 10 }) end))
 local oldCount = #section.Controls
 check("invalid constructor leaves no partial control", not pcall(function() section:Dropdown({ Id = "bad-default", Options = { "A" }, Default = "B" }) end) and #section.Controls == oldCount and window:Get("bad-default") == nil)
+check("option images must be strings", not pcall(function() section:Dropdown({ Id = "bad-image", Options = { { Label = "X", Value = "x", Image = 5 } } }) end) and window:Get("bad-image") == nil)
 local defaultToggle = section:Toggle({ Text = "Default" })
 check("omitting a toggle default means false", defaultToggle:Get() == false)
 defaultToggle:Destroy()
@@ -135,6 +144,20 @@ node("SearchOptions", menu.Root).Text = "B"
 check("dropdown search filters visible choices", not node("Option_1", menu.Root).Visible and node("Option_2", menu.Root).Visible)
 node("Option_2", menu.Root).Activated:Fire()
 check("single selection closes its picker", dropdown:Get() == "B" and window._overlay == nil)
+local fieldAvatar = node("Avatar", targetPlayer.Frame)
+check("the selected player profile renders at the start of the closed field",
+	fieldAvatar.Visible and node("AvatarImage", fieldAvatar).Image:find("rbxthumb", 1, true) ~= nil
+		and node("AvatarInitial", fieldAvatar).Text == "T")
+menu = targetPlayer:Open()
+local firstRow, secondRow = node("Option_1", menu.Root), node("Option_2", menu.Root)
+local rowAvatar = node("Avatar", firstRow)
+check("a player option shows its profile before its label",
+	rowAvatar.Visible and rowAvatar.AbsolutePosition.X < node("OptionLabel", firstRow).AbsolutePosition.X
+		and h.byName("Avatar", secondRow) == nil)
+node("Option_2", menu.Root).Activated:Fire()
+check("choosing an option without an image clears the field avatar",
+	targetPlayer:Get() == 2 and not fieldAvatar.Visible)
+targetPlayer:Set(1, true)
 menu = multi:Open()
 node("Option_2", menu.Root).Activated:Fire()
 check("multi-select stays open and adds a value", #multi:Get() == 2 and not menu.Closed)
@@ -179,6 +202,27 @@ uis.InputBegan:Fire(key("K"), false); uis.InputEnded:Fire(key("K"), true)
 check("hold key releases even when the release is processed", #activation == 2 and activation[1] == true and activation[2] == false)
 uis.InputBegan:Fire(key("K"), false); window:Minimize()
 check("minimizing releases held logic and retains branded launcher", activation[#activation] == false and not window.Visible and node("Restore").Visible)
+local launcher = node("Restore")
+check("the minimized pill carries the mark, title, status and attribution",
+	node("Brand", launcher) ~= nil and node("RestoreTitle", launcher).Text == "Library contract"
+		and node("RestoreDetail", launcher).Text ~= "" and node("Attribution", launcher).Text == "Project UAI | UI LIB.")
+local pillStart = launcher.AbsolutePosition
+launcher.InputBegan:Fire(input(E.UserInputType.MouseButton1, pillStart.X + 10, pillStart.Y + 10))
+uis.InputChanged:Fire(input(E.UserInputType.MouseMovement, pillStart.X + 70, pillStart.Y + 10))
+uis.InputEnded:Fire(input(E.UserInputType.MouseButton1, pillStart.X + 70, pillStart.Y + 10))
+check("the pill can be dragged out of the way", launcher.AbsolutePosition.X > pillStart.X + 20 and not window.Visible)
+launcher.Activated:Fire()
+check("a drag release does not restore the window", not window.Visible)
+launcher.InputBegan:Fire(input(E.UserInputType.Touch, launcher.AbsolutePosition.X + 10, launcher.AbsolutePosition.Y + 10))
+launcher.Activated:Fire()
+check("a click restores the minimized window", window.Visible and not launcher.Visible)
+window:Minimize()
+local launcherScale = node("LauncherScale", launcher)
+window:Notify({ Title = "While minimized", Duration = 0 })
+check("a notification while minimized nudges the pill", launcherScale.Scale > 1)
+h.settle(0.3)
+check("the nudged pill settles back", launcherScale.Scale == 1)
+while #window._toasts > 0 do window._toasts[1]:Close() end
 window:Show()
 node("Keybind", binding.Frame).Activated:Fire(); uis.InputBegan:Fire(key("L"), false)
 check("key capture updates the binding without activation", binding:Get() == E.KeyCode.L and rebound == 1 and window._capture == nil)
@@ -250,6 +294,7 @@ for _, viewport in ipairs({ { 1280, 720, false }, { 390, 844, true }, { 844, 390
 	local size, position = window.Frame.AbsoluteSize, window.Frame.AbsolutePosition
 	check("window stays in " .. viewport[1] .. "x" .. viewport[2], position.X >= 0 and position.Y >= 0 and position.X + size.X <= viewport[1] and position.Y + size.Y <= viewport[2])
 	check("controls retain readable width at " .. viewport[1], slider._slot.AbsoluteSize.X > 150 and toggle._label.AbsoluteSize.X > 100)
+	check("the header mark stays visible at " .. viewport[1], window._brand.Visible)
 	if viewport[3] then check("touch targets remain at least 44px", window.Target >= 44) end
 end
 window:SetTextScale(1.5)

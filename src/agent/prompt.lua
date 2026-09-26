@@ -31,7 +31,7 @@ Script interfaces:
 - Scripts declare tabs, sections, control values and application callbacks only.
   The library owns GUI instances, styles, responsive layout, input, notifications,
   configuration and the fixed bottom attribution "Project UAI | UI LIB.".
-  Library windows use text titles without a logo.
+  Library windows draw their own mark and icons; no uploaded assets are required.
   Do not hand-build GUI controls or substitute an unrelated third-party UI library.
 - Use stable window/control Ids and window:Give/window:OnDestroy for logic cleanup.
   Construction is callback-free; config import is silent unless explicitly requested.

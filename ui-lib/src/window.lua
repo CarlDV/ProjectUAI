@@ -66,7 +66,10 @@ return function(env)
 		assert(self.Alive, "Window is destroyed")
 		self.Title = tostring(title)
 		self._title.Text, self._launcherTitle.Text = self.Title, self.Title
-		if subtitle ~= nil then self._subtitle.Text = tostring(subtitle) end
+		if subtitle ~= nil then
+			self._subtitle.Text = tostring(subtitle)
+			self._launcherDetail.Text = self._subtitle.Text ~= "" and self._subtitle.Text or "Minimized"
+		end
 		self:_Layout()
 		return self
 	end
@@ -81,6 +84,7 @@ return function(env)
 		if not self.Alive then return self end
 		self.Visible = true
 		self.Frame.Visible, self._launcher.Visible = true, false
+		if self._launcherScale then self._launcherScale.Scale = 1 end
 		self:_Layout()
 		return self
 	end
@@ -98,9 +102,45 @@ return function(env)
 		end)
 		return self
 	end
+	function Window:_PopLauncher()
+		local scale = self._launcherScale
+		if not scale then return end
+		local tween = env.services.TweenService
+		if not tween then scale.Scale = 1; return end
+		scale.Scale = 0.92
+		local ok = pcall(function()
+			tween:Create(scale, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+		end)
+		if not ok then scale.Scale = 1 end
+	end
+	-- A notification that arrives while the window is minimized nudges the
+	-- launcher instead of being silent: the pill is visible, but nothing else
+	-- says new content is waiting there.
+	function Window:_PulseLauncher()
+		local scale = self._launcherScale
+		if not scale or not self._launcher.Visible then return end
+		local tween = env.services.TweenService
+		if not tween then return end
+		pcall(function()
+			tween:Create(scale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1.05 }):Play()
+		end)
+		self._scope:Delay(0.12, function()
+			if not scale.Parent then return end
+			local settle = env.services.TweenService
+			if settle then
+				pcall(function()
+					settle:Create(scale, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+				end)
+			end
+		end)
+	end
 	function Window:Minimize()
+		if not self.Alive or not self.Visible then return self end
 		self:Hide()
-		if self.Alive then self._launcher.Visible = true end
+		if self.Alive then
+			self._launcher.Visible = true
+			self:_PopLauncher()
+		end
 		return self
 	end
 	function Window:Toggle()
@@ -220,11 +260,19 @@ return function(env)
 		self.Frame.Position = UDim2.fromOffset(math.floor(x), math.floor(y))
 		self._header.Size = UDim2.new(1, 0, 0, header)
 		self._header.Visible = header > 0
-		self._title.Position = UDim2.fromOffset(20, short and 12 or 14)
-		self._title.Size = UDim2.new(1, -2 * self.Target - 52, 0, titleHeight)
+		-- The mark sits beside the title when there is room for both to read;
+		-- the title keeps its old inset when it is hidden, so only extremely
+		-- narrow layouts lose the logo before they lose their name.
+		local brand = math.min(22, math.max(14, math.floor(18 * self.TextScale)))
+		self._brand.Size = UDim2.fromOffset(brand, brand)
+		self._brand.Position = UDim2.fromOffset(18, math.floor((header - brand) / 2))
+		self._brand.Visible = header > 0 and width >= 300
+		local titleInset = self._brand.Visible and (18 + brand + 10) or 20
+		self._title.Position = UDim2.fromOffset(titleInset, short and 12 or 14)
+		self._title.Size = UDim2.new(1, -(titleInset + self.Target * 2 + 32), 0, titleHeight)
 		self._subtitle.Visible = not short and self._subtitle.Text ~= ""
-		self._subtitle.Position = UDim2.fromOffset(20, 17 + titleHeight)
-		self._subtitle.Size = UDim2.new(1, -2 * self.Target - 52, 0, subtitleHeight)
+		self._subtitle.Position = UDim2.fromOffset(titleInset, 17 + titleHeight)
+		self._subtitle.Size = UDim2.new(1, -(titleInset + self.Target * 2 + 32), 0, subtitleHeight)
 		self._headerActions.Position = UDim2.new(1, -self.Target * 2 - 20, 0, (header - self.Target) / 2)
 		self._headerActions.Size = UDim2.fromOffset(self.Target * 2 + 4, self.Target)
 		self._minimize.Size, self._close.Size = UDim2.fromOffset(self.Target, self.Target), UDim2.fromOffset(self.Target, self.Target)
@@ -250,8 +298,30 @@ return function(env)
 			self._search.Size = UDim2.new(1, -sidebar - 40, 0, self.Target)
 		end
 		self._resize.Visible = not self.Touch
-		self._launcher.Position = UDim2.fromOffset(margin, math.max(margin, availableHeight - 64 - margin))
-		self._launcher.Size = UDim2.fromOffset(math.min(240, size.X - margin * 2), 64)
+		-- The restore pill: mark, title and a status line over the permanent
+		-- attribution. Its height follows the text scale, it remembers where it
+		-- was dragged, and it is clamped back into view on every reflow.
+		local launcherTitle = math.ceil(15 * self.TextScale)
+		local launcherDetail = math.ceil(12 * self.TextScale)
+		local launcherBody = launcherTitle + launcherDetail + 16
+		local launcherHeight = launcherBody + T.Size.Footer
+		local launcherWidth = math.min(264, size.X - margin * 2)
+		local placeX = self._launcherPosition and self._launcherPosition.X or margin
+		local placeY = self._launcherPosition and self._launcherPosition.Y or (availableHeight - launcherHeight - margin)
+		placeX = C.clamp(placeX, margin, math.max(margin, size.X - launcherWidth - margin))
+		placeY = C.clamp(placeY, margin, math.max(margin, availableHeight - launcherHeight - margin))
+		self._launcher.Position = UDim2.fromOffset(math.floor(placeX), math.floor(placeY))
+		self._launcher.Size = UDim2.fromOffset(math.floor(launcherWidth), math.floor(launcherHeight))
+		local launcherMark = math.min(24, launcherBody - 8)
+		self._launcherBrand.Size = UDim2.fromOffset(launcherMark, launcherMark)
+		self._launcherBrand.Position = UDim2.fromOffset(14, math.floor((launcherBody - launcherMark) / 2))
+		local launcherText = 14 + launcherMark + 10
+		local launcherTop = math.max(4, math.floor((launcherBody - launcherTitle - launcherDetail) / 2))
+		self._launcherTitle.Position = UDim2.fromOffset(launcherText, launcherTop)
+		self._launcherTitle.Size = UDim2.new(1, -(launcherText + 34), 0, launcherTitle)
+		self._launcherDetail.Position = UDim2.fromOffset(launcherText, launcherTop + launcherTitle + 2)
+		self._launcherDetail.Size = UDim2.new(1, -(launcherText + 34), 0, launcherDetail)
+		self._launcherHint.Position = UDim2.new(1, -24, 0, math.floor(launcherBody / 2))
 		self._toastHost.Position = UDim2.new(1, -margin, 1, -margin - (size.Y - availableHeight))
 		self._toastHost.Size = UDim2.fromOffset(math.min(360, size.X - margin * 2), math.max(1, availableHeight - margin * 2))
 		for callback in pairs(self._reflow) do callback() end
@@ -293,22 +363,42 @@ return function(env)
 		C.corner(self.Frame, T.Size.Radius)
 		C.stroke(self, self.Frame, "Border")
 		self._header = C.node(self, "Frame", self.Frame, { Name = "Header", BackgroundTransparency = 1, Active = true })
+		self._brand = C.mark(self, self._header, 18)
 		self._title = C.text(self, self._header, self.Title, "Title", "Text", { TextWrapped = false, TextTruncate = Enum.TextTruncate.AtEnd })
 		self._subtitle = C.text(self, self._header, options.Subtitle or "", "Caption", "Muted", { TextWrapped = false, TextTruncate = Enum.TextTruncate.AtEnd })
 		C.node(self, "Frame", self._header, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 1) }, { BackgroundColor3 = "Subtle" })
 		self._headerActions = C.node(self, "Frame", self._header, { BackgroundTransparency = 1 })
 		C.list(self._headerActions, true, 4)
-		local function headerButton(name, icon, callback)
-			local button = C.node(self, "TextButton", self._headerActions, { Name = name })
+		-- Window controls sit directly on the header with no resting fill: the
+		-- glyph is the control. Hover and gamepad selection brighten that glyph
+		-- instead of painting a tile behind it, and Close warms to the danger
+		-- tone rather than shouting in red until it is pointed at.
+		local function headerButton(name, icon, callback, tone)
+			local button = C.node(self, "TextButton", self._headerActions, { Name = name, BackgroundTransparency = 1 })
 			C.corner(button)
-			C.feedback(self, button)
-			local glyph = C.icon(self, button, icon)
+			local hovered, selected = false, false
+			local function glyphColor(theme)
+				if selected then return theme.Text end
+				if hovered then return (tone == "Danger") and theme.Danger or theme.Text end
+				return theme.Muted
+			end
+			local glyph = C.icon(self, button, icon, glyphColor)
 			glyph.AnchorPoint, glyph.Position = Vector2.new(0.5, 0.5), UDim2.fromScale(0.5, 0.5)
+			local function repaint()
+				local color = glyphColor(self.Theme)
+				for _, line in ipairs(glyph:GetChildren()) do
+					if line:IsA("Frame") then line.BackgroundColor3 = color end
+				end
+			end
+			self._scope:Connect(button.MouseEnter, function() hovered = true; repaint() end)
+			self._scope:Connect(button.MouseLeave, function() hovered = false; repaint() end)
+			self._scope:Connect(button.SelectionGained, function() selected = true; repaint() end)
+			self._scope:Connect(button.SelectionLost, function() selected = false; repaint() end)
 			self._scope:Connect(button.Activated, callback)
 			return button
 		end
 		self._minimize = headerButton("Minimize", "minus", function() self:Minimize() end)
-		self._close = headerButton("Close", "close", function() self:Destroy() end)
+		self._close = headerButton("Close", "close", function() self:Destroy() end, "Danger")
 		self._nav = C.scroll(self, self.Frame, "Tabs")
 		C.bind(self, self._nav, { BackgroundColor3 = "Sidebar" })
 		self._nav.BackgroundTransparency = 0
@@ -335,11 +425,41 @@ return function(env)
 		for index = 1, 3 do
 			C.node(self, "Frame", self._resize, { Position = UDim2.fromOffset(8 + index * 3, 20), Size = UDim2.fromOffset(2, 2 + index * 3), Rotation = 45 }, { BackgroundColor3 = "Muted" })
 		end
+		-- The restore pill. It carries the mark, the window title and a status
+		-- line above the permanent attribution, it can be dragged anywhere in
+		-- the safe viewport, and it restores on a click that was not a drag.
 		self._launcher = C.node(self, "TextButton", self._viewport, { Name = "Restore", Visible = false, ClipsDescendants = true }, { BackgroundColor3 = "Canvas" })
-		C.corner(self._launcher, 10); C.stroke(self, self._launcher)
-		self._launcherTitle = C.text(self, self._launcher, self.Title, "Heading", "Text", { Position = UDim2.fromOffset(12, 4), Size = UDim2.new(1, -24, 0, 28), TextWrapped = false, TextTruncate = Enum.TextTruncate.AtEnd })
+		C.corner(self._launcher, 10)
+		local launcherHover, launcherDragged = false, false
+		C.bind(self, self._launcher, {
+			BackgroundColor3 = function(theme) return launcherHover and theme.Hover or theme.Canvas end,
+		})
+		self._launcherStroke = C.stroke(self, self._launcher)
+		C.bind(self, self._launcherStroke, {
+			Color = function(theme) return launcherHover and theme.Accent or theme.Border end,
+		})
+		self._launcherScale = C.node(self, "UIScale", self._launcher, { Name = "LauncherScale", Scale = 1 })
+		self._launcherBrand = C.mark(self, self._launcher, 20)
+		self._launcherTitle = C.text(self, self._launcher, self.Title, "Heading", "Text", { Name = "RestoreTitle", Position = UDim2.fromOffset(44, 6), Size = UDim2.new(1, -84, 0, 20), TextWrapped = false, TextTruncate = Enum.TextTruncate.AtEnd })
+		self._launcherDetail = C.text(self, self._launcher, self._subtitle.Text ~= "" and self._subtitle.Text or "Minimized", "Caption", "Muted", { Name = "RestoreDetail", Position = UDim2.fromOffset(44, 26), Size = UDim2.new(1, -84, 0, 16), TextWrapped = false, TextTruncate = Enum.TextTruncate.AtEnd })
+		self._launcherHint = C.icon(self, self._launcher, "chevron", "Muted", 16)
+		self._launcherHint.AnchorPoint, self._launcherHint.Rotation = Vector2.new(0.5, 0.5), 180
 		C.footer(self, self._launcher)
-		self._scope:Connect(self._launcher.Activated, function() self:Show() end)
+		self._scope:Connect(self._launcher.MouseEnter, function()
+			launcherHover = true
+			self._launcher.BackgroundColor3, self._launcherStroke.Color = self.Theme.Hover, self.Theme.Accent
+		end)
+		self._scope:Connect(self._launcher.MouseLeave, function()
+			launcherHover = false
+			self._launcher.BackgroundColor3, self._launcherStroke.Color = self.Theme.Canvas, self.Theme.Border
+		end)
+		-- A press that moved is a drag, not a restore. The flag is cleared when
+		-- the next press begins, so a drag released off the pill cannot swallow
+		-- the click after it.
+		self._scope:Connect(self._launcher.Activated, function()
+			if launcherDragged then launcherDragged = false; return end
+			self:Show()
+		end)
 		self._toastHost = C.node(self, "Frame", self._viewport, { Name = "Notifications", AnchorPoint = Vector2.new(1, 1), BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 200 })
 		local toastLayout = C.list(self._toastHost, false, 8)
 		toastLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
@@ -360,6 +480,21 @@ return function(env)
 			self._requestedWidth = math.max(280, sizeStart.X + input.Position.X - dragStart.X)
 			self._requestedHeight = math.max(240, sizeStart.Y + input.Position.Y - dragStart.Y)
 			self:_Layout()
+		end)
+		local launcherOrigin, launcherStart
+		C.pointer(self, self._launcher, function(input)
+			launcherDragged = false
+			launcherOrigin, launcherStart = input.Position, self._launcher.Position
+			return true
+		end, function(input)
+			if not launcherStart then return end
+			local delta = input.Position - launcherOrigin
+			if math.abs(delta.X) > 4 or math.abs(delta.Y) > 4 then launcherDragged = true end
+			if not launcherDragged then return end
+			self._launcherPosition = Vector2.new(launcherStart.X.Offset + delta.X, launcherStart.Y.Offset + delta.Y)
+			self:_Layout()
+		end, function()
+			launcherOrigin, launcherStart = nil, nil
 		end)
 		local uis = env.services.UserInputService
 		self._scope:Connect(uis.InputChanged, function(input)

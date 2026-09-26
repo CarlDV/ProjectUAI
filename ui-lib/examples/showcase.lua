@@ -33,6 +33,25 @@ inputs:Dropdown({
 	Options = { { Label = "Nearest first", Value = "nearest" }, { Label = "In view", Value = "visible" }, { Label = "All available", Value = "all" } },
 })
 inputs:Dropdown({ Id = "filters", Text = "Include", Multi = true, Default = { "Players", "Objects" }, Options = { "Players", "Objects", "Markers", "Effects" } })
+-- Player choices carry their headshot at the start of the row and in the
+-- closed field. rbxthumb resolves inside the client; no upload is involved.
+local function playerOptions()
+	local options = {}
+	for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+		options[#options + 1] = {
+			Label = player.DisplayName,
+			Value = player.UserId,
+			Image = string.format("rbxthumb://type=AvatarHeadShot&id=%.0f&w=150&h=150", player.UserId),
+		}
+	end
+	return options
+end
+local target = inputs:Dropdown({ Id = "target", Text = "Target player", Placeholder = "No players yet", Options = playerOptions() })
+inputs:Button({ Text = "Refresh players", ActionText = "Refresh", Callback = function()
+	local options = playerOptions()
+	target:SetOptions(options)
+	window:Notify({ Title = "Player list refreshed", Content = tostring(#options) .. " player(s) available.", Kind = "Success" })
+end })
 inputs:Checkbox({ Id = "remember", Text = "Remember selection", Description = "Preserve your selection between refreshes.", Default = true })
 inputs:Keybind({
 	Id = "shortcut", Text = "Quick notification", Default = Enum.KeyCode.K,

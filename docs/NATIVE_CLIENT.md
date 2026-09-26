@@ -11,11 +11,14 @@ Revised notes restore the unread marker even when the client version stays the s
 
 ## Script UI library
 
-Project UAI 2.0.0 introduces the independent [UI LIB 1.0.0](UI_LIBRARY.md).
-Agents use its bundled reference to declare script controls and application
-callbacks. The library owns responsive layout, input, configuration, and resource
-cleanup, with the fixed `Project UAI | UI LIB.` footer and no built-in logo.
-The established agent client interface is preserved. See the
+Project UAI 2.0.0 introduces the independent [UI LIB](UI_LIBRARY.md). Agents use
+its bundled reference to declare script controls and application callbacks. The
+library owns responsive layout, input, configuration, resource cleanup, and the
+fixed `Project UAI | UI LIB.` footer, and it draws its mark and icons from frames
+rather than uploaded assets. The current library is v1.1.0: dropdown options accept
+a player headshot shown at the start of the row and in the closed field, the
+window controls carry no resting fill, and minimize leaves a draggable restore
+pill. The established agent client interface is preserved. See the
 [library audit](UI_LIBRARY_AUDIT.md) for behavioral coverage and native-device limits.
 
 ## Explorer

@@ -15,8 +15,8 @@ Scripts declare tabs, sections, values, and domain callbacks. They do not build
 ScreenGuis, controls, colors, fonts, padding, drag systems, or external UI-library
 loaders. Register application connections and cleanup with `window:Give` and
 `window:OnDestroy`. Use stable window/control Ids. Keep the fixed bottom
-attribution `Project UAI | UI LIB.` in every library window. The library uses
-text titles without a logo.
+attribution `Project UAI | UI LIB.` in every library window. The library draws
+its own mark and icons; no uploaded image assets are required.
 
 Add missing reusable capabilities under `ui-lib/src` and document the public API;
 do not duplicate a component in individual scripts. Explicit requests to modify

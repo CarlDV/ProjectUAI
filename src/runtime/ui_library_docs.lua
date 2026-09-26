@@ -1,7 +1,7 @@
 -- Generated from docs/UI_LIBRARY.md by tools/build_ui_lib.js; edit the Markdown.
 return function(env)
 	return {
-		version = "1.0.0",
+		version = "1.1.0",
 		url = "https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua",
 		repository = "https://github.com/Project-Ptolemy/ProjectUAI",
 		sections = {
@@ -87,7 +87,7 @@ programmatically. `Get/Set/Reset/OnChanged` are useful on value controls; use
 | `Checkbox` | Same boolean API, with a check mark. |
 | `Slider` | `Min = 0`, `Max = 100`, `Step = 1`, `Default`, `Suffix`. `Callback(number)` on changes, `OnCommit(number)` once at gesture end. Values are clamped and rounded relative to Min; Max is reachable even when the step does not divide the range. Arrow/D-pad left/right changes one step; Home/End reaches the endpoints. |
 | `Input` | String `Default`, `Placeholder`, `MaxLength = 4096` UTF-8 bytes, `MultiLine`, `Lines = 3`, `Live = false`. Commits on focus loss; Live publishes valid edits while preserving the draft/caret until focus loss. `Numeric = true` uses finite numbers and optional `Min/Max`. Invalid drafts show an error while preserving the last valid value. `OnCommit(value)` and `Focus()` are available. |
-| `Dropdown` | `Options`, `Default`, `Multi = false`, `Searchable = true`, `Placeholder`. `SetOptions(array, silent?)` replaces choices and retains still-valid selections. `Open()` opens the picker. Empty options show an empty state. |
+| `Dropdown` | `Options`, `Default`, `Multi = false`, `Searchable = true`, `Placeholder`. Option records accept `Image`, shown as a round profile image at the start of the row and in the closed field for the current selection. `SetOptions(array, silent?)` replaces choices and retains still-valid selections. `Open()` opens the picker. Empty options show an empty state. |
 | `Segmented` | Single selection among 1–8 `Options`. Same selection and `SetOptions` API as Dropdown; wraps into rows at narrow widths. |
 | `Keybind` | `Default = Enum.KeyCode.K` (or `"K"`), `Mode = "Press" / "Hold" / "Toggle"`, `ActiveWhenHidden = false`. `Callback(active, key)` handles activation; `OnChanged(key)` handles rebinding. Hold calls true on press and false on release/cancellation; Toggle alternates until canceled. Click to capture, Escape cancels, Backspace/Delete clears. `Set(nil)` unbinds. Window's toggle key is reserved. |
 | `ColorPicker` | `Default = Color3.fromRGB(...)`, optional `Alpha = 1` or `ShowAlpha = true`. HSV square, hue bar, hex and RGB inputs, preview, Apply/Cancel. Color components must be within 0–1; alpha is clamped to that range. `Callback(color, alpha)` fires on Apply or a changed Set. `Get()` returns color, alpha; `GetAlpha()` and `SetAlpha(alpha, silent?)` are available. |
@@ -99,7 +99,13 @@ programmatically. `Get/Set/Reset/OnChanged` are useful on value controls; use
 
 Dropdown/Segmented options are primitive strings, finite numbers, or booleans,
 or records such as `{ Label = "Balanced", Value = "balanced", Disabled = false }`.
-Values must be unique. Dropdowns support up to 500 choices with literal search.
+A record may also carry `Image`, a URL rendered as a round avatar at the start of
+a dropdown row and in the closed field for the current selection. Player
+headshots work with the built-in
+`rbxthumb://type=AvatarHeadShot&id=<UserId>&w=150&h=150` scheme, which the client
+resolves without an upload or an HTTP request; a readable initial stays visible
+behind the image until it loads. Values must be unique. Dropdowns support up to
+500 choices with literal search.
 Single-select `Default` and `Get` use one value (or nil for no selection);
 multi-select uses an array. Multi-select changes are immediate; Done closes the
 picker. A disabled option is displayed but cannot be selected interactively.
@@ -142,9 +148,13 @@ reveals matching collapsed sections, and displays a clear empty state.
 Window methods: `Show()`, `Hide()`, `Minimize()`, `Toggle()`, `Destroy()`,
 `SelectTab(idOrTab)`, `SetTitle(title, subtitle?)`,
 `SetTheme("Dark"|"Light", accent?)`, `SetTextScale(number)`, `Get(controlId)`.
-Minimize keeps an on-screen restore button. Hide removes that button too.
-The top-right close button destroys the window. Each window has independent
-theme and state. The footer remains pinned outside scrolling content.
+Minimize keeps a branded restore pill on screen: it shows the title, subtitle and
+attribution, can be dragged anywhere in the safe viewport, and restores on a click
+that was not a drag. Hide removes that pill too, and a notification that arrives
+while minimized nudges it. The top-right close button destroys the window, and the
+minimize and close controls have no resting fill: their glyph brightens on hover
+and gamepad selection. Each window has independent theme and state. The footer
+remains pinned outside scrolling content.
 ]=],
 			["lifecycle"] = [=[
 ## Lifecycle
@@ -249,10 +259,19 @@ Dynamic choices:
 local target = actions:Dropdown({
 	Id = "target", Text = "Target", Options = {}, Placeholder = "No players yet",
 })
+-- Each player is their headshot followed by their display name. The rbxthumb
+-- scheme resolves inside the client, so no upload or HTTP request is needed.
+local function playerChoice(player)
+	return {
+		Label = player.DisplayName,
+		Value = player.UserId,
+		Image = string.format("rbxthumb://type=AvatarHeadShot&id=%.0f&w=150&h=150", player.UserId),
+	}
+end
 local function refreshPlayers()
 	local choices = {}
 	for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
-		choices[#choices + 1] = { Label = player.DisplayName, Value = player.UserId }
+		choices[#choices + 1] = playerChoice(player)
 	end
 	target:SetOptions(choices)
 end
@@ -261,7 +280,7 @@ window:Give(game:GetService("Players").PlayerAdded:Connect(refreshPlayers))
 window:Give(game:GetService("Players").PlayerRemoving:Connect(function(leaving)
 	local choices = {}
 	for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
-		if player ~= leaving then choices[#choices + 1] = { Label = player.DisplayName, Value = player.UserId } end
+		if player ~= leaving then choices[#choices + 1] = playerChoice(player) end
 	end
 	target:SetOptions(choices)
 end))

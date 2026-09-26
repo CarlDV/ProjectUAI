@@ -26,10 +26,10 @@ return function(env)
 			highlights = "A shared UI library for script tools. Agents declare controls and write application logic, while the library handles layout, input, configuration and cleanup.",
 			sections = {
 				{ category = "added", label = "Script interfaces", items = {
-					"Load Project UAI UI LIB from our GitHub repository. Its independent API starts at version 1.0.0 with buttons, toggles, checkboxes, sliders, inputs, dropdowns, segmented controls, keybinds and color pickers.",
+					"Load Project UAI UI LIB from our GitHub repository. Its independent API is at version 1.1.0 with buttons, toggles, checkboxes, sliders, inputs, dropdowns, segmented controls, keybinds and color pickers.",
 					"Organize tools with tabs, sections, search, labels, badges, progress, dialogs and notifications. Dark/light themes and adjustable text sizes share UAI's visual language.",
-					"Compact windows reflow for phones and keyboard space; desktop windows support dragging and resizing. Minimize keeps a restore button within reach.",
-					"Library windows use text-only headers and the fixed Project UAI | UI LIB. footer. The existing agent client interface is preserved.",
+					"Compact windows reflow for phones and keyboard space; desktop windows support dragging and resizing. Minimize keeps a draggable restore pill within reach.",
+					"Dropdown options can show a player headshot at the start of the row and in the closed field. Library windows draw their own mark and keep the fixed Project UAI | UI LIB. footer. The existing agent client interface is preserved.",
 				} },
 				{ category = "added", label = "Agent guidance", items = {
 					"Main agents and subagents read the bundled UI API reference before creating script interfaces. Scripts declare controls and application callbacks instead of building their own GUI components.",

@@ -1,14 +1,14 @@
 {
   "format": "project-uai-ui",
-  "version": "1.0.0",
-  "sha256": "aa864c03fc78e305b4ab72fef9f0ce14b565dadf5ec1e2231c778c5663f7b1cf",
-  "bytes": 115316,
+  "version": "1.1.0",
+  "sha256": "ed27e0fbe0c12d32df184fb8d871f1d6b3465f7841e55bd30f8be8eda5b22166",
+  "bytes": 127106,
   "loaderSha256": "d91ea7117adc520e2d8bafb1a613688bd0b35879578044dfa8696e2645bdc903",
   "modules": [
     {
       "id": "choice",
-      "bytes": 15527,
-      "sha256": "0f89a6b61105306cd6245846be0813e47eb0053a7714185022fcf193f379fcb3"
+      "bytes": 18570,
+      "sha256": "6125919eed0f22765849f7263c88627cc27fc0ddc906ba17bd18d0aca6f76c61"
     },
     {
       "id": "color",
@@ -32,8 +32,8 @@
     },
     {
       "id": "core",
-      "bytes": 12313,
-      "sha256": "777085b68b9a54bca2ad35f984913fde3b1bc21a7b89a9adb99414c2d1d50be6"
+      "bytes": 13632,
+      "sha256": "2bd9688c51c79e608b2b7b96ddd87ef23316b525f24e12fe082b36f2744cd046"
     },
     {
       "id": "library",
@@ -42,8 +42,8 @@
     },
     {
       "id": "overlays",
-      "bytes": 11387,
-      "sha256": "1828c75755ea9eaa0c12fa1c3d7df368f5f22cef851cead115f3dff46d1aef81"
+      "bytes": 11447,
+      "sha256": "b7ea912b4b9ee4e0a5fa942969250efcee0fbbc76fb3bf5bf84adcd0beac76f1"
     },
     {
       "id": "theme",
@@ -52,8 +52,8 @@
     },
     {
       "id": "window",
-      "bytes": 21817,
-      "sha256": "2818926c6df8612b2a0b969b0553f14f25893db87d59f058b7c9a6b13fcea382"
+      "bytes": 29185,
+      "sha256": "3875f4c74dec3239265fd9bf3b1bdf4b704b3b1b9646bc6439b2b983e2bf8111"
     }
   ]
 }

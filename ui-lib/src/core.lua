@@ -235,6 +235,33 @@ return function(env)
 		end
 		return frame
 	end
+	-- The Project UAI mark. Same eleven uneven rays, open gaps and softly cut
+	-- ends as the application brand, drawn from frames so the library still
+	-- needs no uploaded image and no logo download. Color binds like any other
+	-- node, so a theme or accent change repaints it with everything else.
+	local RAYS = {
+		{ -8, 0.440, 0.086 }, { 24, 0.365, 0.105 }, { 58, 0.425, 0.080 },
+		{ 91, 0.390, 0.096 }, { 126, 0.445, 0.078 }, { 158, 0.380, 0.106 },
+		{ 192, 0.435, 0.088 }, { 225, 0.370, 0.105 }, { 257, 0.445, 0.079 },
+		{ 291, 0.390, 0.096 }, { 325, 0.430, 0.082 },
+	}
+	function M.mark(owner, parent, size, color)
+		local frame = M.node(owner, "Frame", parent, { Name = "Brand", BackgroundTransparency = 1, Size = UDim2.fromOffset(size, size) })
+		for index, ray in ipairs(RAYS) do
+			local radians = math.rad(ray[1])
+			local overlap = 0.055
+			local centre = (ray[2] - overlap) * 0.5
+			local piece = M.node(owner, "Frame", frame, {
+				Name = "Ray" .. index,
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.49 + math.cos(radians) * centre, 0.51 + math.sin(radians) * centre),
+				Size = UDim2.fromScale(ray[2] + overlap, ray[3]),
+				Rotation = ray[1],
+			}, { BackgroundColor3 = color or "Accent" })
+			M.corner(piece, math.max(1, math.floor(size * 0.05)))
+		end
+		return frame
+	end
 	function M.feedback(owner, button, style, enabled)
 		local window, hovered, selected = owner._window, false, false
 		local stroke = M.node(owner, "UIStroke", button, { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })

@@ -61,7 +61,8 @@ it; `ui/*` must not require `agent/*` except through `agent/session`.
 as `dist/uai-ui.lua`. It shares the application's visual language without changing
 the existing `src/ui` application. Script authors declare tabs/sections/controls and
 logic; the library owns layout, input, state, lifetime, and the fixed bottom
-`Project UAI | UI LIB.` attribution. The library has no built-in logo.
+`Project UAI | UI LIB.` attribution. The window mark and every tab icon are drawn
+from frames, so the library requires no uploaded image asset.
 See `docs/UI_LIBRARY.md` for the public API.
 
 `node tools/build_ui_lib.js` deterministically generates the library, SHA-256

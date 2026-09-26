@@ -159,6 +159,7 @@ return function(env)
 			end)
 		end
 		window._toasts[#window._toasts + 1] = toast
+		if window._PulseLauncher then window:_PulseLauncher() end
 		C.reflow(toast, function()
 			local width, available = window._toastHost.Size.X.Offset, window._toastHost.Size.Y.Offset
 			local titleHeight = math.ceil(20 * window.TextScale)
